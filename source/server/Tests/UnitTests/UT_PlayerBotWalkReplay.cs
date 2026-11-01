@@ -339,9 +339,10 @@ public class UT_PlayerBotWalkReplay
 
     // #188, st-deathsE2b: Pbotmaada's camp in Muspelheim (camp 185 of spots-lm3) lies under a ledge piece of the navmesh
     // (10,551 polygons) with no way down to the camp's (42,359), and Detour's nearest polygon over the camp's floor is often
-    // the ledge's. The sweep's rest and anchor walks there, from the camp centre and from the Thane's fire-eater: their
-    // corridor steps kept the line's height over a ramp and stood on the ledge, blocked there for good. With the island
-    // guard the floor under such a step, on the camp's island, is taken, and both walks arrive.
+    // the ledge's. The sweep's rest and anchor walks there (its frozen starts), from the camp centre and from the Thane's
+    // fire-eater: their corridor steps kept the line's height over a ramp and stood on the ledge, blocked there for good.
+    // With the island guard the floor under such a step, on the camp's island, is taken, and both walks arrive. The live
+    // entry was mostly direct steps (the review of #188): DirectStepOntoTheLedge.
     [Test]
     public void TheWalksOntoTheLedgeAboveTheThanesCampKeepToTheCamp() =>
         // Muspelheim (region 100, zone 104): OffsetX 100, OffsetY 78, Width 8, Height 8.

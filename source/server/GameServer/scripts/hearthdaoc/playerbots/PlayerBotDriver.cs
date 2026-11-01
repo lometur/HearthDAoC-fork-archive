@@ -4167,9 +4167,9 @@ public static class PlayerBotDriver
     /// RelocateIfOutgrown plans nothing there either), or, its third review, no mesh near the anchor (the corridor's own
     /// goal query, PTP:81): moved back there, the bot would be moved there again on every due blocked roam off it.
     /// #188: where both islands can be read (the polygons in the boxes the corridor starts and ends in), whether they are
-    /// one: a corridor from the 18 polygons under Domnann's dome to the anchor was found (its last part ends at the goal's
-    /// X and Y at the goal's height, PTP:102-105 with DetourInterface.cpp's PathStraightLayered, and the next starts on
-    /// the goal's floor), so Pbothaaem was never moved back. Else the corridor, as before.
+    /// one: two lookups replace a corridor that can cost milliseconds, and the compare is exact. Else the corridor, as
+    /// before. (The review of #188: from the 18 polygons under Domnann's dome no corridor to the camp is found; the false
+    /// tail, PTP:102-105, fools the other way, camp to dome, the rest walk's corridor.)
     /// </summary>
     public static bool AnchorReachable(IPathfindingMgr nav, Region region, Vector3 here, Vector3 anchor)
     {

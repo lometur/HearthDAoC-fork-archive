@@ -6462,11 +6462,12 @@ public sealed class UT_PlayerBotDriver
         });
     }
 
-    // #188: the anchor's test (AnchorReachable) by islands where both can be read: from the pocket, a corridor to the
-    // camp is found (the fake's, as TryBuildCorridor's false tail under Domnann's dome), yet the islands differ: cut off.
-    // On the camp's island: reachable. Without islands (UT above): the corridor, as before.
+    // #188: the anchor's test (AnchorReachable) by islands where both can be read: two lookups replace a corridor that
+    // can cost milliseconds, and the compare is exact. On the fake every corridor is found, the one from the pocket to
+    // the camp too, yet the islands differ: cut off. On the camp's island: reachable. Without islands (UT above): the
+    // corridor, as before.
     [Test]
-    public void The_anchor_is_unreachable_from_another_island_though_a_corridor_is_found()
+    public void The_anchor_test_compares_islands_where_both_can_be_read()
     {
         var (region, _) = World(Muspelheim.X, Muspelheim.Y);
         var mesh = new PlayerBotIslandMesh(border: 840_500);

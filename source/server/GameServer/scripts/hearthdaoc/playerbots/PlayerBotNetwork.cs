@@ -8,8 +8,9 @@ namespace DOL.GS.HearthDAoC.PlayerBots;
 /// the bot's point, so a step that leaves the bot off its floor can leave it on another piece, from which no walk leads
 /// back: in Domnann (st-deathsE) a corridor's last corner, put at a rest spot on 18 polygons walled in under a dome, took
 /// Pbothaaem 188 units straight down onto them, and in Muspelheim (st-deathsE2b) Pbotmaada stood on a ledge piece of
-/// 10,551 polygons above its camp's 42,359 until the run ended, 654 walks blocked in 3.5 minutes. Offline, 31 of 330,163
-/// walks round the camps of spots-lm3 ended so, by corridor steps (27) and floor steps (4).
+/// 10,551 polygons above its camp's 42,359 until the run ended, 654 walks blocked in 3.5 minutes; in the walks rebuilt
+/// from that run, 428 of the 437 first steps off the camp's island were direct steps (the review of #188). Offline, 31
+/// of 330,163 walks round the camps of spots-lm3 (frozen starts) ended so, by corridor steps (27) and floor steps (4).
 /// A step may change island only onto the bot's camp's island (home), or, with no camp in the zone or a camp on a smaller
 /// island than the bot's (a camp anchored on a pocket must not pull the bot onto it), onto a larger one; any other change
 /// is refused, or the floor under the step on the bot's island taken instead.
@@ -93,9 +94,11 @@ public sealed class PlayerBotNetwork
             return true;
         }
         // In its place, the floor under the step on an island it may stand on: the grounded move from where the bot stands,
-        // else the floor straight under the step within the moves' reach (FloorBelow). In Muspelheim a corridor step that
-        // kept its line's height stood 43 units over the camp's floor, where the ledge piece is Detour's nearest polygon
-        // (the sweep's walk 7438); the grounded move found no floor there. Not on a link: its steps hang in the air.
+        // else the floor straight under the step within the moves' reach (FloorBelow). In Muspelheim the live entry was
+        // mostly a direct step whose plain move stood on the ledge's polygon about 40 units up (the rebuilt walk 4856);
+        // the sweep's walk 7438, a corridor step that kept its line's height, stood 43 units over the camp's floor, where
+        // the ledge piece is Detour's nearest polygon, and the grounded move found no floor there. Not on a link: its
+        // steps hang in the air.
         if (linkEnd is null &&
             (Ground(nav, zone, current, nav.GetMoveAlongSurfaceLayered(zone, current, next, nav.DefaultFilters, true), from, camp) ??
              Ground(nav, zone, current, nav.GetClosestPoint(zone, next - new Vector3(0, 0, FloorBelow / 2f), 2, 2, FloorBelow / 2f,
