@@ -36,8 +36,25 @@ namespace DOL.GS
         public GameRelicPad CurrentRelicPad { get; private set; }
         public GameLiving CurrentCarrier { get; private set; }
         private readonly object _custodyLock = new();
-        private static IGameInventory InventoryOf(GameLiving living) => (living as IGamePlayer)?.Inventory;
-        private static IPacketLib OutputOf(GameLiving living) => (living as IGamePlayer)?.Out;
+        // HearthDAoC: players and player bots carry relics too (#189). Upstream 0.34 looked only at IGamePlayer, which
+        // only GameBot implements, so no player could ever take a relic (refused without a message), and a bot carrier
+        // threw when it showed its relic glow to a player nearby.
+        public static bool CanCarry(GameLiving living) => living is GamePlayer or IGamePlayer;
+        public static IGameInventory InventoryOf(GameLiving living) => living switch
+        {
+            GamePlayer player => player.Inventory,
+            IGamePlayer bot => bot.Inventory,
+            _ => null,
+        };
+        private static IPacketLib OutputOf(GameLiving living) => living switch
+        {
+            GamePlayer player => player.Out,
+            IGamePlayer bot => bot.Out,
+            _ => null,
+        };
+        // HearthDAoC: the pad a bot carrier sets its relic on: its own realm's pad of the relic's type (#189).
+        public static bool IsHomePad(eRealm carrierRealm, eRelicType relicType, eRealm padRealm, eRelicType padType) =>
+            carrierRealm != eRealm.None && carrierRealm == padRealm && relicType == padType;
         public bool IsMounted => CurrentRelicPad != null;
         public static int ReturnRelicInterval => Properties.RELIC_RETURN_TIME * 1000;
 
@@ -67,7 +84,7 @@ namespace DOL.GS
 
         private bool PickupCore(GameLiving player)
         {
-            if (player is not IGamePlayer || InventoryOf(player) == null || CurrentCarrier != null ||
+            if (!CanCarry(player) || InventoryOf(player) == null || CurrentCarrier != null || // HearthDAoC: CanCarry (#189)
                 ObjectState != eObjectState.Active || !player.IsWithinRadius(this, WorldMgr.INTERACT_DISTANCE))
                 return false;
 
@@ -397,12 +414,32 @@ namespace DOL.GS
                 return 0;
             }
 
+            // HearthDAoC: a bot carrier (a companion) sets the relic on its home pad when it gets there (#189). Only a
+            // player walking onto the pad, or an autonomous gamebot's return, did that, so a relic a companion took
+            // stayed with it.
+            GameLiving carrier = CurrentCarrier;
+            if (carrier != null && carrier is not GamePlayer && TryMountAtHomePad(carrier))
+                return 0;
+
             ushort effectID = (ushort) Util.Random(5811, 5815);
 
             foreach (GamePlayer player in CurrentCarrier.GetPlayersInRadius(WorldMgr.VISIBILITY_DISTANCE))
-                OutputOf(player).SendSpellEffectAnimation(CurrentCarrier, CurrentCarrier, effectID, 0, false, 0x01);
+                player.Out.SendSpellEffectAnimation(CurrentCarrier, CurrentCarrier, effectID, 0, false, 0x01); // HearthDAoC: each viewer's own Out (#189)
 
             return RELIC_EFFECT_INTERVAL;
+        }
+
+        // HearthDAoC (#189): within 250, the radius GameRelicPad.PadArea and MountCore use.
+        private bool TryMountAtHomePad(GameLiving carrier)
+        {
+            foreach (GameRelicPad pad in RelicMgr.GetPadsSnapshot())
+            {
+                if (IsHomePad(carrier.Realm, RelicType, pad.Realm, pad.PadType) && carrier.IsWithinRadius(pad, 250) &&
+                    RelicPadTakesOver(pad, false))
+                    return true;
+            }
+
+            return false;
         }
 
         protected virtual void SetHandlers(GameLiving player, bool activate)

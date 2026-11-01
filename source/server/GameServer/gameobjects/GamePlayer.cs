@@ -9718,6 +9718,13 @@ namespace DOL.GS
                 return;
             }
 
+            // HearthDAoC: G and double-click take a relic as right-click does; it answered "You can't get that!" (#189).
+            if (floorObject is GameRelic relic)
+            {
+                relic.Interact(this);
+                return;
+            }
+
             Out.SendMessage(LanguageMgr.GetTranslation(Client.Account.Language, "GamePlayer.PickupObject.CantGetThat"), eChatType.CT_System, eChatLoc.CL_SystemWindow);
             return;
         }
