@@ -6282,6 +6282,44 @@ public sealed class UT_PlayerBotDriver
         });
     }
 
+    // #188 review R1: the floor step after a blocked walk keeps the camp-size rule (PlayerBotNetwork.AtHome as Accepts): a
+    // camp anchored on a smaller island than the bot's never pulls the bot onto it. The bot on the larger floor walks
+    // toward the pocket its camp is on: the step over the border is refused, and the floor step (rings 50 units apart)
+    // does not put it onto the pocket 40 units on.
+    [Test]
+    public void A_camp_on_a_smaller_island_does_not_pull_the_bot_onto_it_in_TryFloorStep()
+    {
+        var mesh = new PlayerBotIslandMesh(border: 840_500);
+        Vector3 start = new(840_460, 702_100, 8_343), camp = new(840_700, 702_100, 8_343), goal = new(840_800, 702_100, 8_343);
+        InTheField(mesh, start, (region, zone, bot) =>
+        {
+            var state = new PlayerBotState(bot) { Anchor = camp };
+            Assert.That(state.CampInZone(), Is.EqualTo((Vector3?)camp));
+            PlayerBotStepResult step = PlayerBotStepResult.Moving;
+            for (long now = 10_000; step == PlayerBotStepResult.Moving && now < 20_000; now += PlayerBotDriver.TickMilliseconds)
+                step = state.Mover.StepToward(goal, 20, now);
+            Assert.That((step, state.Mover.LastBlock), Is.EqualTo((PlayerBotStepResult.Blocked, PlayerBotNetwork.OffItsNetwork)));
+            Assert.That((bot.X, bot.Y, bot.Z), Is.EqualTo((840_460, 702_100, 8_343)), "no floor step onto the pocket");
+        });
+    }
+
+    // #188 review R1: #166's rescue (st-layers3: a respawn spot 124 units under Domnann's floor, every walk from it ended)
+    // stays. A bot on no polygon whose nearest floor is off its camp's island, with no floor on that island within 300
+    // units (RingFloor), steps onto the nearest floor as before #188: under the pocket, its walk blocked, it steps up.
+    [Test]
+    public void A_bot_on_no_polygon_steps_onto_the_nearest_floor_with_none_on_its_camps_island_in_TryFloorStep()
+    {
+        var mesh = new PlayerBotIslandMesh(border: 840_500) { Floor = 8_343, NoCorridor = true };
+        Vector3 under = new(841_000, 702_100, 8_219), camp = new(838_400, 702_100, 8_343), goal = new(841_200, 702_100, 8_343);
+        InTheField(mesh, under, (region, zone, bot) =>
+        {
+            var state = new PlayerBotState(bot) { Anchor = camp };
+            Assert.That(mesh.GetIsland(zone, under, mesh.DefaultFilters), Is.Null, "on no polygon");
+            Assert.That(state.Mover.StepToward(goal, 20, 10_000), Is.EqualTo(PlayerBotStepResult.Blocked));
+            Assert.That((bot.X, bot.Y, bot.Z), Is.EqualTo((841_000, 702_100, 8_343)), "onto the floor above");
+        });
+    }
+
     // #188, the wiring of the driver's ring points (OnMesh: rest, clear, walk-out and kite spots): a spot on the pocket
     // is dropped, one on the camp's island kept (PlayerBotPathMover.OnItsNetwork, the bot's own state).
     [Test]

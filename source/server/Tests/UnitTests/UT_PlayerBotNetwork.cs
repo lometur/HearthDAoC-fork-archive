@@ -14,25 +14,32 @@ namespace DOL.GS.Tests;
 // goes on; with NoGround it finds no floor. With Shelf, east of Border only spots higher than Shelf are on the pocket
 // (a ledge piece over the camp's floor, as Muspelheim's), lower ones on the camp's floor. Corridors run straight to the goal and are always found (as the false corridor tail of TryBuildCorridor,
 // PlayerTravelPath.cs:102-105); no line of sight, so the mover walks them. Islands counts GetIsland's calls.
+// With NoCorridor no corridor is found: a walk ends blocked at once. With Floor, one floor at that height: the closest
+// point snaps onto it within the query box's height, an island is read only within the moves' 64 units of it, and the
+// GameBots' floor searches run (IsAvailable): a bot 124 units under it stands on no polygon, as at #166's respawn spot.
 internal sealed class PlayerBotIslandMesh : PathfindingMgrBase
 {
     public static readonly NavIsland Camp = new(1, 57_082), Pocket = new(2, 18);
     public readonly float Border;
     public const float Air = -500;
-    public bool Available = true, Wall, NoGround;
+    public bool Available = true, Wall, NoGround, NoCorridor;
     public float Shelf = float.NegativeInfinity;
+    public float? Floor;
     public int Islands;
 
     public PlayerBotIslandMesh(float border = 1_000) => Border = border;
     public override bool HasNavmesh(Zone zone) => Available;
+    public override bool IsAvailable => Floor.HasValue;
     public override NavIsland? GetIsland(Zone zone, Vector3 position, EDtPolyFlags[] filters)
     {
         Islands++;
-        return position.Z < Air ? null : position.X < Border || position.Z <= Shelf ? Camp : Pocket;
+        if (position.Z < Air || Floor is float floor && Math.Abs(position.Z - floor) > 64) return null;
+        return position.X < Border || position.Z <= Shelf ? Camp : Pocket;
     }
     public override PathfindingResult GetPathStraight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters,
         Span<WrappedPathfindingNode> destination)
     {
+        if (NoCorridor) return new(PathfindingStatus.NoPathFound, 0);
         destination[0] = new(start, EDtPolyFlags.Walk);
         destination[1] = new(end, EDtPolyFlags.Walk);
         return new(PathfindingStatus.PathFound, 2);
@@ -41,7 +48,9 @@ internal sealed class PlayerBotIslandMesh : PathfindingMgrBase
         grounded && NoGround ? null :
         grounded && Wall && start.X < Border && end.X >= Border ? new Vector3(Math.Max(start.X, Border - 1), end.Y, end.Z) : end;
     public override Vector3? GetClosestPoint(Zone zone, Vector3 position, float xRange, float yRange, float zRange,
-        EDtPolyFlags[] filters) => position.Z < Air ? null : position;
+        EDtPolyFlags[] filters) =>
+        position.Z < Air ? null :
+        Floor is float floor ? (Math.Abs(position.Z - floor) <= zRange ? position with { Z = floor } : null) : position;
     public override bool HasLineOfSight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => false;
 }
 
@@ -251,13 +260,15 @@ public sealed class UT_PlayerBotNetwork
         var mesh = new PlayerBotIslandMesh();
         var network = new PlayerBotNetwork();
         Vector3 pocket = new(1_100, 50, 0), camp = new(0, 50, 0);
-        Vector3? floor = PlayerBotPathMover.FloorStep(mesh, zone, pocket, spot => network.AtHome(mesh, zone, spot, camp));
+        Vector3? floor = PlayerBotPathMover.FloorStep(mesh, zone, pocket, spot => network.AtHome(mesh, zone, pocket, spot, camp));
         Assert.That(floor, Is.Not.Null);
         Assert.That((floor!.Value.X < mesh.Border, Vector3.Distance(pocket, floor.Value)), Is.EqualTo((true, 150f)).Using<(bool, float)>(
             (a, b) => a.Item1 == b.Item1 && Math.Abs(a.Item2 - b.Item2) < 0.01f));
         Assert.That(PlayerBotPathMover.FloorStep(mesh, zone, pocket), Is.Null, "no test: as before");
-        Assert.That(PlayerBotPathMover.FloorStep(mesh, zone, pocket, spot => network.AtHome(mesh, zone, spot, null)), Is.Null, "no camp");
-        Assert.That(PlayerBotPathMover.FloorStep(mesh, zone, new(900, 50, 0), spot => network.AtHome(mesh, zone, spot, camp)), Is.Null,
+        Assert.That(PlayerBotPathMover.FloorStep(mesh, zone, pocket, spot => network.AtHome(mesh, zone, pocket, spot, null)), Is.Null,
+            "no camp");
+        Vector3 field = new(900, 50, 0);
+        Assert.That(PlayerBotPathMover.FloorStep(mesh, zone, field, spot => network.AtHome(mesh, zone, field, spot, camp)), Is.Null,
             "on the camp's island");
     }
 }

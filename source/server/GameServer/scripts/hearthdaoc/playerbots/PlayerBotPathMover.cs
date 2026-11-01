@@ -106,12 +106,15 @@ public sealed class PlayerBotPathMover
     /// 124 units under the floor, and every walk from it ended there (st-layers3, #166).
     /// #188: with <paramref name="keeps"/> (the bot's camp's island, PlayerBotNetwork.AtHome), a floor off it is not
     /// stepped onto, and a bot standing off it steps onto the nearest floor on it (RingFloor): the nearest floor that
-    /// leads on was a ledge piece or a pocket by the camp, from which no walk led back to it (st-deathsE2b).</summary>
+    /// leads on was a ledge piece or a pocket by the camp, from which no walk led back to it (st-deathsE2b). With none
+    /// there, a bot on no polygon still steps onto the nearest floor, as before (the review of #188: #166's rescue of
+    /// the bot 124 units under Domnann's floor).</summary>
     public static Vector3? FloorStep(IPathfindingMgr nav, Zone zone, Vector3 here, Func<Vector3, bool> keeps = null)
     {
         Vector3? found = NearestFloor(nav, zone, here);
         if (keeps == null || (found is Vector3 floor ? keeps(floor) : keeps(here))) return found;
-        return RingFloor(nav, zone, here, keeps);
+        return RingFloor(nav, zone, here, keeps) ??
+               (found.HasValue && nav.GetIsland(zone, here, nav.DefaultFilters) is null ? found : null);
     }
 
     private static Vector3? NearestFloor(IPathfindingMgr nav, Zone zone, Vector3 here)
@@ -482,7 +485,7 @@ public sealed class PlayerBotPathMover
         _nextFloorStep = now + FloorStepMilliseconds;       // one search in the time, found or not: it runs on the game loop (the review of #168)
         Zone zone = _player.CurrentZone;
         Vector3? home = Home?.Invoke();
-        if (FloorStep(Nav, zone, current, spot => _network.AtHome(Nav, zone, spot, home)) is not Vector3 floor) return;
+        if (FloorStep(Nav, zone, current, spot => _network.AtHome(Nav, zone, current, spot, home)) is not Vector3 floor) return;
         if (Log.IsInfoEnabled)
             Log.Info($"PLAYER_BOT_FLOOR_STEP bot={_player.Name} from=({current.X:0},{current.Y:0},{current.Z:0}) " +
                      $"to=({floor.X:0},{floor.Y:0},{floor.Z:0}) distance={Vector3.Distance(current, floor):0} why=\"{why}\" " +

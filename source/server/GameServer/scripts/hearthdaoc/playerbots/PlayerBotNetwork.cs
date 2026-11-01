@@ -56,12 +56,17 @@ public sealed class PlayerBotNetwork
         return Accepts(_on, nav.GetIsland(zone, spot, nav.DefaultFilters), Home(nav, zone, home));
     }
 
-    /// <summary>Whether spot lies on the camp's island (FloorStep's test): true with no camp in the zone, no navmesh, or
-    /// no polygon under spot.</summary>
-    public bool AtHome(IPathfindingMgr nav, Zone zone, Vector3 spot, Vector3? home)
+    /// <summary>Whether the bot, standing at here, may be put on spot (FloorStep's test), as Keeps judges a step: where it
+    /// may step onto its camp's island (Accepts), only there, so one standing off it is put back on it; else (no camp in
+    /// the zone, or, the review of #188, a camp on a smaller island than the bot's, which must not pull the bot onto it)
+    /// wherever Accepts lets it stand. True with no navmesh, or no polygon under spot.</summary>
+    public bool AtHome(IPathfindingMgr nav, Zone zone, Vector3 here, Vector3 spot, Vector3? home)
     {
-        if (zone == null || !nav.HasNavmesh(zone) || Home(nav, zone, home) is not NavIsland camp) return true;
-        return nav.GetIsland(zone, spot, nav.DefaultFilters) is not NavIsland at || at.Id == camp.Id;
+        if (zone == null || !nav.HasNavmesh(zone)) return true;
+        Stand(nav, zone, here);
+        if (nav.GetIsland(zone, spot, nav.DefaultFilters) is not NavIsland at) return true;
+        NavIsland? camp = Home(nav, zone, home);
+        return camp is NavIsland pulls && Accepts(_on, pulls, pulls) ? at.Id == pulls.Id : Accepts(_on, at, camp);
     }
 
     /// <summary>The mover's step from current to next (TryComputeNext's), before it is taken: true to take it (next, or
