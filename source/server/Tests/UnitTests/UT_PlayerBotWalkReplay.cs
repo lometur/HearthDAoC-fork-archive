@@ -375,7 +375,40 @@ public class UT_PlayerBotWalkReplay
             Assert.That(new PlayerBotNetwork().Keeps(nav, region, zone, fireEater, ref next, null, camp, out string crossing), Is.True);
             Assert.That((Island(next), next.Z, crossing), Is.EqualTo((Island(camp), 8496.05f, crossing)).Using<(NavIsland, float, string)>(
                 (a, b) => a.Item1 == b.Item1 && Math.Abs(a.Item2 - b.Item2) < 1 && a.Item3.StartsWith("kind=ground")));
+            DirectStepOntoTheLedge(nav, region, zone, camp, Island(camp), Island(thane));     // the review's, here: one test per zone
         });
+
+    // #188 review R2: the live entry. In the walks rebuilt from st-deathsE2b's leg (w104-big's START lines at camp 185),
+    // 428 of the 437 first moves off the camp's island were direct steps, and 367 of the 376 walks that ended off it were
+    // hunt walks to igniterA, a dverge igniter by the ledge's edge, which arrived on the ledge with a last direct step
+    // about 40 units up.
+    // Rebuilt walk 4856, from the slope below the camp: unguarded it arrives on the ledge; with the island guard (home:
+    // the camp) the floor under that step, on the camp's island, is taken, and it arrives there.
+    private static void DirectStepOntoTheLedge(IPathfindingMgr nav, Region region, Zone zone, Vector3 camp, NavIsland campIsland,
+        NavIsland ledge)
+    {
+        Vector3 slope = new(839573, 700791, 6577.16f), igniter = new(840856, 702055, 8516), end = slope;
+        NavIsland? Island(Vector3 at) => nav.GetIsland(zone, at, nav.DefaultFilters);
+        Assert.That(Island(slope), Is.EqualTo(campIsland), "4856 starts on the camp's island");
+        Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, slope, igniter, keepExact: true, blockEnds: true, end: p => end = p),
+            Is.InRange(1, 200), "4856 unguarded: arrives");
+        Assert.That(Island(end), Is.EqualTo(ledge), "4856 unguarded: on the ledge");
+        Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, slope, igniter, keepExact: true, blockEnds: true,
+            network: new PlayerBotNetwork(), home: camp, end: p => end = p), Is.InRange(1, 200), "4856 guarded: arrives");
+        Assert.That(Island(end), Is.EqualTo(campIsland), "4856 guarded: on the camp's island");
+        // Its last step, from the rebuild (to a tenth of a unit): a direct step, within a corner's reach of the goal (17 units
+        // across, 24 down: TryComputeNext's first rule for one), whose plain move stands on the ledge's polygon about 40
+        // units up; the guard takes the floor under it instead.
+        Vector3 from = new(840852.3f, 702038.2f, 8492.3f);
+        Assert.That(DOL.GS.Commands.PlayerTravelPath.HasReachedCorner(from, igniter), Is.True, "a direct step");
+        Assert.That(PlayerBotPathMover.TryComputeNext(nav, region, zone, new DOL.GS.Commands.PlayerTravelPath(), from, igniter,
+            20, 47.75f, 0, out Vector3 next, out _), Is.True);
+        Assert.That((Island(next), next.Z - from.Z), Is.EqualTo(((NavIsland?)ledge, 42.8f)).Using<(NavIsland?, float)>(
+            (a, b) => a.Item1 == b.Item1 && Math.Abs(a.Item2 - b.Item2) < 1), "onto the ledge, about 40 units up");
+        Assert.That(new PlayerBotNetwork().Keeps(nav, region, zone, from, ref next, null, camp, out string crossing), Is.True);
+        Assert.That((Island(next), crossing), Is.EqualTo(((NavIsland?)campIsland, crossing)).Using<(NavIsland?, string)>(
+            (a, b) => a.Item1 == b.Item1 && a.Item2.StartsWith("kind=ground")), "the floor under it, on the camp's island");
+    }
 
     // One test per zone: UnloadNavMesh frees the mesh but leaves the thread's query on it (LocalPathfindingMgr's
     // _navmeshQueries, by zone ID), and a second load of the zone in the same run then crashes the test host.
