@@ -55,6 +55,13 @@ namespace DOL.GS
         // HearthDAoC: the pad a bot carrier sets its relic on: its own realm's pad of the relic's type (#189).
         public static bool IsHomePad(eRealm carrierRealm, eRelicType relicType, eRealm padRealm, eRelicType padType) =>
             carrierRealm != eRealm.None && carrierRealm == padRealm && relicType == padType;
+        // HearthDAoC: a carrier out of the world (crossing into another region) keeps the relic for up to 60 s, as 1.60
+        // gave relics up to 60 seconds to cross between zones (#189). Dead or stealthed drops it at once; quitting and
+        // linkdeath still drop it through their own events.
+        public const int ZoningGraceMs = 60_000;
+        private long _carrierAwaySince;
+        public static bool DropsForAbsence(bool alive, bool active, bool stealthed, long awayMs) =>
+            !alive || stealthed || !active && awayMs >= ZoningGraceMs;
         public bool IsMounted => CurrentRelicPad != null;
         public static int ReturnRelicInterval => Properties.RELIC_RETURN_TIME * 1000;
 
@@ -367,6 +374,7 @@ namespace DOL.GS
                     _currentCarrierTimer = null;
                 }
                 
+                _carrierAwaySince = 0; // HearthDAoC: zoning grace (#189)
                 _currentCarrierTimer = new(player, CarrierTimerTick);
                 _currentCarrierTimer.Start(RELIC_EFFECT_INTERVAL);
             }
@@ -384,11 +392,21 @@ namespace DOL.GS
         {
             if (CurrentCarrier == null)
                 return 0;
-            if (!CurrentCarrier.IsAlive || CurrentCarrier.ObjectState != eObjectState.Active || CurrentCarrier.IsStealthed)
+            // HearthDAoC: a carrier crossing into another region (a portal keep's portal, a zone line) is out of the
+            // world until its client has loaded; upstream dropped the relic at the first tick then (#189).
+            bool active = CurrentCarrier.ObjectState == eObjectState.Active;
+            if (active)
+                _carrierAwaySince = 0;
+            else if (_carrierAwaySince == 0)
+                _carrierAwaySince = GameLoop.GameLoopTime;
+            if (DropsForAbsence(CurrentCarrier.IsAlive, active, CurrentCarrier.IsStealthed,
+                    active ? 0 : GameLoop.GameLoopTime - _carrierAwaySince))
             {
                 DropFromCarrier(CurrentCarrier);
                 return 0;
             }
+            if (!active)
+                return RELIC_EFFECT_INTERVAL; // HearthDAoC: still crossing; check again in 4 s (#189)
             Update();
 
             // Disabled for OF.

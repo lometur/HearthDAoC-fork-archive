@@ -53,6 +53,20 @@ namespace DOL.UnitTests
         }
 
         [Test]
+        public void ACarrierOutOfTheWorldKeepsTheRelicForAMinute()
+        {
+            // A player is out of the world while the client loads a new region (portal keep, zone line); 1.60 gave
+            // relics up to 60 seconds to cross. Dead or stealthed still drops at once.
+            Assert.That(GameRelic.DropsForAbsence(alive: true, active: true, stealthed: false, awayMs: 0), Is.False);
+            Assert.That(GameRelic.DropsForAbsence(alive: true, active: false, stealthed: false, awayMs: 4_000), Is.False);
+            Assert.That(GameRelic.DropsForAbsence(alive: true, active: false, stealthed: false, awayMs: 59_999), Is.False);
+            Assert.That(GameRelic.DropsForAbsence(alive: true, active: false, stealthed: false, awayMs: 60_000), Is.True);
+            Assert.That(GameRelic.DropsForAbsence(alive: false, active: true, stealthed: false, awayMs: 0), Is.True);
+            Assert.That(GameRelic.DropsForAbsence(alive: true, active: true, stealthed: true, awayMs: 0), Is.True);
+            Assert.That(GameRelic.DropsForAbsence(alive: false, active: false, stealthed: false, awayMs: 0), Is.True);
+        }
+
+        [Test]
         public void ABotCarrierSetsTheRelicOnlyOnItsOwnRealmsPadOfTheType()
         {
             Assert.That(GameRelic.IsHomePad(eRealm.Albion, eRelicType.Strength, eRealm.Albion, eRelicType.Strength), Is.True);
