@@ -12,7 +12,7 @@ namespace DOL.GS
     // A lib/Detour built before them lacks the two exports: then the plain queries, with one log line.
     public sealed partial class LocalPathfindingMgr
     {
-        private static int _noLayers;
+        private static int _noLayers, _noIslands;
 
         [LibraryImport("lib/Detour")]
         [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
@@ -45,6 +45,35 @@ namespace DOL.GS
                 try { return MoveLayered(zone, start, end, filters, grounded); }
                 catch (EntryPointNotFoundException e) { NoLayers(e); }
             return grounded ? GetMoveAlongSurfaceGrounded(zone, start, end, filters) : GetMoveAlongSurface(zone, start, end, filters);
+        }
+
+        [LibraryImport("lib/Detour")]
+        [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+        private static partial EDtStatus GetPolyIsland(IntPtr query, ReadOnlySpan<float> center, ReadOnlySpan<float> polyPickExt,
+            ReadOnlySpan<EDtPolyFlags> filter, out int island, out int islandPolys);
+
+        /// <summary>HearthDAoC (#188): the island of the polygon nearest the point, in the moves' box (Detour's own
+        /// nearest polygon, as every move and corridor of a walker there starts from), or null: no polygon in the box, no
+        /// navmesh, or a lib/Detour built before GetPolyIsland (then null always, with one log line).</summary>
+        public override NavIsland? GetIsland(Zone zone, Vector3 position, EDtPolyFlags[] filters)
+        {
+            if (Volatile.Read(ref _noIslands) != 0 || !TryGetQuery(zone, out NavMeshQuery query)) return null;
+            Span<float> center = stackalloc float[3];
+            FillRecastFloats(position, center);
+            try
+            {
+                long profiled = NavQueryProfile.Start();
+                EDtStatus status = GetPolyIsland(query, center, _defaultHalfExtents, filters, out int island, out int polygons);
+                NavQueryProfile.Stop(NavQueryProfile.Kind.OtherQuery, profiled);
+                return (status & EDtStatus.DT_SUCCESS) != 0 && island >= 0 ? new NavIsland(island, polygons) : null;
+            }
+            catch (EntryPointNotFoundException e)
+            {
+                if (Interlocked.Exchange(ref _noIslands, 1) == 0 && log.IsWarnEnabled)
+                    log.Warn("lib/Detour lacks the player bots' island query (#188), so their steps go unchecked: build it from " +
+                        "source/server/Pathing/Detour, as deploy/Dockerfile does", e);
+                return null;
+            }
         }
 
         private static void NoLayers(EntryPointNotFoundException e)

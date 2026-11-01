@@ -15,6 +15,9 @@ namespace DOL.GS
         // is a change of floor (LocalPathfindingMgr.Layers.cs); PathfindingMgrBase gives the plain ones.
         PathfindingResult GetPathStraightLayered(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters, Span<WrappedPathfindingNode> destination);
         Vector3? GetMoveAlongSurfaceLayered(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters, bool grounded);
+        // HearthDAoC: the island of the polygon nearest a point, in the moves' 32/32/64 box, for the player bots (#188):
+        // lib/Detour's GetPolyIsland (LocalPathfindingMgr.Layers.cs); null where none can be read (PathfindingMgrBase).
+        NavIsland? GetIsland(Zone zone, Vector3 position, EDtPolyFlags[] filters);
         Vector3? GetRandomPoint(Zone zone, Vector3 position, float radius, EDtPolyFlags[] filters);
         Vector3? GetClosestPoint(Zone zone, Vector3 position, EDtPolyFlags[] filters);
         Vector3? GetClosestPoint(Zone zone, Vector3 position, float xRange, float yRange, float zRange, EDtPolyFlags[] filters);
@@ -28,6 +31,11 @@ namespace DOL.GS
         EDtPolyFlags[] DefaultFilters { get; }
         EDtPolyFlags[] BlockingDoorAvoidanceFilters { get; }
     }
+
+    /// <summary>HearthDAoC (#188): a piece of a zone's navmesh a walker can walk all over and back, a strongly connected
+    /// component of its polygons under the filter by Detour's own links, and how many ground polygons it holds. Ids are
+    /// per zone.</summary>
+    public readonly record struct NavIsland(int Id, int Polygons);
 
     public readonly struct PathfindingResult
     {

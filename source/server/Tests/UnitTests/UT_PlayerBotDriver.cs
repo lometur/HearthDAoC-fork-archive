@@ -3808,9 +3808,20 @@ public sealed class UT_PlayerBotDriver
 
     // StepToward's position and stall rule: GamePlayer keeps whole units (X, Y, Z are ints), so the bot stands where the
     // mover put it, rounded; a second without a unit of progress plans the corridor again (twice a walk), and 12 steps drop it. Returns
-    // the tick the bot arrived, -1 if it never did, or with blockEnds -2 where the mover's walk would end blocked.
+    // the tick the bot arrived, -1 if it never did, or with blockEnds -2 where the mover's walk would end blocked (a stall,
+    // or #188 no corridor on). #188: with
+    // network, StepToward's island guard (PlayerBotNetwork.Keeps, home the camp): -3 where it refuses a step. end: where
+    // the bot stands at the end.
     internal static int Walk(IPathfindingMgr nav, Region region, Zone zone, Vector3 from, Vector3 goal, bool keepExact,
-        int ticks = 200, bool blockEnds = false)
+        int ticks = 200, bool blockEnds = false, PlayerBotNetwork network = null, Vector3? home = null, Action<Vector3> end = null)
+    {
+        Vector3 at = from;
+        try { return Steps(nav, region, zone, from, goal, keepExact, ticks, blockEnds, network, home, p => at = p); }
+        finally { end?.Invoke(at); }
+    }
+
+    private static int Steps(IPathfindingMgr nav, Region region, Zone zone, Vector3 from, Vector3 goal, bool keepExact,
+        int ticks, bool blockEnds, PlayerBotNetwork network, Vector3? home, Action<Vector3> stands)
     {
         var path = new PlayerTravelPath();
         Vector3 player = from;
@@ -3821,8 +3832,11 @@ public sealed class UT_PlayerBotDriver
             if (keepExact ? PlayerBotPathMover.Arrived(player, goal, 20) : Vector3.Distance(player, goal) <= 20) return tick;
             stall.Toward(goal, tick * 250L);
             Vector3 current = keepExact ? PlayerBotPathMover.StepStart(player, exact) : player;
-            Assert.That(PlayerBotPathMover.TryComputeNext(nav, region, zone, path, current, goal, 20, 47.75f, tick * 250L,
-                out Vector3 next, out string failure), Is.True, failure);
+            bool stepped = PlayerBotPathMover.TryComputeNext(nav, region, zone, path, current, goal, 20, 47.75f, tick * 250L,
+                out Vector3 next, out string failure);
+            if (!stepped && blockEnds) return -2;
+            Assert.That(stepped, Is.True, failure);
+            if (network != null && !network.Keeps(nav, region, zone, current, ref next, path.LinkEnd, home, out _)) return -3;
             exact = next;
             if (Vector3.DistanceSquared(next, current) < 1)
             {
@@ -3835,6 +3849,7 @@ public sealed class UT_PlayerBotDriver
             }
             stall.Moved();
             player = new(MathF.Round(next.X), MathF.Round(next.Y), MathF.Round(next.Z));
+            stands(player);
         }
         return -1;
     }
@@ -6243,6 +6258,67 @@ public sealed class UT_PlayerBotDriver
     {
         public override Vector3? GetClosestPoint(Zone zone, Vector3 position, float xRange, float yRange, float zRange,
             EDtPolyFlags[] filters) => position.Z < Ledge ? null : position;
+    }
+
+    // #188, the wiring: the mover keeps a walking bot on its camp's island (PlayerBotNetwork, UT_PlayerBotNetwork). On
+    // the fake two-island floor at Pbotmaada's zone, a walk to a spot 200 units into the pocket (as Pbothaaem's rest
+    // walk under Domnann's dome, whose corridor was found) is blocked at the pocket's border, the bot on its camp's
+    // island, why= the guard's; its floor step finds nothing to do there. Before #188 the bot walked onto the pocket.
+    [Test]
+    public void A_walk_onto_a_pocket_ends_blocked_on_the_camps_island_in_StepToward()
+    {
+        var mesh = new PlayerBotIslandMesh(border: 840_500);
+        Vector3 start = new(840_400, 702_100, 8_343), camp = new(838_400, 702_100, 8_343), goal = new(840_700, 702_100, 8_343);
+        InTheField(mesh, start, (region, zone, bot) =>
+        {
+            var state = new PlayerBotState(bot) { Anchor = camp };
+            Assert.That(state.CampInZone(), Is.EqualTo((Vector3?)camp));
+            PlayerBotStepResult step = PlayerBotStepResult.Moving;
+            for (long now = 10_000; step == PlayerBotStepResult.Moving && now < 20_000; now += PlayerBotDriver.TickMilliseconds)
+                step = state.Mover.StepToward(goal, 20, now);
+            Assert.That((step, state.Mover.LastBlock), Is.EqualTo((PlayerBotStepResult.Blocked, PlayerBotNetwork.OffItsNetwork)));
+            Assert.That(bot.X, Is.InRange(840_450, 840_499), "stopped short of the pocket's border, on the camp's island");
+            Assert.That((bot.Y, bot.Z), Is.EqualTo((702_100, 8_343)), "no floor step");
+        });
+    }
+
+    // #188, the wiring of the driver's ring points (OnMesh: rest, clear, walk-out and kite spots): a spot on the pocket
+    // is dropped, one on the camp's island kept (PlayerBotPathMover.OnItsNetwork, the bot's own state).
+    [Test]
+    public void Ring_points_on_a_pocket_are_dropped_in_OnMesh()
+    {
+        MethodInfo onMesh = typeof(PlayerBotDriver).GetMethod("OnMesh", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var states = (ConcurrentDictionary<GamePlayer, PlayerBotState>)typeof(PlayerBotDriver)
+            .GetField("_states", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        Vector3 start = new(840_400, 702_100, 8_343), pocket = new(840_700, 702_100, 8_343), field = new(840_100, 702_400, 8_343);
+        InTheField(new PlayerBotIslandMesh(border: 840_500), start, (region, zone, bot) =>
+        {
+            var state = new PlayerBotState(bot) { Anchor = new(838_400, 702_100, 8_343) };
+            Assert.That((state.Mover.OnItsNetwork(pocket), state.Mover.OnItsNetwork(field)), Is.EqualTo((false, true)));
+            Assert.That(onMesh.Invoke(null, [bot, pocket]), Is.EqualTo(pocket), "not a driven bot: as before");
+            try
+            {
+                states[bot] = state;
+                Assert.That(onMesh.Invoke(null, [bot, pocket]), Is.Null, "under the dome");
+                Assert.That(onMesh.Invoke(null, [bot, field]), Is.EqualTo(field), "on the camp's island");
+            }
+            finally { states.TryRemove(bot, out _); }
+        });
+    }
+
+    // #188: the anchor's test (AnchorReachable) by islands where both can be read: from the pocket, a corridor to the
+    // camp is found (the fake's, as TryBuildCorridor's false tail under Domnann's dome), yet the islands differ: cut off.
+    // On the camp's island: reachable. Without islands (UT above): the corridor, as before.
+    [Test]
+    public void The_anchor_is_unreachable_from_another_island_though_a_corridor_is_found()
+    {
+        var (region, _) = World(Muspelheim.X, Muspelheim.Y);
+        var mesh = new PlayerBotIslandMesh(border: 840_500);
+        Vector3 camp = new(838_400, 702_100, 8_343);
+        Assert.That(PlayerTravelPath.TryBuildCorridor(mesh, region.GetZone(840_700, 702_100), new(840_700, 702_100, 8_343), camp, out _),
+            Is.True, "the corridor");
+        Assert.That(PlayerBotDriver.AnchorReachable(mesh, region, new(840_700, 702_100, 8_343), camp), Is.False, "from the pocket");
+        Assert.That(PlayerBotDriver.AnchorReachable(mesh, region, new(840_100, 702_400, 8_343), camp), Is.True, "on its island");
     }
 
     private sealed class RunSpeed : DOL.GS.PropertyCalc.PropertyCalculator

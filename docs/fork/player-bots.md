@@ -263,9 +263,9 @@ Playing:
     bot-hour at their camps.
   - Some bots die again and again at one camp: a Nightshade 5 times in one zone, a Paladin 5 times at one goblin
     camp.
-  - A bot that steps onto a piece of navmesh with no path back to its camp is teleported back there (`CUTOFF`), never
-    in a fight or in sight of a real player. The root cause, a step onto a patch of navmesh with no path back, is
-    #188. One whose camp is itself on such a piece is pulled back onto it.
+  - A bot no longer steps onto a piece of navmesh with no path back to its camp (#188, see Walking). One put on such a
+    piece some other way (a respawn, a teleport) is teleported back to its camp (`CUTOFF`), never in a fight or in
+    sight of a real player. One whose camp is itself on such a piece is still put back onto it, and then keeps to it.
   - Walks don't look ahead for monsters on the route.
 - **Resting:** about half their time: 52.7% over the two legs, against 50.7% on v0.37b-hearth.12 (time-weighted).
   Most of it is the real cost of player regeneration. Part of the rise is time no longer spent dead or walking back
@@ -410,6 +410,21 @@ registered, test it in game. The mover:
   also steps onto the floor straight above or below it when that floor lies beyond the surface moves' reach (64 units),
   even where Detour's 64-unit box finds it, because the floor's polygon reaches down there: in Domnann a bot respawned
   124 units under the floor, and every walk from the spot ended.
+- never steps onto a piece of navmesh with no path back (#188). The navmesh falls into islands, pieces where a path
+  leads each way between any two of its polygons (the strongly connected components of Detour's links, labelled once
+  per zone on the zone's first island query, 18-39 ms, then about 1 microsecond a query). Each step is checked where
+  it would stand: Detour's nearest polygon there, as every query after it starts from that polygon. A step may change
+  island only onto the camp's island, or, with no camp in the zone or a camp on a smaller island than the bot's, onto a
+  larger one. Otherwise the floor under the step on the bot's island is taken (the grounded move, or the floor straight
+  under the step within 64 units); with none, the step is refused and the walk ends blocked. On a floor link the
+  link's far corner is judged instead, once. In Domnann a corridor's last corner took a bot 188 units down a link onto
+  18 polygons under a dome; in Muspelheim corridor steps that kept their line's height over a ramp stood where
+  Detour's nearest polygon was a ledge piece of 10,551 polygons above the camp's floor, and the bot stood there
+  blocked until the run ended. Rest, clear-spot, walk-out and kite points on an island the bot may not step onto are
+  dropped, and the floor step after a blocked walk goes onto the camp's island (rings 50 units apart, out to 300).
+  Offline, over 330,163 walks round the camps of spots-lm3: no walk ends off its camp's island (28 did, 31 by the
+  corridor test), 926 rest spots are dropped (906 were blocked walks; the other 20 arrived on such a piece), 6 more
+  walks arrive, 1 more is blocked, and the mover's time per step grows by about 1.2 microseconds (the island query).
 
 `UT_PlayerBotWalkReplay` replays each of these walks on the installed navmesh but the replan's: offline, a fresh
 corridor from those stalls walks on, and the corridor that stalled can't be rebuilt there. A fake-mesh test covers it.
@@ -438,7 +453,8 @@ Known gaps:
   nearly every think, about 4 times a second. In another run a Blademaster in Domnann stepped onto a small piece of
   navmesh cut off from the rest, with nothing to hunt on it, and its roam was blocked as often until the run ended.
   Now a blocked roam checks, at most every 30 seconds, whether a path leads from where the bot stands to its camp's
-  centre. With none, and the bot not in combat, it is teleported back there (`CUTOFF`), as after 15 minutes with no
+  centre: whether both stand on one island (#188), or, where one can't be read, whether a corridor leads there (from
+  the dome's floor in Domnann one did: its last part ended at the centre's X and Y, at the centre's height). With none, and the bot not in combat, it is teleported back there (`CUTOFF`), as after 15 minutes with no
   progress; in combat the check waits for its next blocked roam. Neither teleport ever happens in a fight or in sight
   of a real player: while a human player (a GM too; player bots don't count) is within sight range (6,000 units) of
   where the bot stands or of the centre it would land on, the bot waits. A cut-off bot waits where it stands and
@@ -449,8 +465,9 @@ Known gaps:
   Where no check can tell (no navmesh by the bot or by the centre, or the centre in another zone), the bot stays.
   Neither a lever spot bot nor a bot on a task is teleported. Until the teleport, a monster below may still be picked,
   and its walk blocked, once every 30 seconds. The one weak case: a camp's centre that is itself on a cut-off piece
-  pulls the bot back onto that piece each time it gets off it (not seen in 12 legs). The root cause, a step onto a
-  patch of navmesh with no path back, is #188. A GameBot's target and camp choice is part of the parity work (#167).
+  pulls the bot back onto that piece each time it gets off it (not seen in 12 legs). The mover now keeps bots off such
+  pieces (#188); the check stays for bots put there otherwise. A GameBot's target and camp choice is part of the
+  parity work (#167).
 - A Tir na Nog bot stalled at one spot (21263, 35215) in most runs, though the same step replayed offline walks on
   (same navmesh, same Detour library). It is likely the polygon-edge case above: the log rounds the spot, and starts a
   few hundredths of a unit apart can differ there. In the last four runs none stalled there; one stalled once beside
@@ -546,7 +563,13 @@ All start `PLAYER_BOT_`:
   `respawn=`, the spawn spots of its recent kills its rest spot was chosen against, `blocked=`, its walks to a rest spot
   that were blocked before it sat (3 at most), and `inReach=` (1: it sat within an aggressive monster's reach, or a
   recent kill's spawn spot's, as it read them before the walk), then `end=`, its endurance when it sat;
-- `FLOOR_STEP`: a step onto the nearest floor, with where from and to and why;
+- `FLOOR_STEP`: a step onto the nearest floor, with where from and to and why, then `island=`, the navmesh islands
+  (`id/polygons`, `none`: no polygon) of where it stood and where it lands, and `home=`, its camp's;
+- `CROSSING` (#188): a step that would change the bot's navmesh island, at most one line per bot a minute: `kind=`
+  (`took`: taken, onto its camp's island or a larger one; `ground`: the floor under it, on the bot's island, taken
+  instead; `step` or `link`: refused, and the walk ends blocked with `why="The step would leave the piece of navmesh
+  ..."`), `at=` and `to=`, the step's ends, `island=from->to`, `home=`, the camp's island, `goal=`, `walk=`, and
+  `took=`, `ground=`, `refused=`, the counts since the bot's last such line, this one's included;
 - `CUTOFF`: a blocked roam found no path from where the bot stands to its camp's centre, and the bot is teleported
   there: `at=`, where it stood, `anchor=`, the centre, `distance=` between them, and `waited=`, the seconds it was held
   for a real player in sight or a fight (0: none). `DRIVER`'s `stuck=` counts these teleports with those after 15
@@ -560,9 +583,11 @@ The bot CPU meter (`/botcpu`) charges them to its own kind, `playerbot`, and the
 ## Tests
 
 `Tests/UnitTests/UT_HeadlessClient.cs`, `UT_PlayerBotPlan.cs`, `UT_PlayerBotDriver.cs`, `UT_PlayerBotErrands.cs`,
-`UT_PlayerBotWake.cs`, `UT_PlayerBotSpots.cs` and `UT_PlayerBotKit.cs` run in CI. `UT_PlayerBotWalkReplay.cs` runs only
-when asked for. It needs `OFFLINE_DAOC_NAV_ROOT`: a folder holding `navmesh/zone008.nav`, `zone012.nav`, `zone014.nav`,
-`zone120.nav`, `zone126.nav`, `zone152.nav`, `zone181.nav`, `zone209.nav` and `zone250.nav` (each from
+`UT_PlayerBotWake.cs`, `UT_PlayerBotSpots.cs`, `UT_PlayerBotKit.cs` and `UT_PlayerBotNetwork.cs` run in CI.
+`UT_PlayerBotWalkReplay.cs` runs only when asked for. It needs `OFFLINE_DAOC_NAV_ROOT`: a folder holding
+`navmesh/zone008.nav`, `zone012.nav`, `zone014.nav`, `zone104.nav`, `zone120.nav`, `zone126.nav`, `zone152.nav`,
+`zone181.nav`, `zone209.nav` and `zone250.nav` (each from
 `tools/linux/odaoc_fetch.py --lock deploy/upstream.lock extract runtime/server/navmesh/zone008.nav
 FOLDER/navmesh/zone008.nav`, and so on) and under `lib/` the Detour library built from `source/server/Pathing/Detour`,
-as `deploy/Dockerfile` builds it: without the layer-aware queries the Jordheim and jump-link replays fail.
+as `deploy/Dockerfile` builds it: without the layer-aware queries the Jordheim and jump-link replays fail, and without
+the island query (#188) the Domnann and Muspelheim ones.

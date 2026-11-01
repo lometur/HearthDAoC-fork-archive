@@ -11,13 +11,13 @@ using NUnit.Framework;
 namespace DOL.UnitTests;
 
 // HearthDAoC: player-bot walks that stalled, replayed on the installed navmesh. Read-only; never starts the server.
-// Set OFFLINE_DAOC_NAV_ROOT to a folder with navmesh/zone008.nav, zone012.nav, zone014.nav, zone120.nav, zone126.nav,
-// zone152.nav, zone181.nav, zone209.nav, zone250.nav and lib/Detour
+// Set OFFLINE_DAOC_NAV_ROOT to a folder with navmesh/zone008.nav, zone012.nav, zone014.nav, zone104.nav, zone120.nav,
+// zone126.nav, zone152.nav, zone181.nav, zone209.nav, zone250.nav and lib/Detour
 // (tools/linux/odaoc_fetch.py --lock deploy/upstream.lock extract runtime/server/navmesh/zone008.nav
 // FOLDER/navmesh/zone008.nav, and the same for the others). One test per zone: loading a zone's navmesh twice in one
 // process crashes the test host. lib/Detour must be built from this tree (source/server/Pathing/Detour, as
 // deploy/Dockerfile builds it): the player bots' layer-aware queries (#166) are not in upstream's release library.
-[TestFixture, NonParallelizable, Explicit("Needs OFFLINE_DAOC_NAV_ROOT: a folder with navmesh/zone008.nav, zone012.nav, zone014.nav, zone120.nav, zone126.nav, zone152.nav, zone181.nav, zone209.nav, zone250.nav and lib/Detour")]
+[TestFixture, NonParallelizable, Explicit("Needs OFFLINE_DAOC_NAV_ROOT: a folder with navmesh/zone008.nav, zone012.nav, zone014.nav, zone104.nav, zone120.nav, zone126.nav, zone152.nav, zone181.nav, zone209.nav, zone250.nav and lib/Detour")]
 public class UT_PlayerBotWalkReplay
 {
     // The quest bot stood 513 units short of Olorustos for 14 minutes (lv-r1-stall, 2026-10-25 04:46): its whole-unit
@@ -313,6 +313,68 @@ public class UT_PlayerBotWalkReplay
             Assert.That(PlayerBotPathMover.FloorStep(nav, zone, floor!.Value), Is.Null, "on floor with a way out: no step");
             Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, floor.Value, target, keepExact: true), Is.InRange(0, 200));
             Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, floor.Value, far, keepExact: true, ticks: 400), Is.InRange(1, 400));
+            DomeRestWalk(nav, region, zone);          // #188, here: one test per zone
+        });
+
+    // #188, st-deathsE: Pbothaaem's rest walk from its fight's end to a rest spot 600 units out, on 18 polygons walled in
+    // under a dome. The corridor there is found (its last part ends at the spot's X and Y at the spot's height,
+    // PlayerTravelPath.cs:102-105), and the walk arrives on the dome's floor, from which no walk leads back. With the
+    // island guard (home: its camp) the step down the dome's link is refused on the camp's island, and the spot is no
+    // spot to walk to (OnMesh's test).
+    private static void DomeRestWalk(IPathfindingMgr nav, Region region, Zone zone)
+    {
+        Vector3 fightEnd = new(448159, 402116, 4473), dome = new(448679, 402416, 4474), camp = new(449594, 399561, 4541);
+        NavIsland Island(Vector3 at) => nav.GetIsland(zone, at, nav.DefaultFilters) ?? throw new AssertionException($"no island at {at}");
+        Assert.That((Island(fightEnd), Island(camp).Polygons, Island(dome).Polygons, Island(new(448759, 402116, 4474)) == Island(dome)),
+            Is.EqualTo((Island(camp), 57_083, 18, true)), "the camp's island, and the dome's 18 polygons with both rest spots");
+        Vector3 end = fightEnd;
+        Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, fightEnd, dome, keepExact: true, blockEnds: true, end: p => end = p),
+            Is.InRange(1, 200), "unguarded: it arrives");
+        Assert.That(Island(end), Is.EqualTo(Island(dome)), "unguarded: on the dome's floor");
+        Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, fightEnd, dome, keepExact: true, blockEnds: true,
+            network: new PlayerBotNetwork(), home: camp, end: p => end = p), Is.EqualTo(-3), "guarded: refused");
+        Assert.That(Island(end), Is.EqualTo(Island(camp)), "guarded: on the camp's island");
+        Assert.That(new PlayerBotNetwork().Accepts(nav, zone, fightEnd, dome, camp), Is.False, "no rest spot");
+    }
+
+    // #188, st-deathsE2b: Pbotmaada's camp in Muspelheim (camp 185 of spots-lm3) lies under a ledge piece of the navmesh
+    // (10,551 polygons) with no way down to the camp's (42,359), and Detour's nearest polygon over the camp's floor is often
+    // the ledge's. The sweep's rest and anchor walks there, from the camp centre and from the Thane's fire-eater: their
+    // corridor steps kept the line's height over a ramp and stood on the ledge, blocked there for good. With the island
+    // guard the floor under such a step, on the camp's island, is taken, and both walks arrive.
+    [Test]
+    public void TheWalksOntoTheLedgeAboveTheThanesCampKeepToTheCamp() =>
+        // Muspelheim (region 100, zone 104): OffsetX 100, OffsetY 78, Width 8, Height 8.
+        OnZone(104, "Muspelheim", 100, 78, (nav, region, zone) =>
+        {
+            Vector3 camp = new(840323, 702066, 8343), login = new(840322, 702055, 8327), thane = new(840884, 702153, 8784),
+                ledge = new(839450, 702117, 8244), over = new(840400, 702037, 8392);
+            NavIsland Island(Vector3 at) => nav.GetIsland(zone, at, nav.DefaultFilters) ?? throw new AssertionException($"no island at {at}");
+            Assert.That((Island(camp).Polygons, Island(login), Island(thane).Polygons, Island(ledge), Island(over)),
+                Is.EqualTo((42_359, Island(camp), 10_551, Island(thane), Island(thane))), "the camp's island and the ledge's");
+            Vector3 fireEater = new(840919.75f, 702040.3f, 8514.667f);
+            foreach ((string walk, Vector3 from, Vector3 goal) in new[]
+                     {
+                         ("6771 rest", camp, new Vector3(840922.44f, 702040.25f, 8515.732f)),
+                         ("7438 anchor", fireEater, camp),
+                     })
+            {
+                Vector3 end = from;
+                Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, from, goal, keepExact: true, ticks: 480, blockEnds: true,
+                    end: p => end = p), Is.EqualTo(-2), $"{walk} unguarded: stalled");
+                Assert.That(Island(end), Is.EqualTo(Island(thane)), $"{walk} unguarded: on the ledge");
+                Assert.That(UT_PlayerBotDriver.Walk(nav, region, zone, from, goal, keepExact: true, ticks: 480, blockEnds: true,
+                    network: new PlayerBotNetwork(), home: camp, end: p => end = p), Is.InRange(1, 40), $"{walk} guarded: arrives");
+                Assert.That(Island(end), Is.EqualTo(Island(camp)), $"{walk} guarded: on the camp's island");
+            }
+            // 7438's first step: the corridor's plain move, 25 units up the line, over the ledge's polygon; the floor 43 units
+            // under it is the camp's.
+            Assert.That(PlayerBotPathMover.TryComputeNext(nav, region, zone, new DOL.GS.Commands.PlayerTravelPath(), fireEater, camp,
+                20, 47.75f, 0, out Vector3 next, out _), Is.True);
+            Assert.That(Island(next), Is.EqualTo(Island(thane)));
+            Assert.That(new PlayerBotNetwork().Keeps(nav, region, zone, fireEater, ref next, null, camp, out string crossing), Is.True);
+            Assert.That((Island(next), next.Z, crossing), Is.EqualTo((Island(camp), 8496.05f, crossing)).Using<(NavIsland, float, string)>(
+                (a, b) => a.Item1 == b.Item1 && Math.Abs(a.Item2 - b.Item2) < 1 && a.Item3.StartsWith("kind=ground")));
         });
 
     // One test per zone: UnloadNavMesh frees the mesh but leaves the thread's query on it (LocalPathfindingMgr's
