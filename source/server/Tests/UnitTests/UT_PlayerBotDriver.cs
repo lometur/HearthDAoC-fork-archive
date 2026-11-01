@@ -6343,6 +6343,47 @@ public sealed class UT_PlayerBotDriver
         });
     }
 
+    // #188 final review (mutant X8): FloorStep judges the nearest floor itself (keeps(found)). A bot on no polygon 124
+    // units under the pocket, by the border, its camp on the larger island: the floor straight above is on the pocket, so
+    // it is not stepped onto; the first floor on the camp's island on RingFloor's rings is (100 units out, north-west).
+    [Test]
+    public void A_bot_under_a_pocket_steps_onto_its_camps_island_not_the_floor_above_in_TryFloorStep()
+    {
+        var mesh = new PlayerBotIslandMesh(border: 840_500) { Floor = 8_343, NoCorridor = true };
+        Vector3 under = new(840_560, 702_100, 8_219), camp = new(838_400, 702_100, 8_343), goal = new(840_760, 702_100, 8_343);
+        InTheField(mesh, under, (region, zone, bot) =>
+        {
+            var state = new PlayerBotState(bot) { Anchor = camp };
+            Assert.That(mesh.GetIsland(zone, under, mesh.DefaultFilters), Is.Null, "on no polygon");
+            Assert.That(state.Mover.StepToward(goal, 20, 10_000), Is.EqualTo(PlayerBotStepResult.Blocked));
+            Assert.That((bot.X, bot.Y, bot.Z), Is.EqualTo((840_489, 702_171, 8_343)), "onto the camp's island, not the pocket above");
+        });
+    }
+
+    // #188 final review (mutant X7): the floor step judges a floor from where the bot stands (AtHome's here), with the
+    // camp-size rule outside keeps(here)'s early return. The bot walks a step on the larger island, its camp on the
+    // pocket, then is put 124 units under the pocket (no reset: under 256 units), where it stands on no polygon and keeps
+    // the larger island as the floor it last stood on. Its walk is blocked: the pocket's floor above is not stepped onto
+    // (the camp on a smaller island does not pull the bot onto it); the first floor on the larger island is. Judged from
+    // the floor above instead, the bot would stand on the pocket, and the pocket camp would pull it there.
+    [Test]
+    public void The_floor_step_judges_from_where_the_bot_stands_so_a_pocket_camp_pulls_it_nowhere_in_TryFloorStep()
+    {
+        var mesh = new PlayerBotIslandMesh(border: 840_500) { Floor = 8_343 };
+        Vector3 start = new(840_400, 702_100, 8_343), camp = new(840_700, 702_100, 8_343), under = new(840_560, 702_100, 8_219);
+        InTheField(mesh, start, (region, zone, bot) =>
+        {
+            var state = new PlayerBotState(bot) { Anchor = camp };
+            Assert.That(state.Mover.StepToward(new(840_480, 702_100, 8_343), 20, 10_000), Is.EqualTo(PlayerBotStepResult.Moving),
+                "a step on the larger island");
+            (bot.X, bot.Y, bot.Z) = ((int)under.X, (int)under.Y, (int)under.Z);
+            mesh.NoCorridor = true;
+            Assert.That(state.Mover.StepToward(new(840_760, 702_100, 8_343), 20, 10_000 + PlayerBotDriver.TickMilliseconds),
+                Is.EqualTo(PlayerBotStepResult.Blocked));
+            Assert.That((bot.X, bot.Y, bot.Z), Is.EqualTo((840_489, 702_171, 8_343)), "onto the larger island, not the pocket above");
+        });
+    }
+
     // #188 review R2, the wiring of TryFloorStep's camp test (PlayerBotNetwork.AtHome): a blocked walk on a pocket beside
     // the camp's island ends with a floor step onto the camp's island, the first floor on it on RingFloor's rings (50
     // units west). Without the test the floor step is as before #188: none, as the pocket's floor has a way out.
