@@ -71,7 +71,7 @@ public sealed class PlayerBotState
     public PlayerBotState(GamePlayer player)
     {
         Player = player;
-        Mover = new PlayerBotPathMover(player);
+        Mover = new PlayerBotPathMover(player) { Home = CampInZone, Walk = () => Walk.ToString().ToLowerInvariant() };  // #188
         AnchorRegion = player.CurrentRegionID;
         Anchor = new(player.X, player.Y, player.Z);
         LastRegion = AnchorRegion;
@@ -82,6 +82,14 @@ public sealed class PlayerBotState
     }
     public GamePlayer Player { get; }
     public PlayerBotPathMover Mover { get; }
+
+    /// <summary>#188: the anchor, where it lies in the bot's zone (the mover keeps the bot on its island); else none.</summary>
+    public Vector3? CampInZone()
+    {
+        Vector3 anchor = Anchor;
+        return Player.CurrentRegionID == AnchorRegion && Player.CurrentZone is Zone zone &&
+               Player.CurrentRegion?.GetZone((int)anchor.X, (int)anchor.Y) == zone ? anchor : null;
+    }
     public ushort AnchorRegion { get; set; }
     public Vector3 Anchor { get; set; }             // spawn point: the leash centre; moved when a task ends far away
     public PlayerBotDriverTimer Timer { get; set; }
@@ -4158,14 +4166,20 @@ public static class PlayerBotDriver
     /// in another zone (a corridor runs in one), no navmesh, off the mesh here (every corridor fails then, PTP:79-82;
     /// RelocateIfOutgrown plans nothing there either), or, its third review, no mesh near the anchor (the corridor's own
     /// goal query, PTP:81): moved back there, the bot would be moved there again on every due blocked roam off it.
+    /// #188: where both islands can be read (the polygons in the boxes the corridor starts and ends in), whether they are
+    /// one: two lookups replace a corridor that can cost milliseconds, and the compare is exact. Else the corridor, as
+    /// before. (The review of #188: from the 18 polygons under Domnann's dome no corridor to the camp is found; the false
+    /// tail, PTP:102-105, fools the other way, camp to dome, the rest walk's corridor.)
     /// </summary>
     public static bool AnchorReachable(IPathfindingMgr nav, Region region, Vector3 here, Vector3 anchor)
     {
         Zone zone = region?.GetZone((int)here.X, (int)here.Y);
-        return zone == null || region.GetZone((int)anchor.X, (int)anchor.Y) != zone || !nav.HasNavmesh(zone) ||
-            nav.GetClosestPoint(zone, here, 64, 64, 128, nav.DefaultFilters) == null ||
-            nav.GetClosestPoint(zone, anchor, 128, 128, 256, nav.DefaultFilters) == null ||
-            PlayerTravelPath.TryBuildCorridor(nav, zone, here, anchor, out _);
+        if (zone == null || region.GetZone((int)anchor.X, (int)anchor.Y) != zone || !nav.HasNavmesh(zone) ||
+            nav.GetClosestPoint(zone, here, 64, 64, 128, nav.DefaultFilters) is not Vector3 from ||
+            nav.GetClosestPoint(zone, anchor, 128, 128, 256, nav.DefaultFilters) is not Vector3 to) return true;
+        if (nav.GetIsland(zone, from, nav.DefaultFilters) is NavIsland at && nav.GetIsland(zone, to, nav.DefaultFilters) is NavIsland camp)
+            return at.Id == camp.Id;
+        return PlayerTravelPath.TryBuildCorridor(nav, zone, here, anchor, out _);
     }
 
     /// <summary>#167 E fix U4, the owner's rule (2026-10-30): a player bot never visibly vanishes or appears in front
@@ -4528,12 +4542,19 @@ public static class PlayerBotDriver
         return spot == here ? null : spot;
     }
 
-    // A point's nearest navmesh point, or none; with no navmesh in the zone, the point.
+    // A point's nearest navmesh point, or none; with no navmesh in the zone, the point. #188: none on a piece of navmesh
+    // the bot may not walk onto (PlayerBotPathMover.OnItsNetwork; rest, clear, walk-out, kite and break-off points): in
+    // Domnann a rest spot 600 units out lay on 18 polygons walled in under a dome, and the walk to it left Pbothaaem
+    // there (st-deathsE).
     private static Vector3? OnMesh(GamePlayer player, Vector3 point)
     {
         IPathfindingMgr nav = PathfindingProvider.Instance;
         Zone zone = player.CurrentZone;
-        return zone != null && nav.HasNavmesh(zone) ? nav.GetClosestPoint(zone, point, 64, 64, 256, nav.DefaultFilters) : point;
+        if (zone == null || !nav.HasNavmesh(zone)) return point;
+        if (nav.GetClosestPoint(zone, point, 64, 64, 256, nav.DefaultFilters) is not Vector3 spot) return null;
+        if (StateOf(player)?.Mover.OnItsNetwork(spot) != false) return spot;
+        PlayerBotDriverReport.CrossingDropped();        // the final review of #188: CROSSING dropped=, which no step sees
+        return null;
     }
 
     // #167 F7: before it sits, a bot in a potential add's reach walks to the nearest clear spot on the rest rings, once

@@ -42,6 +42,16 @@ public sealed class PlayerBotPathMover
     private readonly PlayerBotChurnWatch _churn = new();
     private int _walkSteps;                            // WalkReport: steps and distance since its last call
     private double _walked;
+    private readonly PlayerBotNetwork _network = new(); // #188: the piece of navmesh the bot walks
+    private long _nextCrossingLine;                    // PLAYER_BOT_CROSSING bot=: one sample line per bot per
+    public const int CrossingLineMilliseconds = 60_000; //   CrossingLineMilliseconds (the totals: the report's win= line)
+
+    /// <summary>#188: the bot's camp, where it lies in the bot's zone (the driver's anchor); null: none. The mover keeps
+    /// the bot on its island (PlayerBotNetwork).</summary>
+    public Func<Vector3?> Home { get; set; }
+
+    /// <summary>#188: the walk, for PLAYER_BOT_CROSSING (the driver's walk=).</summary>
+    public Func<string> Walk { get; set; }
 
     /// <summary>Why the last Blocked came (the corridor's failure text, "stalled" or "no zone"); for the logs.</summary>
     public string LastBlock { get; private set; } = string.Empty;
@@ -92,12 +102,40 @@ public sealed class PlayerBotPathMover
     /// floor search counts a floor up to 128 units overhead as underfoot, but the surface moves reach only 64: in st-fix3
     /// bots stood 79-88 units under the floor for the rest of the run. Out of the moves' reach, it steps onto that floor,
     /// also where Detour's 64-unit box finds it, as a polygon's bounds reach down to the bot: a respawn spot in Domnann lay
-    /// 124 units under the floor, and every walk from it ended there (st-layers3, #166).</summary>
-    public static Vector3? FloorStep(IPathfindingMgr nav, Zone zone, Vector3 here)
+    /// 124 units under the floor, and every walk from it ended there (st-layers3, #166).
+    /// #188: with <paramref name="keeps"/> (the bot's camp's island, PlayerBotNetwork.AtHome), a floor off it is not
+    /// stepped onto, and a bot standing off it steps onto the nearest floor on it (RingFloor): the nearest floor that
+    /// leads on was a ledge piece or a pocket by the camp, from which no walk led back to it (st-deathsE2b). With none
+    /// there, a bot on no polygon still steps onto the nearest floor, as before (the review of #188: #166's rescue of
+    /// the bot 124 units under Domnann's floor).</summary>
+    public static Vector3? FloorStep(IPathfindingMgr nav, Zone zone, Vector3 here, Func<Vector3, bool> keeps = null)
+    {
+        Vector3? found = NearestFloor(nav, zone, here);
+        if (keeps == null || (found is Vector3 floor ? keeps(floor) : keeps(here))) return found;
+        return RingFloor(nav, zone, here, keeps) ??
+               (found.HasValue && nav.GetIsland(zone, here, nav.DefaultFilters) is null ? found : null);
+    }
+
+    private static Vector3? NearestFloor(IPathfindingMgr nav, Zone zone, Vector3 here)
     {
         if (AutonomousNavigationSurface.TryNearestWalkableFloor(nav, zone, here, FloorStepRange, out Vector3 floor)) return floor;
         return (nav.GetClosestPoint(zone, here, 32, 32, 64, nav.DefaultFilters) is not Vector3 near || Math.Abs(near.Z - here.Z) > 64) &&
                AutonomousNavigationSurface.TryFloor(nav, zone, here, out floor) ? floor : null;
+    }
+
+    // #188: the nearest floor that keeps accepts, on rings 50 units apart out to FloorStepRange, 8 directions each, as
+    // TryNearestWalkableFloor's own search (ANS:67-80): at most 48 floor and island queries, once per FloorStepMilliseconds.
+    private static Vector3? RingFloor(IPathfindingMgr nav, Zone zone, Vector3 here, Func<Vector3, bool> keeps)
+    {
+        if (zone == null || !nav.HasNavmesh(zone)) return null;
+        for (float radius = 50; radius <= FloorStepRange; radius += 50)
+            for (int k = 0; k < 8; k++)
+            {
+                double angle = k * Math.PI / 4;
+                Vector3 probe = new(here.X + (float)(Math.Cos(angle) * radius), here.Y + (float)(Math.Sin(angle) * radius), here.Z);
+                if (nav.GetClosestPoint(zone, probe, 24, 24, 256, nav.DefaultFilters) is Vector3 floor && keeps(floor)) return floor;
+            }
+        return null;
     }
 
     /// <summary>Whether the bot stands within the stop radius as the driver judges range: GetDistanceTo cuts the
@@ -245,6 +283,7 @@ public sealed class PlayerBotPathMover
             {
                 _path.Clear();
                 _churn.Reset();
+                _network.Reset();                           // #188: where it stands is read anew
             }
             _stall.Toward(goal, now);
             if (Arrived(here, goal, stopDistance)) { _stall.Reset(); Stop(now); return PlayerBotStepResult.Arrived; }
@@ -261,6 +300,21 @@ public sealed class PlayerBotPathMover
                 PlayerBotDriverReport.Blocked();
                 return PlayerBotStepResult.Blocked;
             }
+            // #188: not onto a piece of navmesh with no way back to the bot's (PlayerBotNetwork.Keeps): the step is refused,
+            // or the floor under it taken, and the walk ends as one with no corridor (a floor step onto the camp's island).
+            if (!_network.Keeps(Nav, _player.CurrentRegion, _player.CurrentZone, current, ref next, _path.LinkEnd, Home?.Invoke(),
+                    out string crossing))
+            {
+                ReportCrossing(crossing, goal, refused: true, now);
+                LastBlock = PlayerBotNetwork.OffItsNetwork;
+                _path.Clear();
+                _stall.Reset();
+                Stop(now);
+                TryFloorStep(current, LastBlock, now);
+                PlayerBotDriverReport.Blocked();
+                return PlayerBotStepResult.Blocked;
+            }
+            if (crossing != null) ReportCrossing(crossing, goal, refused: false, now);
             _exact = next;                                  // a snap back onto the mesh counts, though the bot stays put
             if (Vector3.DistanceSquared(next, current) < 1)
             {
@@ -399,7 +453,28 @@ public sealed class PlayerBotPathMover
         _lastUpdateTick = now;
     }
 
-    public void Reset() { _path.Clear(); _stall.Reset(); _churn.Reset(); }
+    public void Reset() { _path.Clear(); _stall.Reset(); _churn.Reset(); _network.Reset(); }
+
+    /// <summary>#188: whether the bot, where it stands, may walk to spot without leaving its piece of navmesh for one with
+    /// no way back (PlayerBotNetwork.Accepts): the driver's ring points (rest, clear, walk-out, kite and break-off
+    /// spots).</summary>
+    public bool OnItsNetwork(Vector3 spot) =>
+        _network.Accepts(Nav, _player.CurrentZone, StepStart(new(_player.X, _player.Y, _player.Z), _exact), spot, Home?.Invoke());
+
+    // #188: each change of island a step would make (kind=took: taken, as onto the camp's island or a larger one; ground:
+    // the floor under the step taken instead; step or link: refused) counts in the report's PLAYER_BOT_CROSSING win= line,
+    // the totals. The bot's own PLAYER_BOT_CROSSING bot= line is a sample of where, the first change after
+    // CrossingLineMilliseconds: its counts, held until its next line, undercounted a leg (the review of #188).
+    private void ReportCrossing(string crossing, Vector3 goal, bool refused, long now)
+    {
+        if (refused) PlayerBotDriverReport.CrossingRefused();
+        else if (crossing.StartsWith("kind=ground", StringComparison.Ordinal)) PlayerBotDriverReport.CrossingGround();
+        else PlayerBotDriverReport.CrossingTook();
+        if (now < _nextCrossingLine || !Log.IsInfoEnabled) return;
+        _nextCrossingLine = now + CrossingLineMilliseconds;
+        Log.Info($"PLAYER_BOT_CROSSING bot={_player.Name} zone={_player.CurrentZone?.ID} {crossing} " +
+                 $"goal=({goal.X:0.0},{goal.Y:0.0},{goal.Z:0.0}) walk={Walk?.Invoke() ?? "-"}");
+    }
 
     // When a walk ends blocked: a step onto the nearest floor that leads on (FloorStep), at most one search per
     // FloorStepMilliseconds.
@@ -407,15 +482,21 @@ public sealed class PlayerBotPathMover
     {
         if (now < _nextFloorStep) return;
         _nextFloorStep = now + FloorStepMilliseconds;       // one search in the time, found or not: it runs on the game loop (the review of #168)
-        if (FloorStep(Nav, _player.CurrentZone, current) is not Vector3 floor) return;
+        Zone zone = _player.CurrentZone;
+        Vector3? home = Home?.Invoke();
+        if (FloorStep(Nav, zone, current, spot => _network.AtHome(Nav, zone, current, spot, home)) is not Vector3 floor) return;
         if (Log.IsInfoEnabled)
             Log.Info($"PLAYER_BOT_FLOOR_STEP bot={_player.Name} from=({current.X:0},{current.Y:0},{current.Z:0}) " +
-                     $"to=({floor.X:0},{floor.Y:0},{floor.Z:0}) distance={Vector3.Distance(current, floor):0} why=\"{why}\"");
+                     $"to=({floor.X:0},{floor.Y:0},{floor.Z:0}) distance={Vector3.Distance(current, floor):0} why=\"{why}\" " +
+                     $"island={Island(zone, current)}->{Island(zone, floor)} home={(home is Vector3 h ? Island(zone, h) : "none")}");
         _player.MoveTo(_player.CurrentRegionID, (int)Math.Round(floor.X), (int)Math.Round(floor.Y), (int)Math.Round(floor.Z),
             _player.Heading);
         Reset();
         _exact = null;
     }
+
+    private string Island(Zone zone, Vector3 at) =>
+        PlayerBotNetwork.Name(zone != null && Nav.HasNavmesh(zone) ? Nav.GetIsland(zone, at, Nav.DefaultFilters) : null);
 
     public void IdleBroadcast(long now)
     {

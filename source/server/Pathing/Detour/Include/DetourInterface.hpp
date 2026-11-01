@@ -46,3 +46,5 @@ DLLEXPORT dtStatus GetPolysInBox(dtNavMeshQuery *query, float center[], float po
 // HearthDAoC: the player bots' layer-aware queries (#166), see DetourInterface.cpp.
 DLLEXPORT dtStatus MoveAlongSurfaceLayered(dtNavMeshQuery* query, float start[], float end[], float polyPickExt[], dtPolyFlags queryFilter[], int grounded, float* outputVector);
 DLLEXPORT dtStatus PathStraightLayered(dtNavMeshQuery* query, float start[], float end[], float polyPickExt[], dtPolyFlags queryFilter[], dtStraightPathOptions pathOptions, int* pointCount, float* pointBuffer, dtPolyFlags* pointFlags);
+// HearthDAoC: the player bots' island query (#188), see DetourInterface.cpp.
+DLLEXPORT dtStatus GetPolyIsland(dtNavMeshQuery* query, float center[], float polyPickExt[], dtPolyFlags queryFilter[], int* island, int* islandPolys);

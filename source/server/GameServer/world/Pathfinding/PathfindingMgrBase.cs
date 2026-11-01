@@ -46,6 +46,12 @@ namespace DOL.GS
             return grounded ? null : GetMoveAlongSurface(zone, start, end, filters);
         }
 
+        // HearthDAoC: the player bots' island query (#188): none here.
+        public virtual NavIsland? GetIsland(Zone zone, Vector3 position, EDtPolyFlags[] filters)
+        {
+            return null;
+        }
+
         public virtual Vector3? GetRandomPoint(Zone zone, Vector3 position, float radius, EDtPolyFlags[] filters)
         {
             return position;

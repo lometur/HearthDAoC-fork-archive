@@ -10,7 +10,10 @@
 #include <DetourNode.h> // HearthDAoC: dtNodePool, for MoveAlongSurfaceLayered (#166)
 #include <DetourStatus.h>
 #include <functional>
+#include <memory> // HearthDAoC: std::shared_ptr, std::mutex, std::unordered_map, for GetPolyIsland (#188)
+#include <mutex>
 #include <random>
+#include <unordered_map>
 #include <vector>
 
 // RAII helper
@@ -83,10 +86,15 @@ DLLEXPORT bool LoadNavMesh(char const *file, dtNavMesh **const mesh)
 	return true;
 }
 
+static void ForgetIslands(const dtNavMesh* mesh); // HearthDAoC: GetPolyIsland's labels of this mesh (#188)
+
 DLLEXPORT bool FreeNavMesh(dtNavMesh *meshPtr)
 {
 	if (meshPtr)
+	{
+		ForgetIslands(meshPtr); // HearthDAoC (#188)
 		dtFreeNavMesh(meshPtr);
+	}
 	return true;
 }
 
@@ -734,4 +742,167 @@ DLLEXPORT dtStatus PathStraightLayered(dtNavMeshQuery* query, float start[], flo
 		first = i + 1;
 	}
 	return isPartialPath ? (DT_SUCCESS | DT_PARTIAL_RESULT) : DT_SUCCESS;
+}
+
+// HearthDAoC: the player bots' islands (#188). A player bot's every query starts from the polygon nearest its point, so a
+// step that leaves its floor can leave it on another piece of the navmesh: in Domnann a corridor's last corner, put at a
+// rest spot on a floor walled in under a dome, took a bot 188 units straight down onto 18 polygons with no link out, and
+// in Muspelheim a Thane stood on a ledge piece of 10,551 polygons above its camp's 42,359 until the run ended. An island
+// is a strongly connected component of the polygons that pass the filter, joined by Detour's own links (inside tiles, at
+// tile seams, off-mesh connections in their directions): two polygons share one only where a path leads each way.
+// Labelled once per navmesh, on its first query (Tarjan's algorithm, without recursion), then read in O(1).
+namespace
+{
+	struct IslandTable
+	{
+		std::once_flag built;
+		unsigned short include = 0, exclude = 0; // the filter they were labelled for
+		std::vector<int> first;                  // per tile index: the label index of its polygon 0, or -1 (no tile)
+		std::vector<int> label;                  // per polygon: its island, or -1 (it fails the filter)
+		std::vector<int> size;                   // per island: its ground polygons
+	};
+
+	std::mutex islandsLock;
+	std::unordered_map<const dtNavMesh*, std::shared_ptr<IslandTable>> islands;
+
+	void LabelIslands(const dtNavMesh* nav, IslandTable& table)
+	{
+		const int maxTiles = nav->getMaxTiles();
+		std::vector<const dtMeshTile*> tiles(maxTiles, nullptr);
+		table.first.assign(maxTiles, -1);
+		int count = 0;
+		for (int i = 0; i < maxTiles; ++i)
+		{
+			const dtMeshTile* tile = nav->getTile(i);
+			if (!tile || !tile->header)
+				continue;
+			tiles[i] = tile;
+			table.first[i] = count;
+			count += tile->header->polyCount;
+		}
+		table.label.assign(count, -1);
+		std::vector<int> tileOf(count);
+		for (int i = 0; i < maxTiles; ++i)
+			if (tiles[i])
+				for (int p = 0; p < tiles[i]->header->polyCount; ++p)
+					tileOf[table.first[i] + p] = i;
+		auto poly = [&](int node) -> const dtPoly& { return tiles[tileOf[node]]->polys[node - table.first[tileOf[node]]]; };
+		auto passes = [&](int node)
+		{
+			const dtPoly& p = poly(node);
+			return (p.flags & table.include) != 0 && (p.flags & table.exclude) == 0;
+		};
+		auto nodeOf = [&](dtPolyRef ref)
+		{
+			unsigned int salt, it, ip;
+			nav->decodePolyId(ref, salt, it, ip);
+			return it < (unsigned int)maxTiles && tiles[it] && ip < (unsigned int)tiles[it]->header->polyCount
+				? table.first[it] + (int)ip : -1;
+		};
+		struct Frame
+		{
+			int node;
+			unsigned int link; // the next of its links to follow
+		};
+		std::vector<int> index(count, -1), low(count, 0), stack;
+		std::vector<unsigned char> onStack(count, 0);
+		std::vector<Frame> calls;
+		int next = 0;
+		for (int root = 0; root < count; ++root)
+		{
+			if (index[root] >= 0 || !passes(root))
+				continue;
+			index[root] = low[root] = next++;
+			stack.push_back(root);
+			onStack[root] = 1;
+			calls.push_back({root, poly(root).firstLink});
+			while (!calls.empty())
+			{
+				const int v = calls.back().node;
+				const unsigned int k = calls.back().link;
+				if (k != DT_NULL_LINK)
+				{
+					const dtLink& link = tiles[tileOf[v]]->links[k];
+					calls.back().link = link.next;
+					const int w = link.ref ? nodeOf(link.ref) : -1;
+					if (w < 0 || !passes(w))
+						continue;
+					if (index[w] < 0)
+					{
+						index[w] = low[w] = next++;
+						stack.push_back(w);
+						onStack[w] = 1;
+						calls.push_back({w, poly(w).firstLink});
+					}
+					else if (onStack[w] && index[w] < low[v])
+						low[v] = index[w];
+					continue;
+				}
+				calls.pop_back();
+				if (!calls.empty() && low[v] < low[calls.back().node])
+					low[calls.back().node] = low[v];
+				if (low[v] != index[v])
+					continue;
+				const int island = (int)table.size.size();
+				int ground = 0, w;
+				do
+				{
+					w = stack.back();
+					stack.pop_back();
+					onStack[w] = 0;
+					table.label[w] = island;
+					if (poly(w).getType() == DT_POLYTYPE_GROUND)
+						++ground;
+				} while (w != v);
+				table.size.push_back(ground);
+			}
+		}
+	}
+}
+
+static void ForgetIslands(const dtNavMesh* mesh)
+{
+	std::lock_guard<std::mutex> hold(islandsLock);
+	islands.erase(mesh);
+}
+
+// The island of the polygon nearest center, in the box polyPickExt as every query's start, and its ground polygons.
+// island -1 with success: no polygon in the box. Labelled for the first filter asked, and only for that one
+// (DT_INVALID_PARAM for another): the player bots ask with the default one, which no run-time flag change moves a polygon
+// in or out of (a door swaps Door and BlockingDoor, both included; nothing sets Disabled).
+DLLEXPORT dtStatus GetPolyIsland(dtNavMeshQuery* query, float center[], float polyPickExt[], dtPolyFlags queryFilter[], int* island, int* islandPolys)
+{
+	*island = -1;
+	*islandPolys = 0;
+	dtQueryFilter filter;
+	filter.setIncludeFlags(queryFilter[0]);
+	filter.setExcludeFlags(queryFilter[1]);
+	dtPolyRef ref = 0;
+	const dtStatus status = query->findNearestPoly(center, polyPickExt, &filter, &ref, nullptr);
+	if (dtStatusFailed(status) || !ref)
+		return status;
+	const dtNavMesh* nav = query->getAttachedNavMesh();
+	std::shared_ptr<IslandTable> table;
+	{
+		std::lock_guard<std::mutex> hold(islandsLock);
+		std::shared_ptr<IslandTable>& slot = islands[nav];
+		if (!slot)
+			slot = std::make_shared<IslandTable>();
+		table = slot;
+	}
+	std::call_once(table->built, [&]
+	{
+		table->include = queryFilter[0];
+		table->exclude = queryFilter[1];
+		LabelIslands(nav, *table);
+	});
+	if (table->include != queryFilter[0] || table->exclude != queryFilter[1])
+		return DT_FAILURE | DT_INVALID_PARAM;
+	unsigned int salt, it, ip;
+	nav->decodePolyId(ref, salt, it, ip);
+	if (it >= table->first.size() || table->first[it] < 0 || table->label[table->first[it] + (int)ip] < 0)
+		return DT_FAILURE | DT_INVALID_PARAM;
+	*island = table->label[table->first[it] + (int)ip];
+	*islandPolys = table->size[*island];
+	return DT_SUCCESS;
 }
