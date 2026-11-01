@@ -4550,8 +4550,10 @@ public static class PlayerBotDriver
         IPathfindingMgr nav = PathfindingProvider.Instance;
         Zone zone = player.CurrentZone;
         if (zone == null || !nav.HasNavmesh(zone)) return point;
-        return nav.GetClosestPoint(zone, point, 64, 64, 256, nav.DefaultFilters) is Vector3 spot &&
-               StateOf(player)?.Mover.OnItsNetwork(spot) != false ? spot : null;
+        if (nav.GetClosestPoint(zone, point, 64, 64, 256, nav.DefaultFilters) is not Vector3 spot) return null;
+        if (StateOf(player)?.Mover.OnItsNetwork(spot) != false) return spot;
+        PlayerBotDriverReport.CrossingDropped();        // the final review of #188: CROSSING dropped=, which no step sees
+        return null;
     }
 
     // #167 F7: before it sits, a bot in a potential add's reach walks to the nearest clear spot on the rest rings, once

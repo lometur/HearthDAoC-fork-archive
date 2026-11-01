@@ -569,12 +569,16 @@ All start `PLAYER_BOT_`:
   recent kill's spawn spot's, as it read them before the walk), then `end=`, its endurance when it sat;
 - `FLOOR_STEP`: a step onto the nearest floor, with where from and to and why, then `island=`, the navmesh islands
   (`id/polygons`, `none`: no polygon) of where it stood and where it lands, and `home=`, its camp's;
-- `CROSSING` (#188): steps that would change a bot's navmesh island, on two kinds of line:
+- `CROSSING` (#188): steps that would change a bot's navmesh island, and ring points dropped for theirs, on two kinds
+  of line:
   - `CROSSING win=`, every minute after `WAKE`, over all bots: `took=` (taken, onto the camp's island or a larger
     one), `ground=` (the floor under the step, on the bot's island, taken instead) and `refused=` (refused, and the walk
-    ends blocked with `why="The step would leave the piece of navmesh ..."`), each such step counted once. When the
-    server stops, one more covers the part of a minute since the last (`win=` its seconds), so a leg's lines sum
-    exactly. Take totals from these lines only;
+    ends blocked with `why="The step would leave the piece of navmesh ..."`), each such step counted once; then
+    `dropped=`, the ring points on the mesh dropped because they lie on an island the bot may not step onto (rest,
+    clear-spot, walk-out, kite and break-off points, before any walk starts, so no step sees them), counted each time a
+    search looks one up: points, not walks (a rest search looks up 48). When the server stops, one more covers the
+    part of a minute since the last (`win=` its seconds), so a leg's lines sum exactly. Take totals from these lines
+    only;
   - `CROSSING bot=`, a sample of where, at most one per bot a minute (the first such step after one), with no counts:
     `zone=`, `kind=` (`took`, `ground`, or `step` or `link`: refused), `at=` and `to=`, the step's ends,
     `island=from->to`, `home=`, the camp's island, `goal=` and `walk=`;

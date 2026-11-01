@@ -15,8 +15,9 @@ public readonly record struct PlayerBotDriverWindow(
     long Errors, double NearPlayerBots, double NearGamebots, int GamebotNearbyHuman, int GamebotStandard, int GamebotEfficient);
 
 /// <summary>#188: one report window's changes of island by the mover's steps, over all bots (PLAYER_BOT_CROSSING win=):
-/// taken (onto the camp's island or a larger one), the floor under the step taken in its place, and refused.</summary>
-public readonly record struct PlayerBotCrossingWindow(int Seconds, long Took, long Ground, long Refused);
+/// taken (onto the camp's island or a larger one), the floor under the step taken in its place, and refused; then (the
+/// final review of #188) the driver's ring points on the mesh dropped for their island before any walk (OnMesh).</summary>
+public readonly record struct PlayerBotCrossingWindow(int Seconds, long Took, long Ground, long Refused, long Dropped);
 
 /// <summary>One settled fight (levelmatch/DEATHS.md 2): the bot's health and power at its first think in reach and now,
 /// the most attackers on a think, the swings seen and those the view gate refused, the casts, and this life's kills and
@@ -88,7 +89,8 @@ public static class PlayerBotDriverReport
 
     private static long _ticks, _tickStopwatch, _moverStopwatch, _kills, _deaths, _levelUps, _experience, _blocked, _stuck,
         _ldCancelled, _errors;
-    private static long _crossingTook, _crossingGround, _crossingRefused, _windowStarted;    // #188; the window's start (Stopwatch)
+    private static long _crossingTook, _crossingGround, _crossingRefused, _crossingDropped;    // #188
+    private static long _windowStarted;                                                        // #188: its start (Stopwatch)
     private static int _maxLevel, _windows;
     private static Timer _timer;
     private static readonly ConditionalWeakTable<GameLiving, StrongBox<long>> _countedLives = new();
@@ -116,6 +118,9 @@ public static class PlayerBotDriverReport
     public static void CrossingTook() => Interlocked.Increment(ref _crossingTook);
     public static void CrossingGround() => Interlocked.Increment(ref _crossingGround);
     public static void CrossingRefused() => Interlocked.Increment(ref _crossingRefused);
+    // The final review of #188: each ring point on the mesh the driver drops for its island (PlayerBotDriver.OnMesh), the
+    // guard's common case live, which no step sees.
+    public static void CrossingDropped() => Interlocked.Increment(ref _crossingDropped);
 
     public static void LevelUp(int levels, int newLevel)
     {
@@ -146,10 +151,11 @@ public static class PlayerBotDriverReport
         if (Log.IsInfoEnabled) Log.Info(FormatCrossing(last));
     }
 
-    /// <summary>#188: the changes of island since the last call, for a PLAYER_BOT_CROSSING win= line of the given
-    /// seconds; the counts start from zero again.</summary>
+    /// <summary>#188: the changes of island (and ring points dropped) since the last call, for a PLAYER_BOT_CROSSING win=
+    /// line of the given seconds; the counts start from zero again.</summary>
     public static PlayerBotCrossingWindow TakeCrossings(int seconds) => new(seconds, Interlocked.Exchange(ref _crossingTook, 0),
-        Interlocked.Exchange(ref _crossingGround, 0), Interlocked.Exchange(ref _crossingRefused, 0));
+        Interlocked.Exchange(ref _crossingGround, 0), Interlocked.Exchange(ref _crossingRefused, 0),
+        Interlocked.Exchange(ref _crossingDropped, 0));
 
     private static void Write()
     {
@@ -309,10 +315,11 @@ public static class PlayerBotDriverReport
         $"dots={d.Dots} qcKill={d.KillingQuickcast} ctlMez={d.TargetMezzes} raceLeft={d.RaceLeft} " +
         $"styleHeld={d.StylesHeld} castHeld={d.CastsHeld}");
 
-    /// <summary>#188: PLAYER_BOT_CROSSING win=, the window's changes of island over all bots: the totals (a bot's own
-    /// CROSSING bot= lines are samples, at most one a minute; PlayerBotPathMover.ReportCrossing).</summary>
+    /// <summary>#188: PLAYER_BOT_CROSSING win=, the window's changes of island over all bots, then its ring points
+    /// dropped: the totals (a bot's own CROSSING bot= lines are samples, at most one a minute;
+    /// PlayerBotPathMover.ReportCrossing).</summary>
     public static string FormatCrossing(PlayerBotCrossingWindow w) => string.Create(CultureInfo.InvariantCulture,
-        $"PLAYER_BOT_CROSSING win={w.Seconds} took={w.Took} ground={w.Ground} refused={w.Refused}");
+        $"PLAYER_BOT_CROSSING win={w.Seconds} took={w.Took} ground={w.Ground} refused={w.Refused} dropped={w.Dropped}");
 
     public static string Format(PlayerBotDriverWindow w)
     {

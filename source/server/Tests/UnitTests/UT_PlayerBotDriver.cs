@@ -5853,10 +5853,10 @@ public sealed class UT_PlayerBotDriver
     }
 
     // #188 review R3: PLAYER_BOT_CROSSING win=, the window's changes of island over all bots, on its own line (the DRIVER
-    // format above is pinned).
+    // format above is pinned); the final review: then the ring points dropped for their island (dropped=).
     [Test]
-    public void CrossingFormat() => Assert.That(PlayerBotDriverReport.FormatCrossing(new PlayerBotCrossingWindow(60, 3, 1, 2)),
-        Is.EqualTo("PLAYER_BOT_CROSSING win=60 took=3 ground=1 refused=2"));
+    public void CrossingFormat() => Assert.That(PlayerBotDriverReport.FormatCrossing(new PlayerBotCrossingWindow(60, 3, 1, 2, 5)),
+        Is.EqualTo("PLAYER_BOT_CROSSING win=60 took=3 ground=1 refused=2 dropped=5"));
 
     // #188 review R3: Stop (the server's stop) takes the last part of a window, so that a leg's CROSSING lines sum to its
     // every change of island; with no report started (no player bots ran: any other server's stop), nothing.
@@ -5865,12 +5865,14 @@ public sealed class UT_PlayerBotDriver
     {
         PlayerBotDriverReport.TakeCrossings(0);                         // the counters are process-wide
         PlayerBotDriverReport.CrossingRefused();
+        PlayerBotDriverReport.CrossingDropped();
         PlayerBotDriverReport.Stop();
-        Assert.That(PlayerBotDriverReport.TakeCrossings(60), Is.EqualTo(new PlayerBotCrossingWindow(60, 0, 0, 1)), "never started");
+        Assert.That(PlayerBotDriverReport.TakeCrossings(60), Is.EqualTo(new PlayerBotCrossingWindow(60, 0, 0, 1, 1)), "never started");
         PlayerBotDriverReport.CrossingTook();
+        PlayerBotDriverReport.CrossingDropped();
         PlayerBotDriverReport.EnsureStarted();
         PlayerBotDriverReport.Stop();
-        Assert.That(PlayerBotDriverReport.TakeCrossings(60), Is.EqualTo(new PlayerBotCrossingWindow(60, 0, 0, 0)), "taken at Stop");
+        Assert.That(PlayerBotDriverReport.TakeCrossings(60), Is.EqualTo(new PlayerBotCrossingWindow(60, 0, 0, 0, 0)), "taken at Stop");
     }
 
     [Test]
@@ -6433,8 +6435,8 @@ public sealed class UT_PlayerBotDriver
             Assert.That(Walk(new(840_400, 702_100, 8_343), pocket, 20), Is.EqualTo(PlayerBotStepResult.Blocked), "refused");
             Assert.That(state.Mover.StepToward(pocket, 20, now), Is.EqualTo(PlayerBotStepResult.Blocked), "refused again");
             Assert.That(now, Is.LessThan(10_000 + PlayerBotPathMover.CrossingLineMilliseconds), "within the bot's line's minute");
-            Assert.That(PlayerBotDriverReport.TakeCrossings(60), Is.EqualTo(new PlayerBotCrossingWindow(60, 1, 1, 2)));
-            Assert.That(PlayerBotDriverReport.TakeCrossings(60), Is.EqualTo(new PlayerBotCrossingWindow(60, 0, 0, 0)), "from zero again");
+            Assert.That(PlayerBotDriverReport.TakeCrossings(60), Is.EqualTo(new PlayerBotCrossingWindow(60, 1, 1, 2, 0)));
+            Assert.That(PlayerBotDriverReport.TakeCrossings(60), Is.EqualTo(new PlayerBotCrossingWindow(60, 0, 0, 0, 0)), "from zero again");
         });
     }
 
@@ -6460,6 +6462,56 @@ public sealed class UT_PlayerBotDriver
             }
             finally { states.TryRemove(bot, out _); }
         });
+    }
+
+    // #188 final review: a ring point on the mesh that OnMesh drops for its island counts in the report's CROSSING line
+    // (dropped=). It is the guard's common case live: ring points on a pocket are dropped before any walk starts, so no
+    // step of the mover's (took=, ground=, refused=) sees them; each lookup counts. A point kept, or one of a bot the
+    // driver doesn't drive, is not counted.
+    [Test]
+    public void A_dropped_ring_point_counts_in_the_reports_crossing_line_in_OnMesh()
+    {
+        Vector3 start = new(840_400, 702_100, 8_343), pocket = new(840_700, 702_100, 8_343), field = new(840_100, 702_400, 8_343);
+        InTheField(new PlayerBotIslandMesh(border: 840_500), start, (region, zone, bot) =>
+        {
+            PlayerBotDriverReport.TakeCrossings(0);                     // the counters are process-wide
+            var state = new PlayerBotState(bot) { Anchor = new(838_400, 702_100, 8_343) };
+            Assert.That(OnMeshOf(bot, pocket), Is.EqualTo((Vector3?)pocket), "not a driven bot");
+            Assert.That(OnMeshOf(bot, pocket, state), Is.Null, "dropped");
+            Assert.That(OnMeshOf(bot, field, state), Is.EqualTo((Vector3?)field), "kept");
+            Assert.That(OnMeshOf(bot, pocket, state), Is.Null, "dropped again");
+            Assert.That(PlayerBotDriverReport.FormatCrossing(PlayerBotDriverReport.TakeCrossings(60)),
+                Is.EqualTo("PLAYER_BOT_CROSSING win=60 took=0 ground=0 refused=0 dropped=2"));
+        });
+    }
+
+    // #188 final review: dropped= counts only points on the mesh that the island test drops. A ring point with no navmesh
+    // in OnMesh's box (over a drop, far under the floor) is none, as before #188, and is not counted.
+    [Test]
+    public void An_off_mesh_ring_point_is_not_counted_as_dropped_in_OnMesh()
+    {
+        Vector3 start = new(840_400, 702_100, 8_343), off = new(840_700, 702_100, PlayerBotIslandMesh.Air - 100);
+        InTheField(new PlayerBotIslandMesh(border: 840_500), start, (region, zone, bot) =>
+        {
+            PlayerBotDriverReport.TakeCrossings(0);                     // the counters are process-wide
+            var state = new PlayerBotState(bot) { Anchor = new(838_400, 702_100, 8_343) };
+            Assert.That(OnMeshOf(bot, off, state), Is.Null, "off the mesh");
+            Assert.That(PlayerBotDriverReport.TakeCrossings(60), Is.EqualTo(new PlayerBotCrossingWindow(60, 0, 0, 0, 0)));
+        });
+    }
+
+    // The driver's OnMesh (private) for bot's point; with driven, as the driver's own bot (held in its states meanwhile).
+    private static Vector3? OnMeshOf(GamePlayer bot, Vector3 point, PlayerBotState driven = null)
+    {
+        MethodInfo onMesh = typeof(PlayerBotDriver).GetMethod("OnMesh", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var states = (ConcurrentDictionary<GamePlayer, PlayerBotState>)typeof(PlayerBotDriver)
+            .GetField("_states", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        try
+        {
+            if (driven != null) states[bot] = driven;
+            return (Vector3?)onMesh.Invoke(null, [bot, point]);
+        }
+        finally { if (driven != null) states.TryRemove(bot, out _); }
     }
 
     // #188: the anchor's test (AnchorReachable) by islands where both can be read: two lookups replace a corridor that
