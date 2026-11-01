@@ -288,7 +288,7 @@ SERVER_UNIT_TESTS = ("dotnet test source/server/Tests/Tests.csproj --nologo --fi
                      '|FullyQualifiedName~UT_QuestIndicatorProbe'
                      '|FullyQualifiedName~UT_QuestIndicators|FullyQualifiedName~UT_IndicatorSentStore'
                      '|FullyQualifiedName~UT_RpTimerWait|FullyQualifiedName~UT_RpTimerWaitScript'
-                     '|FullyQualifiedName~UT_RelicPadAttackers|FullyQualifiedName~UT_RelicCarriers'
+                     '|FullyQualifiedName~UT_RelicPadAttackers|FullyQualifiedName~UT_RelicCarriers|FullyQualifiedName~UT_StackedBuffBonus'
                      '|FullyQualifiedName~UT_QuestGrants'
                      '|FullyQualifiedName~UT_BotCpuMeter|FullyQualifiedName~UT_BotCpuReport|FullyQualifiedName~UT_BotCpuScript'
                      '|FullyQualifiedName~UT_HeadlessClient|FullyQualifiedName~UT_PlayerBotPlan|FullyQualifiedName~UT_PlayerBotDriver|FullyQualifiedName~UT_PlayerBotErrands'
@@ -303,8 +303,8 @@ UNIT_TESTS = os.path.join(ROOT, "source", "server", "Tests", "UnitTests")
 class ServerUnitTestWorkflowTests(unittest.TestCase):
     """CI runs the fork's own server unit tests by name, and upstream's that guard a rule the owner chose to keep
     (UT_RelicPadAttackers: the relic pad's 8, companions and gamebots counting; decision 3 of the 0.37b sync), and the
-    fork's fix to upstream's relic carriers (UT_RelicCarriers, #189). dotnet
-    test passes (exit 0) when its filter matches no test at all, so every name in the filter must be a test class in
+    fork's fix to upstream's relic carriers (UT_RelicCarriers, #189) and to buffs taken off twice
+    (UT_StackedBuffBonus, #190). dotnet test passes (exit 0) when its filter matches no test at all, so every name in the filter must be a test class in
     source/server/Tests/UnitTests."""
 
     def test_the_fork_server_unit_tests_run_with_the_pinned_filter(self):
@@ -326,7 +326,7 @@ class ServerUnitTestWorkflowTests(unittest.TestCase):
                                  "UT_QuestIndicatorProbe",
                                  "UT_QuestIndicators", "UT_IndicatorSentStore",
                                  "UT_RpTimerWait", "UT_RpTimerWaitScript",
-                                 "UT_RelicPadAttackers", "UT_RelicCarriers",
+                                 "UT_RelicPadAttackers", "UT_RelicCarriers", "UT_StackedBuffBonus",
                                  "UT_QuestGrants",
                                  "UT_BotCpuMeter", "UT_BotCpuReport", "UT_BotCpuScript",
                                  "UT_HeadlessClient", "UT_PlayerBotPlan", "UT_PlayerBotDriver", "UT_PlayerBotErrands",
