@@ -588,9 +588,9 @@ All start `PLAYER_BOT_`:
     them), counted each time a search looks one up: points, not walks (a rest search looks up 48). When the server
     stops, one more covers the part of a minute since the last (`win=` its seconds), so a leg's lines sum exactly. Take
     totals from these lines only. Live, `took=`, `ground=` and `refused=` read near zero: 0 on every line of #188's two
-    fix legs. Every camp of spots-lm3 lies on its zone's largest island, so a step rarely leaves it (offline, 16 such
-    steps in 330,163 walks), and the common case, a ring point on another island, is dropped before any walk starts, so
-    no step sees it: `dropped=` is the gauge for that;
+    fix legs. Every camp of spots-lm3 lies on its zone's largest island, so a step rarely leaves it (offline, 7 such
+    steps in 330,163 walks: 6 floors taken at one Muspelheim camp, 1 refused), and the common case, a ring point on
+    another island, is dropped before any walk starts, so no step sees it: `dropped=` is the gauge for that;
   - `CROSSING bot=`, a sample of where, at most one per bot a minute (the first such step after one), with no counts:
     `zone=`, `kind=` (`took`, `ground`, or `step` or `link`: refused), `at=` and `to=`, the step's ends,
     `island=from->to`, `home=`, the camp's island, `goal=` and `walk=`; for `ground`, `to=` and `island=` name the step

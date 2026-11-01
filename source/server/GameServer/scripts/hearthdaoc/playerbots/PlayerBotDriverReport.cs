@@ -139,7 +139,7 @@ public static class PlayerBotDriverReport
     }
 
     /// <summary>The server's stop (PlayerBotDriver.OnServerStopped). #188: once the report ran, a last PLAYER_BOT_CROSSING
-    /// line, for the part of a window since the last line, so that a leg's lines sum to its every change of island.</summary>
+    /// line, for the part of a window since the last line, so that a leg's lines sum to its every change of island and every dropped ring point.</summary>
     public static void Stop()
     {
         Timer timer = Interlocked.Exchange(ref _timer, null);
