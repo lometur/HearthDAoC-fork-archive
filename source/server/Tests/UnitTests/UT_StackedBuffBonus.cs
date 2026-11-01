@@ -43,6 +43,7 @@ namespace DOL.UnitTests
         private readonly List<ECSGameEffect> _created = new();
         private Player _player;
         private CombatLog _log;
+        private IPropertyCalculator[] _calculators;
 
         private sealed class Server : GameServer
         {
@@ -154,6 +155,11 @@ namespace DOL.UnitTests
             _language.Dispose();
             SetTime(_time);
             GS.ServerProperties.Properties.ENDURANCE_REGEN_AMOUNT_MODIFIER = _enduranceRegenModifier;
+
+            if (_calculators != null)
+                Array.Copy(_calculators, Calculators, _calculators.Length);
+
+            _calculators = null;
             GameServer.LoadTestDouble(_previous);
         }
 
@@ -310,6 +316,137 @@ namespace DOL.UnitTests
             });
         }
 
+        // #190, the older gap on the same path: a chain of renewed children keeps the bonus its FIRST child added
+        // (Spell.Value * first.Effectiveness), but its LAST child took off Spell.Value * last.Effectiveness. A
+        // GamePlayer's spec scales a spec buff (0.75 to 1.25, SingleStatBuff.CalculateBuffDebuffEffectiveness); an
+        // NPC or a GameBot casts it at 1.0. So the owner's own Crusader's Protection and a companion's handing over
+        // left armor factor off by the difference until a relog. Here the owner (Chants 50 on a level 50 chant:
+        // x1.24, 122 AF) and a companion (x1.0, 99 AF) both chant 1037 on the owner.
+        [TestCase(true, false, TestName = "AfChantHandOver_OwnerFirst_CompanionRenewsLater")]
+        [TestCase(false, false, TestName = "AfChantHandOver_CompanionFirst_OwnerRenewsLater")]
+        [TestCase(true, true, TestName = "AfChantHandOver_SameTick_OwnerFirst")]
+        [TestCase(false, true, TestName = "AfChantHandOver_SameTick_CompanionFirst")]
+        public void AfChantHandedOverBetweenCastersOfDifferentEffectivenessLeavesNoBonusOnceBothStop(bool ownerFirst, bool sameTick)
+        {
+            const string type = "SpecArmorFactorBuff";
+            const int value = 99, frequency = 60, duration = 6, ownerAmount = 122, companionAmount = 99;
+            Spell chant = Chant(type, 1037, value, frequency, duration);
+            GiveSpec(_player, Specs.Chants, 50);
+            Companion companion = NewCompanion("Ranerishelm", "Paladin");
+            SpellHandler ho = NewHandler(type, _player, chant), hc = NewHandler(type, companion, chant);
+            double ownerEffectiveness = BuffEffectiveness(ho), companionEffectiveness = BuffEffectiveness(hc);
+            ECSPulseEffect po = StartPulse(_player, ho), pc = StartPulse(companion, hc);
+            (SpellHandler h1, ECSPulseEffect p1, GameLiving c1, SpellHandler h2, ECSPulseEffect p2, GameLiving c2) = ownerFirst
+                ? (ho, po, (GameLiving)_player, hc, pc, (GameLiving)companion)
+                : (hc, pc, companion, ho, po, _player);
+            int firstAmount = ownerFirst ? ownerAmount : companionAmount;
+            long t0 = _now;
+
+            // The first caster's pulse reaches the owner; the second caster's renews it in place, in a later tick
+            // or in the same one (before EffectListService.BeginTick).
+            ECSGameSpellEffect x = Pulse(h1, p1);
+
+            if (!sameTick)
+            {
+                _player.effectListComponent.BeginTick();
+                SetTime(t0 + frequency * 100);
+            }
+
+            ECSGameSpellEffect y = Pulse(h2, p2);
+            _player.effectListComponent.BeginTick();
+            int whileBoth = Bonus(type);
+            bool renewedInPlace = y.IsActive && Listed(y) && !Listed(x);
+
+            // The first caster stops; the second keeps the chain.
+            p1.End();
+            c1.effectListComponent.BeginTick();
+            SetTime(t0 + duration * 1000 + 1000);
+            TickEffectsInStore();
+            int afterFirstStops = Bonus(type);
+
+            // The second caster stops too: nobody chants on the owner any more.
+            p2.End();
+            c2.effectListComponent.BeginTick();
+            SetTime(_now + duration * 1000 + 1000);
+            TickEffectsInStore();
+            TickEffectsInStore();
+            int afterBoth = Bonus(type);
+            int listed = _player.effectListComponent.GetEffects().Count;
+
+            TestContext.Out.WriteLine($"[{type} 1037, {(ownerFirst ? "owner" : "companion")} first, {(sameTick ? "same tick" : "later tick")}] " +
+                $"effectiveness owner {ownerEffectiveness:0.##} / companion {companionEffectiveness:0.##}; both chanting: {whileBoth}; " +
+                $"first stopped: {afterFirstStops}; both stopped: {afterBoth}, effects listed: {listed}");
+            foreach (string line in _log.Lines)
+                TestContext.Out.WriteLine("  combatstats: " + line);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(ownerEffectiveness, Is.EqualTo(1.24).Within(1e-9), "the owner's Chants 50 scales a level 50 spec chant to x1.24");
+                Assert.That(companionEffectiveness, Is.EqualTo(1.0), "a companion casts a spec chant at x1.0");
+                Assert.That(renewedInPlace, Is.True, "the second caster's child renews the first in place");
+                Assert.That(whileBoth, Is.EqualTo(firstAmount), "during the chain the owner keeps the first caster's amount");
+                Assert.That(afterFirstStops, Is.EqualTo(firstAmount), "the chain keeps the first caster's amount while the second chants");
+                Assert.That(afterBoth, Is.EqualTo(0), "once both stop, the chain takes off exactly what it added");
+                Assert.That(listed, Is.EqualTo(0));
+                Assert.That(_log.Lines.Count(l => l.Contains("EffectiveValue: ") && !l.EndsWith("EffectiveValue: 0")), Is.EqualTo(2), "/combatstats: one add, one removal");
+                Assert.That(_log.Lines.Count(l => l.EndsWith($"EffectiveValue: {firstAmount}")), Is.EqualTo(1), "/combatstats: the bonus is added once");
+                Assert.That(_log.Lines.Count(l => l.EndsWith($"EffectiveValue: {-firstAmount}")), Is.EqualTo(1), "/combatstats: the same bonus is removed once");
+            });
+        }
+
+        // Damage adds add nothing at start: WeaponAction.HandleDamageAdds reads the live child's Effectiveness on
+        // every hit. A pulsing damage add renewed in place by another caster keeps its own caster's Effectiveness,
+        // exactly as before.
+        [TestCase(true, TestName = "DamageAddRenewal_OwnerFirst_CompanionKeepsOwnEffectiveness")]
+        [TestCase(false, TestName = "DamageAddRenewal_CompanionFirst_OwnerKeepsOwnEffectiveness")]
+        public void PulsingDamageAddRenewedByAnotherCasterKeepsItsOwnEffectiveness(bool ownerFirst)
+        {
+            const string type = "DamageAdd";
+            Spell chant = Chant(type, 90190, 0, 60, 6); // Any pulsing damage add: the renewal path is the same for every spell ID.
+            GiveSpec(_player, Specs.Chants, 50);
+            Companion companion = NewCompanion("Ranerishelm", "Paladin");
+            SpellHandler ho = NewHandler(type, _player, chant), hc = NewHandler(type, companion, chant);
+            double ownerEffectiveness = BuffEffectiveness(ho), companionEffectiveness = BuffEffectiveness(hc);
+            ECSPulseEffect po = StartPulse(_player, ho), pc = StartPulse(companion, hc);
+
+            ECSGameSpellEffect x = ownerFirst ? Pulse(ho, po) : Pulse(hc, pc);
+            _player.effectListComponent.BeginTick();
+            SetTime(_now + 6000);
+            ECSGameSpellEffect y = ownerFirst ? Pulse(hc, pc) : Pulse(ho, po);
+            _player.effectListComponent.BeginTick();
+            bool renewedInPlace = y.IsActive && Listed(y) && !Listed(x);
+
+            TestContext.Out.WriteLine($"[{type}, {(ownerFirst ? "owner" : "companion")} first] effectiveness owner {ownerEffectiveness:0.##} / companion {companionEffectiveness:0.##}; " +
+                $"first child {x.Effectiveness:0.##}, renewing child {y.Effectiveness:0.##}, renewed in place: {renewedInPlace}");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(ownerEffectiveness, Is.EqualTo(1.24).Within(1e-9));
+                Assert.That(companionEffectiveness, Is.EqualTo(1.0));
+                Assert.That(y, Is.InstanceOf<DamageAddECSEffect>());
+                Assert.That(renewedInPlace, Is.True, "the second caster's child renews the first in place");
+                Assert.That(x.Effectiveness, Is.EqualTo(ownerFirst ? ownerEffectiveness : companionEffectiveness));
+                Assert.That(y.Effectiveness, Is.EqualTo(ownerFirst ? companionEffectiveness : ownerEffectiveness), "a per-hit effect keeps its own caster's Effectiveness");
+            });
+        }
+
+        private static IPropertyCalculator[] Calculators =>
+            (IPropertyCalculator[])typeof(GameLiving).GetField("m_propertyCalc", BindingFlags.Static | BindingFlags.NonPublic).GetValue(null);
+
+        // The spell handler's own effectiveness for a new child (protected; what OnDurationEffectApply passes).
+        private static double BuffEffectiveness(SpellHandler handler) =>
+            (double)typeof(SpellHandler).GetMethod("CalculateBuffDebuffEffectiveness", Hidden).Invoke(handler, null);
+
+        // A trained specialization, as the trainer leaves it: GamePlayer.GetModifiedSpecLevel reads it, and through
+        // GetModified the server's own property calculators (loaded here as at server start, restored in TearDown).
+        private void GiveSpec(GamePlayer player, string spec, int level)
+        {
+            _calculators ??= Calculators.ToArray();
+            GameLiving.LoadCalculators();
+            Field(typeof(GamePlayer), player, "_specializationLock", new System.Threading.Lock());
+            Field(typeof(GamePlayer), player, "m_specialization", new Dictionary<string, Specialization> { [spec] = new Specialization(spec, spec, 0) { Level = level } });
+        }
+
         private static Spell Chant(string type, int id, int value, int frequency, int duration) => new(new DbSpell
         {
             SpellID = id, Name = type, Type = type, Target = "Group", Range = 1500, Value = value,
@@ -323,6 +460,7 @@ namespace DOL.UnitTests
             "BodyResistBuff" => new BodyResistBuff(caster, spell, Line(caster)),
             "PowerRegenBuff" => new PowerRegenSpellHandler(caster, spell, Line(caster)),
             "HealthRegenBuff" => new HealthRegenSpellHandler(caster, spell, Line(caster)),
+            "DamageAdd" => new DamageAddSpellHandler(caster, spell, Line(caster)),
             _ => throw new ArgumentException(type)
         };
 
@@ -353,7 +491,7 @@ namespace DOL.UnitTests
         }
 
         // What CastingService does when a chant is cast: the caster's pulse effect.
-        private ECSPulseEffect StartPulse(Companion caster, SpellHandler handler)
+        private ECSPulseEffect StartPulse(GameLiving caster, SpellHandler handler)
         {
             ECSPulseEffect pulse = handler.CreateECSPulseEffect(caster, 1.0);
             PulseEffectProperty.SetValue(handler, pulse);
@@ -374,6 +512,7 @@ namespace DOL.UnitTests
         }
 
         // One EffectService tick over the target's effects in the store, then EffectListService.BeginTick.
+        // A pulse the target casts itself is left out: the tests drive every pulse with Pulse().
         private void TickEffectsInStore(GameLiving target = null)
         {
             target ??= _player;
@@ -384,7 +523,7 @@ namespace DOL.UnitTests
             {
                 ECSGameEffect effect = all[i];
 
-                if (effect != null && effect.ServiceObjectId.IsSet && effect.Owner == target)
+                if (effect != null && effect.ServiceObjectId.IsSet && effect.Owner == target && effect is not ECSPulseEffect)
                     mine.Add(effect);
             }
 

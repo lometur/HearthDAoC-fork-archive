@@ -684,6 +684,10 @@ namespace DOL.GS
                         // in one tick left the first child active outside the list; its end took the bonus again.
                         if (existingEffect != effect)
                             existingEffect.IsSuperseded = true;
+                        // HearthDAoC: the renewed child's bonus stays on the target and this one takes it off at its stop,
+                        // so it takes over the Effectiveness that bonus was added with (#190).
+                        if (existingEffect != effect && result is AddEffectResult.RenewedActive && effect is ECSGameSpellEffect { AppliesBonusAtStart: true })
+                            effect.Effectiveness = existingEffect.Effectiveness;
                     }
 
                     _effects.TryAdd(effect.EffectType, existingEffects);
