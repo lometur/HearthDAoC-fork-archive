@@ -456,7 +456,8 @@ public sealed class PlayerBotPathMover
     public void Reset() { _path.Clear(); _stall.Reset(); _churn.Reset(); _network.Reset(); }
 
     /// <summary>#188: whether the bot, where it stands, may walk to spot without leaving its piece of navmesh for one with
-    /// no way back (PlayerBotNetwork.Accepts): the driver's ring points (rest, clear, walk-out and kite spots).</summary>
+    /// no way back (PlayerBotNetwork.Accepts): the driver's ring points (rest, clear, walk-out, kite and break-off
+    /// spots).</summary>
     public bool OnItsNetwork(Vector3 spot) =>
         _network.Accepts(Nav, _player.CurrentZone, StepStart(new(_player.X, _player.Y, _player.Z), _exact), spot, Home?.Invoke());
 

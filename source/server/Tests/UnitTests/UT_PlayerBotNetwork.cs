@@ -8,8 +8,8 @@ using NUnit.Framework;
 
 namespace DOL.GS.Tests;
 
-// #188: a flat floor in two islands, as Domnann's: the camp's floor west of Border (Camp: 57,082 polygons, the main
-// piece's size there), a floor walled in east of it (Pocket: 18 polygons, the piece under the dome); no polygon under
+// #188: a flat floor in two islands, as Domnann's: the camp's floor west of Border (Camp: 57,082 polygons, near the
+// main piece's 57,083), a floor walled in east of it (Pocket: 18 polygons, the piece under the dome); no polygon under
 // Air (a step in the air). With Wall, the grounded move stops a unit short of Border (the floor's edge), the plain move
 // goes on; with NoGround it finds no floor. With Shelf, east of Border only spots higher than Shelf are on the pocket
 // (a ledge piece over the camp's floor, as Muspelheim's), lower ones on the camp's floor. Corridors run straight to the goal and are always found (as the false corridor tail of TryBuildCorridor,

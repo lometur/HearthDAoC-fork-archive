@@ -4543,8 +4543,9 @@ public static class PlayerBotDriver
     }
 
     // A point's nearest navmesh point, or none; with no navmesh in the zone, the point. #188: none on a piece of navmesh
-    // the bot may not walk onto (PlayerBotPathMover.OnItsNetwork): in Domnann a rest spot 300 units out lay on 18
-    // polygons walled in under a dome, and the walk to it left Pbothaaem there (st-deathsE).
+    // the bot may not walk onto (PlayerBotPathMover.OnItsNetwork; rest, clear, walk-out, kite and break-off points): in
+    // Domnann a rest spot 600 units out lay on 18 polygons walled in under a dome, and the walk to it left Pbothaaem
+    // there (st-deathsE).
     private static Vector3? OnMesh(GamePlayer player, Vector3 point)
     {
         IPathfindingMgr nav = PathfindingProvider.Instance;

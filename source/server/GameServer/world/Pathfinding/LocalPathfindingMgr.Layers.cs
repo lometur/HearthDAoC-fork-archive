@@ -9,7 +9,9 @@ namespace DOL.GS
     // Pathing/Detour/Source/DetourInterface.cpp. In Jordheim small floors walled in under a ramp are linked, at tile seams,
     // only to the ramp 70-152 units above them: player bots fell through the ramp onto them and stood there for good.
     // These queries treat such a link as a change of floor; only PlayerTravelPath with layers (player bots) calls them.
-    // A lib/Detour built before them lacks the two exports: then the plain queries, with one log line.
+    // A lib/Detour built before them lacks the two exports: then the plain queries, with one log line. #188: and the
+    // player bots' island query, GetPolyIsland (GetIsland), for their island guard; a lib/Detour built before it reads
+    // no islands, so their steps go unchecked, with one log line too.
     public sealed partial class LocalPathfindingMgr
     {
         private static int _noLayers, _noIslands;

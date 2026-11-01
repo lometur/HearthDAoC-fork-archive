@@ -16,7 +16,8 @@ namespace DOL.UnitTests;
 // (tools/linux/odaoc_fetch.py --lock deploy/upstream.lock extract runtime/server/navmesh/zone008.nav
 // FOLDER/navmesh/zone008.nav, and the same for the others). One test per zone: loading a zone's navmesh twice in one
 // process crashes the test host. lib/Detour must be built from this tree (source/server/Pathing/Detour, as
-// deploy/Dockerfile builds it): the player bots' layer-aware queries (#166) are not in upstream's release library.
+// deploy/Dockerfile builds it): the player bots' layer-aware queries (#166) and island query (#188, GetPolyIsland) are
+// not in upstream's release library.
 [TestFixture, NonParallelizable, Explicit("Needs OFFLINE_DAOC_NAV_ROOT: a folder with navmesh/zone008.nav, zone012.nav, zone014.nav, zone104.nav, zone120.nav, zone126.nav, zone152.nav, zone181.nav, zone209.nav, zone250.nav and lib/Detour")]
 public class UT_PlayerBotWalkReplay
 {

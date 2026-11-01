@@ -6481,8 +6481,8 @@ public sealed class UT_PlayerBotDriver
         });
     }
 
-    // #188, the wiring of the driver's ring points (OnMesh: rest, clear, walk-out and kite spots): a spot on the pocket
-    // is dropped, one on the camp's island kept (PlayerBotPathMover.OnItsNetwork, the bot's own state).
+    // #188, the wiring of the driver's ring points (OnMesh: rest, clear, walk-out, kite and break-off spots): a spot on
+    // the pocket is dropped, one on the camp's island kept (PlayerBotPathMover.OnItsNetwork, the bot's own state).
     [Test]
     public void Ring_points_on_a_pocket_are_dropped_in_OnMesh()
     {

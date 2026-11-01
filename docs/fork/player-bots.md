@@ -263,9 +263,10 @@ Playing:
     bot-hour at their camps.
   - Some bots die again and again at one camp: a Nightshade 5 times in one zone, a Paladin 5 times at one goblin
     camp.
-  - A bot no longer steps onto a piece of navmesh with no path back to its camp (#188, see Walking). One put on such a
-    piece some other way (a respawn, a teleport) is teleported back to its camp (`CUTOFF`), never in a fight or in
-    sight of a real player. One whose camp is itself on such a piece is still put back onto it, and then keeps to it.
+  - A bot no longer steps onto a piece of navmesh with no path back to its camp's island (#188, see Walking, which names
+    the exceptions). One put on such a piece some other way (a respawn, a teleport) is teleported back to its camp
+    (`CUTOFF`), never in a fight or in sight of a real player. One whose camp is itself on such a piece is still put
+    back onto it, and then keeps to it.
   - Walks don't look ahead for monsters on the route.
 - **Resting:** about half their time: 52.7% over the two legs, against 50.7% on v0.37b-hearth.12 (time-weighted).
   Most of it is the real cost of player regeneration. Part of the rise is time no longer spent dead or walking back
@@ -411,23 +412,30 @@ registered, test it in game. The mover:
   even where Detour's 64-unit box finds it, because the floor's polygon reaches down there: in Domnann a bot respawned
   124 units under the floor, and every walk from the spot ended.
 - never steps onto a piece of navmesh with no path back (#188). The navmesh falls into islands, pieces where a path
-  leads each way between any two of its polygons (the strongly connected components of Detour's links, labelled once
-  per zone on the zone's first island query, 18-39 ms, then 2-3 microseconds a query cold, 0.5-1.1 warm). Each step is
+  leads each way between any two of its polygons (the strongly connected components of Detour's links, labelled once per
+  zone on the zone's first island query, 18-39 ms, then 2-3 microseconds a query cold, 0.5-1.1 warm). Each step is
   checked where it would stand: Detour's nearest polygon there, as every query after it starts from that polygon. A step
-  may change island only onto the camp's island, or, with no camp in the zone or a camp on a smaller island than the
-  bot's, onto a larger one. Otherwise the floor under the step on the bot's island is taken (the grounded move, or the
-  floor straight under the step within 64 units); with none, the step is refused and the walk ends blocked. On a floor
-  link the link's far corner is judged instead, once. In Domnann a corridor's last corner took a bot 188 units down a
-  link onto 18 polygons under a dome. In Muspelheim a bot stood blocked until the run ended on a ledge piece of 10,551
-  polygons above its camp's floor: in the walks rebuilt from that run, 428 of the 437 first steps off the camp's island
-  were direct steps (9 were corridor steps), and most walks that ended there were hunt walks to a dverge igniter by the
-  ledge's edge, which arrived with a last direct step about 40 units up, onto the ledge's polygon. Rest, clear-spot,
-  walk-out and kite points on an island the bot may not step onto are dropped, and the floor step after a blocked walk
-  goes onto the camp's island (rings 50 units apart, out to 300). Offline, over 330,163 walks round the camps of
-  spots-lm3: no walk ends off its camp's island (28 did, 31 by the corridor test), 926 rest spots are dropped (906 were
-  blocked walks; the other 20 arrived on such a piece), 6 more walks arrive, and 1 more is blocked. The mover's time
-  grows by 1.1-1.2 microseconds a step (the island query), 18-28% on walks that move; live, by about 0.003-0.007 ms per
-  bot-second.
+  may change island only onto the camp's island when that island is at least as large as the bot's; with no camp in the
+  zone, or a camp on a smaller island, only onto a larger one. Otherwise the floor under the step on an island the bot
+  may stand on (mostly its own) is taken (the grounded move, or the floor straight under the step within 64 units); with
+  none, the step is refused and the walk ends blocked. On a floor link the link's far corner is judged instead, once. In
+  Domnann a corridor's last corner took a bot 188 units down a link onto 18 polygons under a dome. In Muspelheim a bot
+  stood blocked until the run ended on a ledge piece of 10,551 polygons above its camp's floor: in the walks rebuilt
+  from that run, 428 of the 437 first steps off the camp's island were direct steps (9 were corridor steps), and most
+  walks that ended there were hunt walks to a dverge igniter by the ledge's edge, which arrived with a last direct step
+  about 40 units up, onto the ledge's polygon. Rest, clear-spot, walk-out, kite and break-off points on an island the
+  bot may not step onto are dropped. The floor step after a blocked walk goes onto the camp's island where a step may go
+  onto it (rings 50 units apart, out to 300); with no camp in the zone, or a camp on a smaller island than the bot's,
+  onto the bot's own island or a larger one. A bot on no polygon with no such floor in reach still steps onto the
+  nearest floor, as #166's rescue does. Offline, over 330,163 walks round the camps of spots-lm3: no walk ends off its
+  camp's island (28 did, 31 by the corridor test), 926 rest spots are dropped (906 were blocked walks; the other 20
+  arrived on such a piece), 6 walks that were blocked arrive, 1 that was blocked is now refused by the guard instead,
+  and no walk that arrived is blocked. The mover's time grows by 1.1-1.2 microseconds a step (the island query), 18-28%
+  on walks that move. Live it should add about 0.003-0.007 ms per bot-second, an estimate from that cost with colder
+  caches, not measured: a diagnosis ran on the PC during #188's live legs, so their CPU figures don't count. Those legs
+  (two a side, 390 bots, 15 minutes) showed no harm, and `BLOCKED` lines fell from 134 to 51: the 90 rest, clear and
+  kite walks blocked with no corridor on the base code were walks to points on other islands, now dropped before the
+  walk. No step of the mover changed island there (`CROSSING`, under Log lines).
 
 `UT_PlayerBotWalkReplay` replays each of these walks on the installed navmesh but the replan's: offline, a fresh
 corridor from those stalls walks on, and the corridor that stalled can't be rebuilt there. A fake-mesh test covers it.
@@ -460,18 +468,17 @@ Known gaps:
   compare is exact), or, where one can't be read, whether a corridor leads there. With none, and the bot not in combat,
   it is teleported back there (`CUTOFF`), as after 15 minutes with no progress; in combat the check waits for its next
   blocked roam. Neither teleport ever happens in a fight or in sight of a real player: while a human player (a GM too;
-  player bots don't count) is within sight range (6,000 units) of
-  where the bot stands or of the centre it would land on, the bot waits. A cut-off bot waits where it stands and
-  starts no roam (it still rests, defends itself and fights what it picks), and checks again every 5 seconds; once it
-  has moved (a step in a fight, a release after a death) and a path leads back to the centre from where it stands
-  now, it waits no more and walks. The 15-minute rule checks again at its next check, 10 seconds on, and a move or XP
-  meanwhile still counts as progress.
+  player bots don't count) is within sight range (6,000 units) of where the bot stands or of the centre it would land
+  on, the bot waits. A cut-off bot waits where it stands and starts no roam (it still rests, defends itself and fights
+  what it picks), and checks again every 5 seconds; once it has moved (a step in a fight, a release after a death) and a
+  path leads back to the centre from where it stands now, it waits no more and walks. The 15-minute rule checks again at
+  its next check, 10 seconds on, and a move or XP meanwhile still counts as progress.
   Where no check can tell (no navmesh by the bot or by the centre, or the centre in another zone), the bot stays.
   Neither a lever spot bot nor a bot on a task is teleported. Until the teleport, a monster below may still be picked,
-  and its walk blocked, once every 30 seconds. The one weak case: a camp's centre that is itself on a cut-off piece
-  pulls the bot back onto that piece each time it gets off it (not seen in 12 legs). The mover now keeps bots off such
-  pieces (#188); the check stays for bots put there otherwise. A GameBot's target and camp choice is part of the
-  parity work (#167).
+  and its walk blocked, once every 30 seconds. The one weak case: a camp's centre on a cut-off piece: a bot off it is
+  put back onto it, and since #188 it keeps to it (not seen in 16 legs). Other bots the mover keeps off such pieces
+  (#188); the check stays for bots put there otherwise. A GameBot's target and camp choice is part of the parity work
+  (#167).
 - A Tir na Nog bot stalled at one spot (21263, 35215) in most runs, though the same step replayed offline walks on
   (same navmesh, same Detour library). It is likely the polygon-edge case above: the log rounds the spot, and starts a
   few hundredths of a unit apart can differ there. In the last four runs none stalled there; one stalled once beside
@@ -568,20 +575,26 @@ All start `PLAYER_BOT_`:
   that were blocked before it sat (3 at most), and `inReach=` (1: it sat within an aggressive monster's reach, or a
   recent kill's spawn spot's, as it read them before the walk), then `end=`, its endurance when it sat;
 - `FLOOR_STEP`: a step onto the nearest floor, with where from and to and why, then `island=`, the navmesh islands
-  (`id/polygons`, `none`: no polygon) of where it stood and where it lands, and `home=`, its camp's;
+  (`id/polygons`, `none`: no polygon) of where it stood and where it lands, and `home=`, the island read at its camp's
+  centre (`none`: no camp in the zone, or no polygon in the moves' box there; the guard then reads the island of the
+  nearest floor within 64 units across and 128 up or down, so it may still know the camp's island);
 - `CROSSING` (#188): steps that would change a bot's navmesh island, and ring points dropped for theirs, on two kinds
   of line:
-  - `CROSSING win=`, every minute after `WAKE`, over all bots: `took=` (taken, onto the camp's island or a larger
-    one), `ground=` (the floor under the step, on the bot's island, taken instead) and `refused=` (refused, and the walk
-    ends blocked with `why="The step would leave the piece of navmesh ..."`), each such step counted once; then
-    `dropped=`, the ring points on the mesh dropped because they lie on an island the bot may not step onto (rest,
-    clear-spot, walk-out, kite and break-off points, before any walk starts, so no step sees them), counted each time a
-    search looks one up: points, not walks (a rest search looks up 48). When the server stops, one more covers the
-    part of a minute since the last (`win=` its seconds), so a leg's lines sum exactly. Take totals from these lines
-    only;
+  - `CROSSING win=`, every minute after `WAKE`, over all bots: `took=` (taken, onto the camp's island or a larger one),
+    `ground=` (the floor under the step, on an island the bot may stand on, mostly its own, taken instead) and
+    `refused=` (refused, and the walk ends blocked with `why="The step would leave the piece of navmesh ..."`), each
+    such step counted once; then `dropped=`, the ring points on the mesh dropped because they lie on an island the bot
+    may not step onto (rest, clear-spot, walk-out, kite and break-off points, before any walk starts, so no step sees
+    them), counted each time a search looks one up: points, not walks (a rest search looks up 48). When the server
+    stops, one more covers the part of a minute since the last (`win=` its seconds), so a leg's lines sum exactly. Take
+    totals from these lines only. Live, `took=`, `ground=` and `refused=` read near zero: 0 on every line of #188's two
+    fix legs. Every camp of spots-lm3 lies on its zone's largest island, so a step rarely leaves it (offline, 16 such
+    steps in 330,163 walks), and the common case, a ring point on another island, is dropped before any walk starts, so
+    no step sees it: `dropped=` is the gauge for that;
   - `CROSSING bot=`, a sample of where, at most one per bot a minute (the first such step after one), with no counts:
     `zone=`, `kind=` (`took`, `ground`, or `step` or `link`: refused), `at=` and `to=`, the step's ends,
-    `island=from->to`, `home=`, the camp's island, `goal=` and `walk=`;
+    `island=from->to`, `home=`, the camp's island, `goal=` and `walk=`; for `ground`, `to=` and `island=` name the step
+    refused, not the floor taken;
 - `CUTOFF`: a blocked roam found no path from where the bot stands to its camp's centre, and the bot is teleported
   there: `at=`, where it stood, `anchor=`, the centre, `distance=` between them, and `waited=`, the seconds it was held
   for a real player in sight or a fight (0: none). `DRIVER`'s `stuck=` counts these teleports with those after 15

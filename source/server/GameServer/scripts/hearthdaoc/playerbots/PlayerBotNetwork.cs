@@ -11,9 +11,10 @@ namespace DOL.GS.HearthDAoC.PlayerBots;
 /// 10,551 polygons above its camp's 42,359 until the run ended, 654 walks blocked in 3.5 minutes; in the walks rebuilt
 /// from that run, 428 of the 437 first steps off the camp's island were direct steps (the review of #188). Offline, 31
 /// of 330,163 walks round the camps of spots-lm3 (frozen starts) ended so, by corridor steps (27) and floor steps (4).
-/// A step may change island only onto the bot's camp's island (home), or, with no camp in the zone or a camp on a smaller
-/// island than the bot's (a camp anchored on a pocket must not pull the bot onto it), onto a larger one; any other change
-/// is refused, or the floor under the step on the bot's island taken instead.
+/// A step may change island only onto the bot's camp's island (home) when that island is at least as large as the
+/// bot's; with no camp in the zone, or a camp on a smaller island (a camp anchored on a pocket must not pull the bot
+/// onto it), only onto a larger one. Any other change is refused, or the floor under the step taken instead, on an
+/// island the bot may stand on (mostly its own).
 /// A step that ends in the air (no polygon in the moves' box) changes nothing yet; on a floor link the link's far corner
 /// is judged, once, from its foot (the steps up or down it hang in the air or snap to whatever floor lies near).</summary>
 public sealed class PlayerBotNetwork
