@@ -36,8 +36,32 @@ namespace DOL.GS
         public GameRelicPad CurrentRelicPad { get; private set; }
         public GameLiving CurrentCarrier { get; private set; }
         private readonly object _custodyLock = new();
-        private static IGameInventory InventoryOf(GameLiving living) => (living as IGamePlayer)?.Inventory;
-        private static IPacketLib OutputOf(GameLiving living) => (living as IGamePlayer)?.Out;
+        // HearthDAoC: players and player bots carry relics too (#189). Upstream 0.34 looked only at IGamePlayer, which
+        // only GameBot implements, so no player could ever take a relic (refused without a message), and a bot carrier
+        // threw when it showed its relic glow to a player nearby.
+        public static bool CanCarry(GameLiving living) => living is GamePlayer or IGamePlayer;
+        public static IGameInventory InventoryOf(GameLiving living) => living switch
+        {
+            GamePlayer player => player.Inventory,
+            IGamePlayer bot => bot.Inventory,
+            _ => null,
+        };
+        private static IPacketLib OutputOf(GameLiving living) => living switch
+        {
+            GamePlayer player => player.Out,
+            IGamePlayer bot => bot.Out,
+            _ => null,
+        };
+        // HearthDAoC: the pad a bot carrier sets its relic on: its own realm's pad of the relic's type (#189).
+        public static bool IsHomePad(eRealm carrierRealm, eRelicType relicType, eRealm padRealm, eRelicType padType) =>
+            carrierRealm != eRealm.None && carrierRealm == padRealm && relicType == padType;
+        // HearthDAoC: a carrier out of the world (crossing into another region) keeps the relic for up to 60 s, as 1.60
+        // gave relics up to 60 seconds to cross between zones (#189). Dead or stealthed drops it at once; quitting and
+        // linkdeath still drop it through their own events.
+        public const int ZoningGraceMs = 60_000;
+        private long _carrierAwaySince;
+        public static bool DropsForAbsence(bool alive, bool active, bool stealthed, long awayMs) =>
+            !alive || stealthed || !active && awayMs >= ZoningGraceMs;
         public bool IsMounted => CurrentRelicPad != null;
         public static int ReturnRelicInterval => Properties.RELIC_RETURN_TIME * 1000;
 
@@ -67,7 +91,7 @@ namespace DOL.GS
 
         private bool PickupCore(GameLiving player)
         {
-            if (player is not IGamePlayer || InventoryOf(player) == null || CurrentCarrier != null ||
+            if (!CanCarry(player) || InventoryOf(player) == null || CurrentCarrier != null || // HearthDAoC: CanCarry (#189)
                 ObjectState != eObjectState.Active || !player.IsWithinRadius(this, WorldMgr.INTERACT_DISTANCE))
                 return false;
 
@@ -350,6 +374,7 @@ namespace DOL.GS
                     _currentCarrierTimer = null;
                 }
                 
+                _carrierAwaySince = 0; // HearthDAoC: zoning grace (#189)
                 _currentCarrierTimer = new(player, CarrierTimerTick);
                 _currentCarrierTimer.Start(RELIC_EFFECT_INTERVAL);
             }
@@ -367,11 +392,21 @@ namespace DOL.GS
         {
             if (CurrentCarrier == null)
                 return 0;
-            if (!CurrentCarrier.IsAlive || CurrentCarrier.ObjectState != eObjectState.Active || CurrentCarrier.IsStealthed)
+            // HearthDAoC: a carrier crossing into another region (a portal keep's portal, a zone line) is out of the
+            // world until its client has loaded; upstream dropped the relic at the first tick then (#189).
+            bool active = CurrentCarrier.ObjectState == eObjectState.Active;
+            if (active)
+                _carrierAwaySince = 0;
+            else if (_carrierAwaySince == 0)
+                _carrierAwaySince = GameLoop.GameLoopTime;
+            if (DropsForAbsence(CurrentCarrier.IsAlive, active, CurrentCarrier.IsStealthed,
+                    active ? 0 : GameLoop.GameLoopTime - _carrierAwaySince))
             {
                 DropFromCarrier(CurrentCarrier);
                 return 0;
             }
+            if (!active)
+                return RELIC_EFFECT_INTERVAL; // HearthDAoC: still crossing; check again in 4 s (#189)
             Update();
 
             // Disabled for OF.
@@ -397,12 +432,32 @@ namespace DOL.GS
                 return 0;
             }
 
+            // HearthDAoC: a bot carrier (a companion) sets the relic on its home pad when it gets there (#189). Only a
+            // player walking onto the pad, or an autonomous gamebot's return, did that, so a relic a companion took
+            // stayed with it.
+            GameLiving carrier = CurrentCarrier;
+            if (carrier != null && carrier is not GamePlayer && TryMountAtHomePad(carrier))
+                return 0;
+
             ushort effectID = (ushort) Util.Random(5811, 5815);
 
             foreach (GamePlayer player in CurrentCarrier.GetPlayersInRadius(WorldMgr.VISIBILITY_DISTANCE))
-                OutputOf(player).SendSpellEffectAnimation(CurrentCarrier, CurrentCarrier, effectID, 0, false, 0x01);
+                player.Out.SendSpellEffectAnimation(CurrentCarrier, CurrentCarrier, effectID, 0, false, 0x01); // HearthDAoC: each viewer's own Out (#189)
 
             return RELIC_EFFECT_INTERVAL;
+        }
+
+        // HearthDAoC (#189): within 250, the radius GameRelicPad.PadArea and MountCore use.
+        private bool TryMountAtHomePad(GameLiving carrier)
+        {
+            foreach (GameRelicPad pad in RelicMgr.GetPadsSnapshot())
+            {
+                if (IsHomePad(carrier.Realm, RelicType, pad.Realm, pad.PadType) && carrier.IsWithinRadius(pad, 250) &&
+                    RelicPadTakesOver(pad, false))
+                    return true;
+            }
+
+            return false;
         }
 
         protected virtual void SetHandlers(GameLiving player, bool activate)
