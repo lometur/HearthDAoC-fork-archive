@@ -565,11 +565,15 @@ All start `PLAYER_BOT_`:
   recent kill's spawn spot's, as it read them before the walk), then `end=`, its endurance when it sat;
 - `FLOOR_STEP`: a step onto the nearest floor, with where from and to and why, then `island=`, the navmesh islands
   (`id/polygons`, `none`: no polygon) of where it stood and where it lands, and `home=`, its camp's;
-- `CROSSING` (#188): a step that would change the bot's navmesh island, at most one line per bot a minute: `kind=`
-  (`took`: taken, onto its camp's island or a larger one; `ground`: the floor under it, on the bot's island, taken
-  instead; `step` or `link`: refused, and the walk ends blocked with `why="The step would leave the piece of navmesh
-  ..."`), `at=` and `to=`, the step's ends, `island=from->to`, `home=`, the camp's island, `goal=`, `walk=`, and
-  `took=`, `ground=`, `refused=`, the counts since the bot's last such line, this one's included;
+- `CROSSING` (#188): steps that would change a bot's navmesh island, on two kinds of line:
+  - `CROSSING win=`, every minute after `WAKE`, over all bots: `took=` (taken, onto the camp's island or a larger
+    one), `ground=` (the floor under the step, on the bot's island, taken instead) and `refused=` (refused, and the walk
+    ends blocked with `why="The step would leave the piece of navmesh ..."`), each such step counted once. When the
+    server stops, one more covers the part of a minute since the last (`win=` its seconds), so a leg's lines sum
+    exactly. Take totals from these lines only;
+  - `CROSSING bot=`, a sample of where, at most one per bot a minute (the first such step after one), with no counts:
+    `zone=`, `kind=` (`took`, `ground`, or `step` or `link`: refused), `at=` and `to=`, the step's ends,
+    `island=from->to`, `home=`, the camp's island, `goal=` and `walk=`;
 - `CUTOFF`: a blocked roam found no path from where the bot stands to its camp's centre, and the bot is teleported
   there: `at=`, where it stood, `anchor=`, the centre, `distance=` between them, and `waited=`, the seconds it was held
   for a real player in sight or a fight (0: none). `DRIVER`'s `stuck=` counts these teleports with those after 15

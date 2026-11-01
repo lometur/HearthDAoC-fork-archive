@@ -43,9 +43,8 @@ public sealed class PlayerBotPathMover
     private int _walkSteps;                            // WalkReport: steps and distance since its last call
     private double _walked;
     private readonly PlayerBotNetwork _network = new(); // #188: the piece of navmesh the bot walks
-    private long _nextCrossingLine;                    // PLAYER_BOT_CROSSING: one line per bot per CrossingLineMilliseconds,
-    private int _took, _grounded, _refused;            //   with the changes of island since the last one
-    public const int CrossingLineMilliseconds = 60_000;
+    private long _nextCrossingLine;                    // PLAYER_BOT_CROSSING bot=: one sample line per bot per
+    public const int CrossingLineMilliseconds = 60_000; //   CrossingLineMilliseconds (the totals: the report's win= line)
 
     /// <summary>#188: the bot's camp, where it lies in the bot's zone (the driver's anchor); null: none. The mover keeps
     /// the bot on its island (PlayerBotNetwork).</summary>
@@ -461,20 +460,19 @@ public sealed class PlayerBotPathMover
     public bool OnItsNetwork(Vector3 spot) =>
         _network.Accepts(Nav, _player.CurrentZone, StepStart(new(_player.X, _player.Y, _player.Z), _exact), spot, Home?.Invoke());
 
-    // #188: one PLAYER_BOT_CROSSING line per bot per CrossingLineMilliseconds: the last change of island (kind=took: taken,
-    // as onto the camp's island or a larger one; ground: the floor under the step taken instead; step or link: refused),
-    // with the counts of each since the last line.
+    // #188: each change of island a step would make (kind=took: taken, as onto the camp's island or a larger one; ground:
+    // the floor under the step taken instead; step or link: refused) counts in the report's PLAYER_BOT_CROSSING win= line,
+    // the totals. The bot's own PLAYER_BOT_CROSSING bot= line is a sample of where, the first change after
+    // CrossingLineMilliseconds: its counts, held until its next line, undercounted a leg (the review of #188).
     private void ReportCrossing(string crossing, Vector3 goal, bool refused, long now)
     {
-        if (refused) _refused++;
-        else if (crossing.StartsWith("kind=ground", StringComparison.Ordinal)) _grounded++;
-        else _took++;
+        if (refused) PlayerBotDriverReport.CrossingRefused();
+        else if (crossing.StartsWith("kind=ground", StringComparison.Ordinal)) PlayerBotDriverReport.CrossingGround();
+        else PlayerBotDriverReport.CrossingTook();
         if (now < _nextCrossingLine || !Log.IsInfoEnabled) return;
         _nextCrossingLine = now + CrossingLineMilliseconds;
         Log.Info($"PLAYER_BOT_CROSSING bot={_player.Name} zone={_player.CurrentZone?.ID} {crossing} " +
-                 $"goal=({goal.X:0.0},{goal.Y:0.0},{goal.Z:0.0}) walk={Walk?.Invoke() ?? "-"} " +
-                 $"took={_took} ground={_grounded} refused={_refused}");
-        (_took, _grounded, _refused) = (0, 0, 0);
+                 $"goal=({goal.X:0.0},{goal.Y:0.0},{goal.Z:0.0}) walk={Walk?.Invoke() ?? "-"}");
     }
 
     // When a walk ends blocked: a step onto the nearest floor that leads on (FloorStep), at most one search per

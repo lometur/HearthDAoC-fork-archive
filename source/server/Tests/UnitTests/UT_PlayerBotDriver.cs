@@ -5852,6 +5852,27 @@ public sealed class UT_PlayerBotDriver
         Assert.That(empty, Does.Contain("nearPlayerBots=- nearGamebots=-"));
     }
 
+    // #188 review R3: PLAYER_BOT_CROSSING win=, the window's changes of island over all bots, on its own line (the DRIVER
+    // format above is pinned).
+    [Test]
+    public void CrossingFormat() => Assert.That(PlayerBotDriverReport.FormatCrossing(new PlayerBotCrossingWindow(60, 3, 1, 2)),
+        Is.EqualTo("PLAYER_BOT_CROSSING win=60 took=3 ground=1 refused=2"));
+
+    // #188 review R3: Stop (the server's stop) takes the last part of a window, so that a leg's CROSSING lines sum to its
+    // every change of island; with no report started (no player bots ran: any other server's stop), nothing.
+    [Test]
+    public void The_last_part_of_a_window_of_crossings_is_taken_at_Stop()
+    {
+        PlayerBotDriverReport.TakeCrossings(0);                         // the counters are process-wide
+        PlayerBotDriverReport.CrossingRefused();
+        PlayerBotDriverReport.Stop();
+        Assert.That(PlayerBotDriverReport.TakeCrossings(60), Is.EqualTo(new PlayerBotCrossingWindow(60, 0, 0, 1)), "never started");
+        PlayerBotDriverReport.CrossingTook();
+        PlayerBotDriverReport.EnsureStarted();
+        PlayerBotDriverReport.Stop();
+        Assert.That(PlayerBotDriverReport.TakeCrossings(60), Is.EqualTo(new PlayerBotCrossingWindow(60, 0, 0, 0)), "taken at Stop");
+    }
+
     [Test]
     public void TallyFormat() => Assert.That(
         PlayerBotDriverReport.FormatTally(20, "Pbotaaaab", 40, 12, 1, 123456, 120456, 0, 1, PlayerBotActivity.Fighting),
@@ -6380,6 +6401,40 @@ public sealed class UT_PlayerBotDriver
             Assert.That(bot.X, Is.InRange(840_500, 840_560), "on the camp's island");
             Assert.That(Walk(new PlayerBotPathMover(bot)), Is.EqualTo(PlayerBotStepResult.Arrived), "no camp known");
             Assert.That(bot.X, Is.LessThan(840_500), "on the larger island");
+        });
+    }
+
+    // #188 review R3: every change of island counts in the report's CROSSING line (PlayerBotDriverReport.TakeCrossings),
+    // though a bot's own line comes at most once a minute. Within seconds, one bot: a step onto a ledge over the camp's
+    // floor (Shelf) for which the floor under it is taken (ground); put on the pocket, its step back onto the camp's
+    // island (took); put back by the border, its step onto the pocket refused, twice. All four are counted.
+    [Test]
+    public void Every_change_of_island_counts_in_the_reports_crossing_line_in_StepToward()
+    {
+        var mesh = new PlayerBotIslandMesh(border: 840_500) { Shelf = 8_342 };
+        Vector3 start = new(840_480, 702_100, 8_343), camp = new(838_400, 702_100, 8_343), pocket = new(840_700, 702_100, 8_343);
+        InTheField(mesh, start, (region, zone, bot) =>
+        {
+            PlayerBotDriverReport.TakeCrossings(0);                     // the counters are process-wide
+            var state = new PlayerBotState(bot) { Anchor = camp };
+            long now = 10_000;
+            PlayerBotStepResult Walk(Vector3 from, Vector3 goal, int ticks)
+            {
+                (bot.X, bot.Y, bot.Z) = ((int)from.X, (int)from.Y, (int)from.Z);
+                PlayerBotStepResult step = PlayerBotStepResult.Moving;
+                for (int i = 0; i < ticks && step == PlayerBotStepResult.Moving; i++, now += PlayerBotDriver.TickMilliseconds)
+                    step = state.Mover.StepToward(goal, 20, now);
+                return step;
+            }
+            Assert.That((Walk(start, pocket, 1), bot.Z), Is.EqualTo((PlayerBotStepResult.Moving, 8_311)), "the floor under the ledge");
+            mesh.Shelf = float.NegativeInfinity;
+            Assert.That((Walk(new(840_560, 702_100, 8_343), camp, 2), bot.X < 840_500), Is.EqualTo((PlayerBotStepResult.Moving, true)),
+                "back onto the camp's island");
+            Assert.That(Walk(new(840_400, 702_100, 8_343), pocket, 20), Is.EqualTo(PlayerBotStepResult.Blocked), "refused");
+            Assert.That(state.Mover.StepToward(pocket, 20, now), Is.EqualTo(PlayerBotStepResult.Blocked), "refused again");
+            Assert.That(now, Is.LessThan(10_000 + PlayerBotPathMover.CrossingLineMilliseconds), "within the bot's line's minute");
+            Assert.That(PlayerBotDriverReport.TakeCrossings(60), Is.EqualTo(new PlayerBotCrossingWindow(60, 1, 1, 2)));
+            Assert.That(PlayerBotDriverReport.TakeCrossings(60), Is.EqualTo(new PlayerBotCrossingWindow(60, 0, 0, 0)), "from zero again");
         });
     }
 
