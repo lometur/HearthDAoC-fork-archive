@@ -295,35 +295,40 @@ What they don't do yet is under [Known shortcomings](#known-shortcomings).
 Against the GameBots (#167), and between them and a live world. Each line goes when its fix lands.
 
 Playing:
-- **Deaths:** over two legs of the same code (`st-deathsE3` and `st-deathsE3b`: 15 minutes each, 390 level-matched
-  bots on the `spots-lm3` test spots) they die 0.7 times per bot-hour, against about 1 for the PvE GameBots: melee
-  0.7, casters 0.9, healers 0.8, pet classes 0.6, archers 0.8. v0.37b-hearth.12 on the same spots (`st-deathsD2` and
-  `st-deathsD2b`) died 1.4 times, and v0.37b-hearth.11 (`st-hearth11` and `st-hearth11b`) 1.8. One leg is too short
-  to judge a small change: two legs of the same code have died 149 and 118 times. The older spot list put 30 bots
-  where they couldn't hunt (by a battleground keep, in a dungeon); `spots-lm3` moves the 26 whose spot was the cause,
-  so legs before `st-hearth11` (2.1 on `st-deathsC`, 9.5 on v0.37b-hearth.9's `st-layers5`) don't compare one for
-  one. Still open:
-  - A bot caught on the run, or with no point to run to, turns and fights. Those turns die at the same monsters on
-    every leg (an arbordon, a fomorian geddon, a forest observer). A style class ends a shaken run with about 10
-    endurance left.
-  - Casters: 17 deaths over the two legs came with the target at 25% or less, 13 of them after the Quickcast had gone
-    on a control. A caster seldom controls the add. The log can't tell a control the server refused from one the
-    monster resisted.
-  - Some classes kill less than on v0.37b-hearth.12 and die less: Minstrels 11% fewer kills, Scouts 10%, Armsmen 9%.
-    Necromancers (20%) and Reavers (11%) kill less without dying less.
+- **Deaths:** over two legs of the same code (`st-deathsF3` and `st-deathsF3b`: 15 minutes each, 390 level-matched
+  bots on the `spots-lm3` test spots) they die 0.5 times per bot-hour, against about 1 for the PvE GameBots: melee
+  0.5, casters 0.5, healers 0.7, pet classes 0.3, archers 0.9. v0.37b-hearth.16 on the same spots died 0.77 times
+  over seven legs, v0.37b-hearth.12 1.4 and v0.37b-hearth.11 1.8. One leg is too short to judge a small change: seven
+  legs of the same code have died between 63 and 85 times. The older spot list put 30 bots where they couldn't hunt
+  (by a battleground keep, in a dungeon); `spots-lm3` moves the 26 whose spot was the cause, so legs before
+  `st-hearth11` (2.1 on `st-deathsC`, 9.5 on v0.37b-hearth.9's `st-layers5`) don't compare one for one. Still open:
+  - A bot caught on the run, or with no point to run to, turns and fights. One no longer runs from a chaser that
+    would catch it (as fast as it, counting the chaser's reach): it fights from the start, and those fights are now
+    most of the deaths after a refused run.
+  - Casters: a caster that can't finish its target breaks off and rests, and then passes over a yellow-or-harder name
+    it couldn't finish for 15 minutes. One that keeps killing that name now and then (a Sorcerer at hill scrags)
+    keeps pulling it and running from it. A caster seldom controls the add. The log splits a failed control into
+    resisted and immune, but no immune has shown up yet, so whether the server reports one is unchecked.
+  - Some classes kill less than on v0.37b-hearth.16: Clerics 29% fewer kills (4 bots), Scouts 16% (dying half as
+    often), Friars 8% (5 deaths over the two legs, against 2), and Rangers and Skalds about 7%.
   - Where a level has no blue camp, the seven classes that take no yellow alone still pull yellows at the fallback
-    camp: 28 pulls over the two legs, 15 of them by one Bard. Wardens converted from Regrowth die 4.7 times per
-    bot-hour at their camps.
-  - Some bots die again and again at one camp: a Nightshade 5 times in one zone, a Paladin 5 times at one goblin
-    camp.
+    camp. Some bots die again and again at one camp.
+  - A melee or archer bot turns down a pull whose crowd is over its con's limit, and moves camp 30 s later. While it
+    waits it stands where its search turned the camp down, and a monster there sometimes reaches it: its first fight
+    after a login or a rest is a defence about twice as often as on v0.37b-hearth.16. A step out of reach while it
+    waits was tried and taken back out (it didn't help). The walk to the new camp can take it into the reach of a
+    crowd it would turn down.
+  - The camp planner treats a lone named monster as a camp. Several bots then walk a long way to one that the first to
+    arrive kills, and where no other camp fits they go back and forth between two of them.
   - A bot no longer steps onto a piece of navmesh with no path back to its camp's island (#188, see Walking, which names
     the exceptions). One put on such a piece some other way (a respawn, a teleport) is teleported back to its camp
     (`CUTOFF`), never in a fight or in sight of a real player. One whose camp is itself on such a piece is still put
     back onto it, and then keeps to it.
   - Walks don't look ahead for monsters on the route.
-- **Resting:** about half their time: 52.7% over the two legs, against 50.7% on v0.37b-hearth.12 (time-weighted).
-  Most of it is the real cost of player regeneration. Part of the rise is time no longer spent dead or walking back
-  (93 s per bot-hour, from 195). The rest is the 80% endurance stop, which starts sits that health and power wouldn't.
+- **Resting:** about half their time: 52.1% over the two legs, against 52.6% on v0.37b-hearth.16 (time-weighted).
+  Most of it is the real cost of player regeneration. A kill now skips its rest when the bot has what its next pull
+  needs. The 80% endurance stop still starts sits that health and power wouldn't, a quarter fewer than on
+  v0.37b-hearth.16.
 - **Not done at all:** they don't group, buff others, take part in RvR or battlegrounds, stealth, use realm abilities
   or ride horses (#152, #167).
 - **Ranged and songs:** they can't shoot or play. Archers fight in melee, and Bards and Minstrels have no songs: theirs
@@ -346,8 +351,9 @@ Going live, without the test-world side effects:
 - **Gear:**
   - A bot has only what it starts with, or the level-matched kit, and no jewellery.
   - Whether it loots and wears upgrades isn't checked.
-- **Camps:** the test spots were picked to avoid orange and named monsters. A live bot's choice of camp has no such
-  filter.
+- **Camps:** the test spots were picked to avoid orange and named monsters. A camp a bot plans itself passes over a
+  spot that an aggressive monster over the camp's cap can reach (#167), but a lone named monster still counts as a
+  camp, and a bot's start spot has no filter at all.
 
 ## The lever and the quest rule
 
