@@ -189,10 +189,11 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   its endurance holds the sprint long enough that the fastest one, which last swung as the sprint's lead passed its
   reach, is still out of its reach 25 s later, when a monster stops chasing: with no Long Wind or regeneration, 31
   endurance against a monster of speed 192-193, 36 against 194-195, 41 against 196-197, 51 against 200, 61 against
-  205, 91 against 215, and none against 218 or faster. It doesn't run from one it can't outrun: it fights on. Never
-  from a monster with a snare, stun, mez or damage spell of 1,000 units' range or more. It stops its fight, sprints, and runs
-  1,500-2,500 units straight away from them to a spot clear of other aggressive monsters that it can walk to, or with
-  none, to the spot 1,500 units straight away from them if it can walk there; on again from there while one still chases
+  205, 91 against 215, and none against 218 or faster. It doesn't run from one it can't outrun: it fights on. Never from
+  a monster with a snare, stun, mez or damage spell of 1,000 units' range or more. It stops its fight, sprints, and runs
+  1,500-2,500 units straight away from them to a spot clear of other aggressive monsters that it can walk to (one whose
+  straight way passes none of their reach first, if one within 60 degrees of straight away does), or with none, to the
+  spot 1,500 units straight away from them if it can walk there; on again from there while one still chases
   it. Once the nearest chaser that isn't held is 400 units behind (more for one faster than its run: 25 s of what it
   gains), its sprint goes off, and on again when one comes within 300 units with its endurance over 10%. A spot it was
   blocked on it never takes again in that run. A mezzed, stunned or rooted monster still counts as after it. From 3 s
@@ -586,12 +587,14 @@ All start `PLAYER_BOT_`:
   `cap` (45 s), `-` otherwise; `holds=`, its one-second tries that found no point while it held; `speed=` and
   `chaserSpeed=`, its run speed (191 unencumbered, less when encumbered) and the fastest chaser's when it began (-1
   before they are read); then `sprint=`, the seconds its sprint lasts from its endurance at the start (999: no end; -1
-  before it is read). A break-off that would fire but doesn't logs once a fight as `outcome=refused` with `sec=0` and
-  the bot's `hp=`, `end=`, `attackers=` and `rate=` then, and `why=`: `control` (an add's control comes first), `speed`
-  (a chaser as fast as its sprint), `sprint` (its sprint too short for the fastest), `ranged` (a chaser that harms from
-  range) or `point` (nowhere to run), with `sprintOff=-1`, `endLeft=` its endurance then and its `speed=`,
-  `chaserSpeed=` and `sprint=` (-1 for `control`); it is no break-off, so leave it out of break-off counts. The fight it dropped
-  (`FIGHT result=dropped breakOff=1`) counts the monsters on the bot then in its `adds=` (never fewer than
+  before it is read), `joined=`, the monsters that joined its chasers on the run (one that came back counts again), and
+  `wayAdds=`, 1 when its spot's straight way passed another aggressive monster's reach (there was no clear one), 0 when
+  clear, -1 with no spot. A break-off that would fire but doesn't logs once a fight as `outcome=refused` with `sec=0`
+  and the bot's `hp=`, `end=`, `attackers=` and `rate=` then, and `why=`: `control` (an add's control comes first),
+  `speed` (a chaser as fast as its sprint), `sprint` (its sprint too short for the fastest), `ranged` (a chaser that
+  harms from range) or `point` (nowhere to run), with `sprintOff=-1`, `endLeft=` its endurance then and its `speed=`,
+  `chaserSpeed=` and `sprint=` (-1 for `control`); it is no break-off, so leave it out of break-off counts. The fight it
+  dropped (`FIGHT result=dropped breakOff=1`) counts the monsters on the bot then in its `adds=` (never fewer than
   `attackers=`), and with 2 or more and no add seen before, its `addAt=` and `addHp=` are the break-off's;
 - `TURRET`: an Animist's new turret by its target (`step=replant`) or a monster it left because it couldn't plant
   one (`step=skip`), with the target's `con=`, its distance from the turret it had (`toTurret=`) and that turret's

@@ -1953,6 +1953,42 @@ public sealed class UT_PlayerBotDriver
             Is.EqualTo(new Vector3(-1_061, -1_061, 0)), "two chasers: straight away from their middle");
     }
 
+    // #167 F-W: the way to a break-off point passes another monster's reach (aggro range + 200) when its nearest point
+    // to it lies ahead of here within that reach; one behind the bot the run leaves, one past the point is the point's.
+    [Test]
+    public void A_break_offs_way_passes_a_monster_when_its_nearest_point_ahead_is_in_reach()
+    {
+        Vector3 here = Vector3.Zero, point = new(-1_500, 0, 0);
+        List<(string, Vector3, int)> Add(float x, float y, int aggro) => [("add", new(x, y, 0), aggro)];
+        Assert.That(PlayerBotDriver.WayInAddReach(here, point, Add(-750, 300, 200)), Is.True, "300 off the way, reach 400");
+        Assert.That(PlayerBotDriver.WayInAddReach(here, point, Add(-750, 500, 200)), Is.False, "500 off it");
+        Assert.That(PlayerBotDriver.WayInAddReach(here, point, Add(800, 0, 500)), Is.False, "behind the bot");
+        Assert.That(PlayerBotDriver.WayInAddReach(here, point, Add(-2_000, 0, 200)), Is.False, "500 past the point");
+        Assert.That(PlayerBotDriver.WayInAddReach(here, point, Add(-1_800, 0, 200)), Is.True, "300 past it: the end's");
+        Assert.That(PlayerBotDriver.WayInAddReach(here, here, Add(0, 0, 200)), Is.False, "no way");
+    }
+
+    // #167 F-W: of the points ahead and out of reach, the farthest from the chasers whose way is clear, within 60 degrees
+    // of straight away (ClearWayCos); none clear, the farthest as before (C2).
+    [Test]
+    public void A_break_off_runs_to_a_point_whose_way_is_clear_first()
+    {
+        Vector3 here = Vector3.Zero;
+        Vector3[] chasers = [new(300, 0, 0)];
+        Vector3[] candidates = [new(-1_500, 0, 0), new(-1_061, 1_061, 0)];
+        var onTheWay = new List<(string, Vector3, int)> { ("add", new(-750, -300, 0), 200) };
+        Assert.That(PlayerBotDriver.BreakOffPoint(here, chasers, candidates, new List<(string, Vector3, int)>()),
+            Is.EqualTo(new Vector3(-1_500, 0, 0)), "the farthest");
+        Assert.That(PlayerBotDriver.BreakOffPoint(here, chasers, candidates, onTheWay),
+            Is.EqualTo(new Vector3(-1_061, 1_061, 0)), "the farthest's way passes the add 300 off");
+        var both = new List<(string, Vector3, int)> { ("a", new(-750, -300, 0), 200), ("b", new(-530, 600, 0), 200) };
+        Assert.That(PlayerBotDriver.BreakOffPoint(here, chasers, candidates, both), Is.EqualTo(new Vector3(-1_500, 0, 0)),
+            "no clear way: the farthest as before");
+        Vector3[] square = [new(-1_500, 0, 0), new(-388, 1_449, 0)];                    // 75 degrees off straight away
+        Assert.That(PlayerBotDriver.BreakOffPoint(here, chasers, square, onTheWay), Is.EqualTo(new Vector3(-1_500, 0, 0)),
+            "a clear way 75 degrees off is no better than the farthest: the chaser in reach gains on it");
+    }
+
     // The review of 9aacd69: a point on another mesh island (across water, up a cliff) blocked the step at once, and the
     // next think chose the same point from the same spot, again and again for 30 s, while the monsters hit the bot. Now
     // the points it was blocked on (and those within 100 units of one) are left out, and a point is taken only with a walk
@@ -2416,27 +2452,30 @@ public sealed class UT_PlayerBotDriver
     // nopoint, blocked or cap; - for none), holds=, its one-second tries that found no point while it held, and speed= and
     // chaserSpeed=, its run speed and the fastest chaser's when it began (an encumbered bot runs under 191; -1 before
     // they are read); then (#167 F-O) sprint=, the seconds its sprint lasts from its endurance at the start
-    // (SprintSeconds; 999: no end; -1: not read), a refusal's too.
+    // (SprintSeconds; 999: no end; -1: not read), a refusal's too; then (#167 F-W) joined=, the monsters that joined its
+    // chasers on the run, and wayAdds=, 1 when its point's straight way passed another monster's reach (no clear one), 0
+    // when clear, -1 with no point.
     [Test]
     public void A_break_off_line_gives_its_start_and_outcome()
     {
         Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 72, 2, 26, "shook", 6.26, "adds", 9, 41),
             Is.EqualTo("PLAYER_BOT_BREAKOFF bot=Pbotaaaaz level=34 hp=38 end=72 attackers=2 sec=26 outcome=shook rate=6.3 " +
-                "why=adds sprintOff=9 endLeft=41 turn=- holds=0 speed=-1 chaserSpeed=-1 sprint=-1"));
+                "why=adds sprintOff=9 endLeft=41 turn=- holds=0 speed=-1 chaserSpeed=-1 sprint=-1 joined=0 wayAdds=-1"));
         Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 72, 1, 0, "refused", 3.0, "speed", -1, 72,
                 speed: 191, chaserSpeed: 191),
             Is.EqualTo("PLAYER_BOT_BREAKOFF bot=Pbotaaaaz level=34 hp=38 end=72 attackers=1 sec=0 outcome=refused rate=3.0 " +
-                "why=speed sprintOff=-1 endLeft=72 turn=- holds=0 speed=191 chaserSpeed=191 sprint=-1"));
+                "why=speed sprintOff=-1 endLeft=72 turn=- holds=0 speed=191 chaserSpeed=191 sprint=-1 joined=0 wayAdds=-1"));
         Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 72, 2, 12, "fought", 6.26, "adds", 4, 30,
                 "nopoint", 3, 170, 248),
             Is.EqualTo("PLAYER_BOT_BREAKOFF bot=Pbotaaaaz level=34 hp=38 end=72 attackers=2 sec=12 outcome=fought rate=6.3 " +
-                "why=adds sprintOff=4 endLeft=30 turn=nopoint holds=3 speed=170 chaserSpeed=248 sprint=-1"));
+                "why=adds sprintOff=4 endLeft=30 turn=nopoint holds=3 speed=170 chaserSpeed=248 sprint=-1 joined=0 " +
+                "wayAdds=-1"));
         Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 51, 1, 0, "refused", 3.0, "sprint", -1, 51,
-                speed: 191, chaserSpeed: 200, sprint: 9),
+                speed: 191, chaserSpeed: 200, sprint: 9, joined: 1, wayAdds: 1),
             Is.EqualTo("PLAYER_BOT_BREAKOFF bot=Pbotaaaaz level=34 hp=38 end=51 attackers=1 sec=0 outcome=refused rate=3.0 " +
-                "why=sprint sprintOff=-1 endLeft=51 turn=- holds=0 speed=191 chaserSpeed=200 sprint=9"));
+                "why=sprint sprintOff=-1 endLeft=51 turn=- holds=0 speed=191 chaserSpeed=200 sprint=9 joined=1 wayAdds=1"));
         Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 72, 1, 4, "shook", 3.0, "race",
-                sprint: int.MaxValue), Does.EndWith(" sprint=999"), "a sprint that never ends");
+                sprint: int.MaxValue), Does.Contain(" sprint=999 "), "a sprint that never ends");
     }
 
     // The dropped FIGHT line's adds= (#167 D2): BreaksOffNow returns before Engage folds the attackers in, so the monsters

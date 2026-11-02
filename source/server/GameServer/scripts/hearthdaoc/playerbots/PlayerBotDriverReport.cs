@@ -314,14 +314,17 @@ public static class PlayerBotDriverReport
     /// holds=, its one-second tries that found no point while it held (PlayerBotDriver.NoPointTurns), and speed= and
     /// chaserSpeed=, its run speed and the fastest chaser's when it began (191 unencumbered, less when encumbered; a
     /// refusal's too; -1 before they are read). Then (#167 F-O) sprint=, the seconds its sprint lasts from its endurance
-    /// at the start (PlayerBotDriver.SprintSeconds; 999: no end; -1: not read), a refusal's too.</summary>
+    /// at the start (PlayerBotDriver.SprintSeconds; 999: no end; -1: not read), a refusal's too. Then (#167 F-W) joined=,
+    /// the monsters that joined its chasers on the run (one that came back counts again), and wayAdds=, 1 when its
+    /// point's straight way passed another monster's reach (no clear one), 0 when clear, -1 with no point
+    /// (PlayerBotDriver.WayInAddReach).</summary>
     public static string FormatBreakOff(string bot, int level, int hp, int end, int attackers, long seconds, string outcome,
         double rate, string why, long sprintOff = -1, int endLeft = -1, string turn = "-", int holds = 0, int speed = -1,
-        int chaserSpeed = -1, int sprint = -1) =>
+        int chaserSpeed = -1, int sprint = -1, int joined = 0, int wayAdds = -1) =>
         string.Create(CultureInfo.InvariantCulture,
             $"PLAYER_BOT_BREAKOFF bot={bot} level={level} hp={hp} end={end} attackers={attackers} sec={seconds} outcome={outcome} " +
             $"rate={FormatRate(rate)} why={why} sprintOff={sprintOff} endLeft={endLeft} turn={turn} holds={holds} " +
-            $"speed={speed} chaserSpeed={chaserSpeed} sprint={Math.Min(sprint, 999)}");
+            $"speed={speed} chaserSpeed={chaserSpeed} sprint={Math.Min(sprint, 999)} joined={joined} wayAdds={wayAdds}");
 
     /// <summary>PLAYER_BOT_RELEASE (#167 D7), each release the driver asks for (PlayerBotDriver.ReleaseDue): its try in
     /// this death (a release that didn't revive the bot goes again 10 s on) and the milliseconds since the death (the

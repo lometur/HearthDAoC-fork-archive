@@ -275,6 +275,8 @@ public sealed class PlayerBotState
                                                                  //   when it began (speed=, chaserSpeed=; -1: not read)
     public int BreakOffSprintSeconds = -1;                       // #167 F-O: BREAKOFF sprint=, its sprint's seconds at the
                                                                  //   start (SprintSeconds; -1: not read)
+    public int BreakOffJoined, BreakOffWayAdds = -1;             // #167 F-W: BREAKOFF joined= (KeepChasers' adds after the
+                                                                 //   start) and wayAdds= (WayInAddReach of its point)
     public bool BreakOffRunsOn;                                  // #167 E T2b: running on to its point past Done (RunsOnToClear)
     public bool BackPending, BackOwed, BackMoved;                // #167 C1: PLAYER_BOT_BACK, from a release to its first
     public long BackStepOutMs, BackHoldMs, BackWalkMs;           //   fight: the line due, the replan owed and a camp planned
@@ -444,6 +446,9 @@ public static class PlayerBotDriver
                                                              //   analysts' add fights leave out those begun within 3 s of one)
     public const int BreakOffBlockedRadius = 100;            //   a point this near one blocked is left out (inf.), and the
     public const int BreakOffCorridorTries = 3;              //   corridor tests per point chosen (inf.)
+    public const float ClearWayCos = 0.5f;                   // #167 F-W: a clear way is preferred within 60 degrees of
+                                                             //   straight away only (inf.): a point square to a chaser in
+                                                             //   reach gives it the sprint's first second
     public const string Shook = "shook", Fought = "fought";  //   PLAYER_BOT_BREAKOFF outcome= (and Died)
     public const string Refused = "refused";                 // #167 D2: and one that would fire but doesn't (BreakOffRefusal)
     public const string ByAdds = "adds", AtKill = "atkill", FollowUp = "followup", AvoidedName = "avoided",
@@ -2569,24 +2574,30 @@ public static class PlayerBotDriver
 
     /// <summary>Where a break-off runs to (#167 C2): of the candidates, those ahead of straight away from the chasers (a
     /// dot product with here less their middle above 0: never square to them; any way with none to run from), out of every
-    /// other monster's reach (InAddReach), the farthest from its nearest chaser; none, null.</summary>
+    /// other monster's reach (InAddReach), the farthest from its nearest chaser; none, null. #167 F-W: of those, the
+    /// farthest within 60 degrees of straight away (ClearWayCos) whose straight way there passes no such reach
+    /// (WayInAddReach) first; none clear, the farthest as before.</summary>
     public static Vector3? BreakOffPoint<T>(Vector3 here, IReadOnlyList<Vector3> chasers, IEnumerable<Vector3> candidates,
         IReadOnlyList<(T Npc, Vector3 At, int AggroRange)> adds) where T : class
     {
         Vector2 away = Vector2.Zero;
         for (int i = 0; i < chasers.Count; i++) away += new Vector2(here.X - chasers[i].X, here.Y - chasers[i].Y);
         bool anyWay = away.LengthSquared() < 1;
-        Vector3? best = null;
-        float bestGap = -1;
+        Vector3? best = null, clear = null;
+        float bestGap = -1, clearGap = -1;
         foreach (Vector3 point in candidates)
         {
-            if (!anyWay && Vector2.Dot(new Vector2(point.X - here.X, point.Y - here.Y), away) <= 0 || InAddReach(point, adds))
-                continue;
+            Vector2 to = new(point.X - here.X, point.Y - here.Y);
+            float ahead = Vector2.Dot(to, away);
+            if (!anyWay && ahead <= 0 || InAddReach(point, adds)) continue;
             float gap = float.MaxValue;
             for (int i = 0; i < chasers.Count; i++) gap = Math.Min(gap, Vector3.DistanceSquared(point, chasers[i]));
             if (gap > bestGap) (best, bestGap) = (point, gap);
+            if (gap > clearGap && (anyWay || ahead >= ClearWayCos * to.Length() * away.Length()) &&   // #167 F-W
+                    !WayInAddReach(here, point, adds))
+                (clear, clearGap) = (point, gap);
         }
-        return best;
+        return clear ?? best;
     }
 
     /// <summary>The next break-off point (#167 C2, the review of 9aacd69): BreakOffPoint's, leaving out the points the
@@ -2798,6 +2809,7 @@ public static class PlayerBotDriver
         (state.BreakOffHoldSince, state.BreakOffHoldWhy) = (0, null);
         (state.BreakOffSpeed, state.BreakOffChaserSpeed, state.BreakOffRunsOn) = (-1, -1, false);   // #167 E T2b: the run-on
         state.BreakOffSprintSeconds = -1;                                               // #167 F-O
+        (state.BreakOffJoined, state.BreakOffWayAdds) = (0, -1);                        // #167 F-W
         state.BreakOffChasers.Clear();
         state.BreakOffBlocked.Clear();
         if (outcome == Died) return;
@@ -2843,6 +2855,26 @@ public static class PlayerBotDriver
         {
             float reach = adds[i].AggroRange + AddMargin;
             if (Vector3.DistanceSquared(adds[i].At, at) <= reach * reach) return true;
+        }
+        return false;
+    }
+
+    /// <summary>Whether the way from here to a break-off point passes another monster's reach (#167 F-W; InAddReach's
+    /// reach, its aggro range + AddMargin, in 3D): the way's nearest point to it (SegmentDistanceSquared) within that
+    /// reach, the monster ahead of here (one behind the bot, the run leaves). The straight line only: the walk's own
+    /// corridor can bend off it, which only a route look-ahead reads (F12). Batch F's base: 21 deaths within 60 s of
+    /// one-attacker runs whose next fight, or killer, was another name.</summary>
+    public static bool WayInAddReach<T>(Vector3 here, Vector3 point, IReadOnlyList<(T Npc, Vector3 At, int AggroRange)> adds)
+        where T : class
+    {
+        Vector3 way = point - here;
+        if (way.LengthSquared() < 1) return false;
+        for (int i = 0; i < adds.Count; i++)
+        {
+            float reach = adds[i].AggroRange + AddMargin;
+            if (Vector3.Dot(adds[i].At - here, way) > 0 &&                              // behind it: the run leaves it
+                    SegmentDistanceSquared(adds[i].At, here, point) <= reach * reach)
+                return true;
         }
         return false;
     }
@@ -4860,7 +4892,8 @@ public static class PlayerBotDriver
     private static bool BreaksOffNow(PlayerBotState state, GamePlayer player, long now)
     {
         if (state.BreakOffSince == 0 && !StartsBreakOff(state, player, now)) return false;
-        KeepChasers(state, player);
+        int joined = KeepChasers(state, player);
+        if (now > state.BreakOffSince) state.BreakOffJoined += joined;                  // #167 F-W: not the start's own
         (int nearest, GameNPC free, int freeDistance) = NearestChasers(state, player);
         long since = now - state.BreakOffSince;
         PlayerBotBreakOff next = BreakOffStep(state.BreakOffArrived, state.BreakOffChasers.Count, since, nearest,
@@ -5188,17 +5221,22 @@ public static class PlayerBotDriver
     // The monsters still after a break-off's bot: one goes when it dies or turns from the bot (its aggro state's exit
     // clears its target 25 s after its last swing, StandardMobState.cs:89, :121) or is past ChaseRadius (KeepsChaser);
     // #167 D2: a mezzed or stunned one stays, as it comes back (C4 dropped it, OnBot). One that hits the bot or targets
-    // it on the way joins them.
-    private static void KeepChasers(PlayerBotState state, GamePlayer player)
+    // it on the way joins them. #167 F-W: the count of those that joined (BREAKOFF joined=).
+    private static int KeepChasers(PlayerBotState state, GamePlayer player)
     {
         List<GameNPC> chasers = state.BreakOffChasers;
         for (int i = chasers.Count - 1; i >= 0; i--)
             if (!KeepsChaser(IsAttacking(player, chasers[i]), player.GetDistanceTo(chasers[i])))
                 chasers.RemoveAt(i);
+        int joined = 0;
         foreach (GameLiving living in player.attackComponent.AttackerTracker.Attackers)
             if (living is GameNPC npc && KeepsChaser(IsAttacking(player, npc), player.GetDistanceTo(npc)) &&
                 !chasers.Contains(npc))
+            {
                 chasers.Add(npc);
+                joined++;
+            }
+        return joined;                                                                  // #167 F-W: BREAKOFF joined=
     }
 
     // #167 D2: the nearest chaser's distance (BreakOffStep's, a held one too) and the nearest one not held (Hold), with its
@@ -5308,6 +5346,7 @@ public static class PlayerBotDriver
         if (goal == null && relaxed)                                                    // #167 E T1
             goal = NearBreakOffGoal(here, chasers, Ring(RelaxedBreakOffRings), adds, state.BreakOffBlocked, Walkable,
                 OnMeshHere);
+        if (goal is Vector3 chosen) state.BreakOffWayAdds = WayInAddReach(here, chosen, adds) ? 1 : 0;   // #167 F-W
         adds.Clear();                                                                   // no monster held past the scan
         return goal;
     }
@@ -5315,7 +5354,7 @@ public static class PlayerBotDriver
     // A break-off's end: its line (PLAYER_BOT_BREAKOFF, #167 D1 why=), the state's end (FinishBreakOff: the relocation
     // owed, OwesReplan's rule as after a death; fought, no new break-off for BreakOffMilliseconds), and unless the bot died
     // (the death's own recovery then, HandleDeath) the sprint off. #167 E T1: turn=, holds=, speed= and chaserSpeed=;
-    // #167 F-O: sprint=.
+    // #167 F-O: sprint=; #167 F-W: joined= and wayAdds=.
     private static void EndBreakOff(PlayerBotState state, GamePlayer player, long now, string outcome)
     {
         if (Log.IsInfoEnabled)
@@ -5323,7 +5362,8 @@ public static class PlayerBotDriver
                 state.BreakOffEndurance, state.BreakOffAttackers, (now - state.BreakOffSince) / 1000, outcome, state.BreakOffRate,
                 state.BreakOffWhy, state.BreakOffSprintOffAt < 0 ? -1 : state.BreakOffSprintOffAt / 1000,   // #167 E-S
                 player.EndurancePercent, state.BreakOffTurn ?? "-", state.BreakOffHolds, state.BreakOffSpeed,   // #167 E T1
-                state.BreakOffChaserSpeed, state.BreakOffSprintSeconds));                // #167 F-O
+                state.BreakOffChaserSpeed, state.BreakOffSprintSeconds,                 // #167 F-O
+                joined: state.BreakOffJoined, wayAdds: state.BreakOffWayAdds));         // #167 F-W
         FinishBreakOff(state, outcome, OwesReplan(state.Task != null, CanRelocate(state, player)), now);
         if (outcome == Died) return;
         player.Sprint(false);
