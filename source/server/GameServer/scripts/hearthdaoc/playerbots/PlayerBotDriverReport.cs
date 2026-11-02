@@ -353,12 +353,12 @@ public static class PlayerBotDriverReport
     /// nuke was cast.</summary>
     public static string FormatBreakOff(string bot, int level, int hp, int end, int attackers, long seconds, string outcome,
         double rate, string why, long sprintOff = -1, int endLeft = -1, string turn = "-", int holds = 0, int speed = -1,
-        int chaserSpeed = -1, int sprint = -1, int joined = 0, int wayAdds = -1, int qcLeft = -1) =>
+        int chaserSpeed = -1, int sprint = -1, int joined = 0, int wayAdds = -1, int qcLeft = -1, int cfSkip = -1) =>
         string.Create(CultureInfo.InvariantCulture,
             $"PLAYER_BOT_BREAKOFF bot={bot} level={level} hp={hp} end={end} attackers={attackers} sec={seconds} outcome={outcome} " +
             $"rate={FormatRate(rate)} why={why} sprintOff={sprintOff} endLeft={endLeft} turn={turn} holds={holds} " +
             $"speed={speed} chaserSpeed={chaserSpeed} sprint={Math.Min(sprint, 999)} joined={joined} wayAdds={wayAdds} " +
-            $"qcLeft={qcLeft}");
+            $"qcLeft={qcLeft} cfSkip={cfSkip}");
 
     /// <summary>PLAYER_BOT_RELEASE (#167 D7), each release the driver asks for (PlayerBotDriver.ReleaseDue): its try in
     /// this death (a release that didn't revive the bot goes again 10 s on) and the milliseconds since the death (the

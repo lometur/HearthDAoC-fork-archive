@@ -1901,6 +1901,194 @@ public sealed class UT_PlayerBotDriver
         Assert.That((state.ReplanOwed, state.RecoverBeforePull), Is.EqualTo(((string)null, true)));
     }
 
+    // #167 F-CS: a can't-finish run marks its target's name, from its con on, for 15 minutes when it is yellow or harder
+    // and the bot hasn't killed the name at yellow or harder in that time. st-deathsF/Fb: the yellow runs on names never
+    // killed were re-pulled 12 times, 10 run from again; Pbotaaacr's yellow giant boar, killed 48 s before, 7 kills in 7;
+    // green and blue runs' re-pulls 9 kills in 9.
+    [TestCase(ConColor.YELLOW, -1L, true)]                      // never killed: the elder, the cyclops
+    [TestCase(ConColor.ORANGE, -1L, true)]
+    [TestCase(ConColor.BLUE, -1L, false)]                       // bad luck: its re-pulls were kills
+    [TestCase(ConColor.GREEN, -1L, false)]
+    [TestCase(ConColor.YELLOW, 1_000_000L - 48_000, false)]     // killed 48 s before (Pbotaaacr's boar)
+    [TestCase(ConColor.YELLOW, 1_000_000L - 900_000, true)]     //   15 minutes before: forgotten
+    [TestCase(ConColor.YELLOW, 1_000_000L - 899_999, false)]
+    public void A_cant_finish_run_skips_a_hard_name_it_has_not_killed(ConColor con, long killedAt, bool marks)
+    {
+        var skips = new Dictionary<string, (long Until, ConColor Con)>(StringComparer.OrdinalIgnoreCase);
+        var hardKills = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        if (killedAt >= 0) hardKills["Empyrean Elder"] = killedAt;
+        Assert.That(PlayerBotDriver.MarkCantFinish(skips, hardKills, "empyrean elder", con, 1_000_000), Is.EqualTo(marks));
+        Assert.That(skips.ContainsKey("empyrean elder"), Is.EqualTo(marks));
+        if (marks) Assert.That(skips["empyrean elder"], Is.EqualTo((1_900_000L, con)));
+    }
+
+    // #167 F-CS: no name, no mark; a live mark keeps its lower con and runs from the last run; the marks past their time
+    // go as a new one comes.
+    [Test]
+    public void A_cant_finish_mark_keeps_its_lowest_con_and_runs_out()
+    {
+        var skips = new Dictionary<string, (long Until, ConColor Con)>(StringComparer.OrdinalIgnoreCase);
+        var none = new Dictionary<string, long>();
+        Assert.That(PlayerBotDriver.MarkCantFinish(skips, none, null, ConColor.RED, 0), Is.False, "no name");
+        Assert.That(PlayerBotDriver.MarkCantFinish(skips, none, "", ConColor.RED, 0), Is.False, "no name");
+        PlayerBotDriver.MarkCantFinish(skips, none, "cyclops", ConColor.YELLOW, 1_000);
+        PlayerBotDriver.MarkCantFinish(skips, none, "Cyclops", ConColor.ORANGE, 2_000);
+        Assert.That(skips["cyclops"], Is.EqualTo((902_000L, ConColor.YELLOW)));
+        PlayerBotDriver.MarkCantFinish(skips, none, "beach anglator", ConColor.YELLOW, 902_000);
+        Assert.That(skips.Keys, Is.EquivalentTo(new[] { "beach anglator" }), "the cyclops mark past its time goes");
+    }
+
+    // #167 F-CS: the skip holds for the name, by any case, at its con or harder, while its time lasts; under it the pick
+    // has the name again (the bot outlevelled it: yellow to blue). No marks at all: none.
+    [TestCase("empyrean elder", ConColor.YELLOW, 10_000L, true)]
+    [TestCase("Empyrean Elder", ConColor.ORANGE, 10_000L, true)]
+    [TestCase("empyrean elder", ConColor.BLUE, 10_000L, false)]
+    [TestCase("empyrean elder", ConColor.YELLOW, 910_000L, false)]
+    [TestCase("empyrean guardian", ConColor.YELLOW, 10_000L, false)]
+    [TestCase(null, ConColor.YELLOW, 10_000L, false)]
+    public void A_cant_finish_skip_holds_at_its_con_or_harder_for_its_time(string name, ConColor con, long now,
+        bool skipped)
+    {
+        var skips = new Dictionary<string, (long Until, ConColor Con)>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["empyrean elder"] = (910_000, ConColor.YELLOW),
+        };
+        Assert.That(PlayerBotDriver.CantFinishSkipped(skips, name, con, now), Is.EqualTo(skipped));
+        Assert.That(PlayerBotDriver.CantFinishSkipped(null, name, con, now), Is.False);
+    }
+
+    // #167 F-CS: only a yellow-or-harder kill is remembered, and it ends a mark on its name from that con or under; a
+    // kill under the mark's con leaves it. Past 15 minutes the kills go once HardKillNames are kept.
+    [Test]
+    public void Only_a_yellow_or_harder_kill_is_remembered_and_it_ends_the_skip()
+    {
+        var kills = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        var skips = new Dictionary<string, (long Until, ConColor Con)>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["giant boar"] = (900_000, ConColor.YELLOW), ["cyclops"] = (900_000, ConColor.ORANGE),
+        };
+        PlayerBotDriver.RememberHardKill(kills, skips, "bwca", ConColor.GREEN, 1_000);
+        PlayerBotDriver.RememberHardKill(kills, skips, "giant boar", ConColor.BLUE, 1_000);
+        Assert.That((kills.Count, skips.ContainsKey("giant boar")), Is.EqualTo((0, true)), "under yellow: nothing");
+        PlayerBotDriver.RememberHardKill(kills, skips, "giant boar", ConColor.YELLOW, 2_000);
+        PlayerBotDriver.RememberHardKill(kills, skips, "cyclops", ConColor.YELLOW, 2_000);
+        PlayerBotDriver.RememberHardKill(kills, skips, null, ConColor.RED, 2_000);
+        Assert.That(kills.Keys, Is.EquivalentTo(new[] { "giant boar", "cyclops" }));
+        Assert.That((skips.ContainsKey("giant boar"), skips.ContainsKey("cyclops")), Is.EqualTo((false, true)),
+            "a yellow kill ends a yellow mark, not an orange one");
+        kills.Remove("cyclops");
+        for (int i = 0; i < PlayerBotDriver.HardKillNames; i++)
+            PlayerBotDriver.RememberHardKill(kills, skips, $"m{i}", ConColor.YELLOW, 3_000);
+        PlayerBotDriver.RememberHardKill(kills, skips, "hill scrag", ConColor.YELLOW, 902_000);
+        Assert.That((kills.ContainsKey("giant boar"), kills.ContainsKey("m0"), kills.ContainsKey("hill scrag")),
+            Is.EqualTo((false, true, true)), "past its time it goes once the memory is full");
+    }
+
+    // #167 F-CS, the wiring: SettleTarget remembers a yellow kill's name (KillAsWarrior's kill is yellow) and ends a
+    // can't-finish mark on it: the bot can finish that name.
+    [Test]
+    public void A_yellow_kill_ends_a_cant_finish_skip_on_its_name_in_SettleTarget()
+    {
+        PlayerBotState state = KillAsWarrior(70, before: s =>
+        {
+            typeof(GameObject).GetField("m_name", Hidden)!.SetValue(s.Target, "cyclops");
+            s.CantFinishSkips["cyclops"] = (long.MaxValue, ConColor.YELLOW);
+        });
+        Assert.That((state.HardKills.ContainsKey("cyclops"), state.CantFinishSkips.ContainsKey("cyclops")),
+            Is.EqualTo((true, false)));
+    }
+
+    // #167 F-CS: a can't-finish break-off's start (BrokeOffFrom) still bars no camp and avoids no name (F-C), and marks
+    // its yellow target, a name the bot hasn't killed, for the pick and the plan: BREAKOFF cfSkip=1; a blue one, 0; a
+    // spent caster's, -1 and no mark. The run's end clears cfSkip= and owes the rest as before.
+    [TestCase(PlayerBotDriver.CantFinish, ConColor.YELLOW, 1)]
+    [TestCase(PlayerBotDriver.CantFinish, ConColor.BLUE, 0)]
+    [TestCase(PlayerBotDriver.Spent, ConColor.YELLOW, -1)]
+    public void A_cant_finish_break_off_skips_its_hard_target_for_the_pick(string why, ConColor con, int cfSkip)
+    {
+        var state = new PlayerBotState(Player(null)) { AnchorRegion = 51, Anchor = new(3_000, 0, 0), BreakOffWhy = why,
+            BreakOffSince = 2_000, BreakOffCfSkip = 7 };                                // a stale value: the start sets it
+        state.RoamDestination = state.Anchor;
+        PlayerBotDriver.BrokeOffFrom(state, 51, new Vector3(1_000, 0, 0), ["empyrean elder"], 2_000, "empyrean elder",
+            con);
+        Assert.That((PlayerBotDriver.FailedCamps(state.FailedCamps, 51, 2_001).Length,
+            PlayerBotDriver.IsAvoided(state.AvoidUntil, "empyrean elder", 2_001)), Is.EqualTo((0, false)), "as F-C");
+        Assert.That((state.BreakOffCfSkip,
+                PlayerBotDriver.CantFinishSkipped(state.CantFinishSkips, "empyrean elder", con, 2_001)),
+            Is.EqualTo((cfSkip, cfSkip == 1)));
+        PlayerBotDriver.FinishBreakOff(state, PlayerBotDriver.Shook, owesReplan: true, 7_000);
+        Assert.That((state.BreakOffCfSkip, state.RecoverBeforePull), Is.EqualTo((-1, true)));
+    }
+
+    // #167 F-CS: any other break-off avoids the names itself, as before, marks no skip and logs cfSkip=-1.
+    [Test]
+    public void Another_break_off_marks_no_cant_finish_skip()
+    {
+        var state = new PlayerBotState(Player(null)) { AnchorRegion = 51, Anchor = new(3_000, 0, 0),
+            BreakOffWhy = PlayerBotDriver.CasterLosing, BreakOffSince = 2_000, BreakOffCfSkip = 7 };
+        PlayerBotDriver.BrokeOffFrom(state, 51, new Vector3(1_000, 0, 0), ["empyrean elder"], 2_000, "empyrean elder",
+            ConColor.YELLOW);
+        Assert.That((state.BreakOffCfSkip, state.CantFinishSkips.Count,
+            PlayerBotDriver.IsAvoided(state.AvoidUntil, "empyrean elder", 2_001)), Is.EqualTo((-1, 0, true)));
+    }
+
+    // #167 F-CS, the wiring: FindWithin passes over a name a can't-finish run skips at its con or harder and takes the
+    // next (a blue one, a con step's 220 behind on TargetScore); a mark from a harder con, or one past its time, leaves
+    // the yellow one to the pick. The near ring: no crowd limits.
+    [TestCase(ConColor.YELLOW, 910_000L, false)]
+    [TestCase(ConColor.ORANGE, 910_000L, true)]
+    [TestCase(ConColor.YELLOW, 10_000L, true)]
+    public void A_name_a_cant_finish_run_skips_is_passed_over_in_FindWithin(ConColor from, long until, bool elderTaken)
+    {
+        MethodInfo find = typeof(PlayerBotDriver).GetMethod("FindWithin", BindingFlags.Static | BindingFlags.NonPublic)!;
+        InTheField(new SplitFloorMesh(), new(840_884, 702_153, 8_784), (region, zone, bot) =>
+        {
+            GameNPC elder = MonsterAt(region, zone, new(840_700, 702_100, 8_700), LevelFor(bot, ConColor.YELLOW));
+            GameNPC guardian = MonsterAt(region, zone, new(840_600, 702_100, 8_700), LevelFor(bot, ConColor.BLUE));
+            typeof(GameObject).GetField("m_name", Hidden)!.SetValue(elder, "empyrean elder");
+            typeof(GameObject).GetField("m_name", Hidden)!.SetValue(guardian, "empyrean guardian");
+            var state = new PlayerBotState(bot) { NukesLevel = 39, Nukes = [] };
+            state.CantFinishSkips["Empyrean Elder"] = (until, from);                    // any case, as AvoidUntil
+            object[] args = [state, bot, PlayerBotDriver.ImmediateSearchRadius, 10_000L, PlayerBotPickReading.None];
+            Assert.That(find.Invoke(null, args), Is.SameAs(elderTaken ? elder : guardian));
+        });
+    }
+
+    // #167 F-CS: the plan counts a name a can't-finish run skips, at its con or harder, as avoided (PlanRelocation: no
+    // spot, a camp of them fits no cap), so a capped bot whose camp holds no other name leaves for one it can finish
+    // (st-deathsFb's Pbotaaaam among the cyclops); from a harder con, or past its time, as before.
+    [TestCase(ConColor.YELLOW, 900_000L, true)]
+    [TestCase(ConColor.ORANGE, 900_000L, false)]
+    [TestCase(ConColor.YELLOW, 0L, false)]
+    public void The_plan_avoids_a_name_a_cant_finish_run_skips(ConColor from, long until, bool avoided)
+    {
+        var calculators = (DOL.GS.PropertyCalc.IPropertyCalculator[])typeof(GameLiving)
+            .GetField("m_propertyCalc", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        DOL.GS.PropertyCalc.IPropertyCalculator previous = calculators[(int)eProperty.LivingEffectiveLevel];
+        calculators[(int)eProperty.LivingEffectiveLevel] = new LevelOnly();
+        try
+        {
+            var (region, zone) = World();
+            ImmunePlayer player = LiveImmunePlayer();
+            typeof(GameObject).GetField("m_level", Hidden)!.SetValue(player, (byte)20);
+            player.CurrentRegion = region;
+            GameNPC camp = CampMonster(region, 1_000, 1_000, 20);
+            typeof(GameObject).GetField("m_name", Hidden)!.SetValue(camp, "cyclops");
+            var skips = new Dictionary<string, (long Until, ConColor Con)>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Cyclops"] = (until, from),
+            };
+            var monsters = PlayerBotDriver.PlanMonsters(player, [camp], zone, ConColor.YELLOW,
+                new Dictionary<string, long>(), 0, cantFinish: skips);
+            Assert.That(monsters.Select(m => (m.Npc, m.Con, m.Avoided)),
+                Is.EqualTo(new[] { (camp, ConColor.YELLOW, avoided) }));
+        }
+        finally
+        {
+            calculators[(int)eProperty.LivingEffectiveLevel] = previous;
+        }
+    }
+
     // It outruns a chaser no faster than its run (191, GamePlayer.cs:8250; enable_pve_speed is off in the world DB), or
     // one under its sprint (1.3 x 191 = 248, MaxSpeedCalculator.cs:25) while its next swing comes 25 s or more after its
     // last (StandardMobState.cs:89, :121). The review of 9aacd69: either way the sprint's lead must clear the chaser's
@@ -2753,24 +2941,27 @@ public sealed class UT_PlayerBotDriver
     {
         Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 72, 2, 26, "shook", 6.26, "adds", 9, 41),
             Is.EqualTo("PLAYER_BOT_BREAKOFF bot=Pbotaaaaz level=34 hp=38 end=72 attackers=2 sec=26 outcome=shook rate=6.3 " +
-                "why=adds sprintOff=9 endLeft=41 turn=- holds=0 speed=-1 chaserSpeed=-1 sprint=-1 joined=0 wayAdds=-1 qcLeft=-1"));
+                "why=adds sprintOff=9 endLeft=41 turn=- holds=0 speed=-1 chaserSpeed=-1 sprint=-1 joined=0 wayAdds=-1 qcLeft=-1 cfSkip=-1"));
         Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 72, 1, 0, "refused", 3.0, "speed", -1, 72,
                 speed: 191, chaserSpeed: 191),
             Is.EqualTo("PLAYER_BOT_BREAKOFF bot=Pbotaaaaz level=34 hp=38 end=72 attackers=1 sec=0 outcome=refused rate=3.0 " +
                 "why=speed sprintOff=-1 endLeft=72 turn=- holds=0 speed=191 chaserSpeed=191 sprint=-1 joined=0 wayAdds=-1 " +
-                "qcLeft=-1"));
+                "qcLeft=-1 cfSkip=-1"));
         Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 72, 2, 12, "fought", 6.26, "adds", 4, 30,
                 "nopoint", 3, 170, 248),
             Is.EqualTo("PLAYER_BOT_BREAKOFF bot=Pbotaaaaz level=34 hp=38 end=72 attackers=2 sec=12 outcome=fought rate=6.3 " +
                 "why=adds sprintOff=4 endLeft=30 turn=nopoint holds=3 speed=170 chaserSpeed=248 sprint=-1 joined=0 " +
-                "wayAdds=-1 qcLeft=-1"));
+                "wayAdds=-1 qcLeft=-1 cfSkip=-1"));
         Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 51, 1, 0, "refused", 3.0, "sprint", -1, 51,
                 speed: 191, chaserSpeed: 200, sprint: 9, joined: 1, wayAdds: 1, qcLeft: 22),
             Is.EqualTo("PLAYER_BOT_BREAKOFF bot=Pbotaaaaz level=34 hp=38 end=51 attackers=1 sec=0 outcome=refused rate=3.0 " +
                 "why=sprint sprintOff=-1 endLeft=51 turn=- holds=0 speed=191 chaserSpeed=200 sprint=9 joined=1 wayAdds=1 " +
-                "qcLeft=22"));
+                "qcLeft=22 cfSkip=-1"));
         Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 72, 1, 4, "shook", 3.0, "race",
                 sprint: int.MaxValue), Does.Contain(" sprint=999 "), "a sprint that never ends");
+        Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 72, 1, 25, "shook", 15.0, "cantfinish",
+                qcLeft: 11, cfSkip: 1),
+            Does.EndWith(" qcLeft=11 cfSkip=1"));
     }
 
     // The dropped FIGHT line's adds= (#167 D2): BreaksOffNow returns before Engage folds the attackers in, so the monsters

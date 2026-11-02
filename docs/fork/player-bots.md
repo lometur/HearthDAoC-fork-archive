@@ -216,7 +216,11 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   finish (so such a caster with 2 or more monsters on it breaks off from those then too). A caster whose held target
   is above 25% with no damage spell it can pay for breaks off at any health, then rests: it takes no camp or names to
   avoid from that one and doesn't move camp. A caster that couldn't finish does the same: it takes no camp or names to
-  avoid and rests, then pulls again. Only from monsters it can outrun, and only with a sprint whose lead takes it out
+  avoid and rests, then pulls again; but when the monster it couldn't finish was yellow or harder and it hasn't killed
+  one of that name at yellow or harder in the last 15 minutes, its picks and its camp plans pass over that name at that
+  con or harder for 15 minutes, as a name it avoids (it still fights one back, and a kill of one at that con ends it):
+  an empyrean elder that heals itself, or a yellow it loses to half the time, would otherwise come first again after
+  every rest. Only from monsters it can outrun, and only with a sprint whose lead takes it out
   of the fastest one's 200-unit reach: none faster than its run (191), or none as fast as its sprint (248) when its
   endurance holds the sprint long enough that the fastest one, which last swung as the sprint's lead passed its reach,
   is still out of its reach 25 s later, when a monster stops chasing: with no Long Wind or regeneration, 31 endurance
@@ -647,7 +651,9 @@ All start `PLAYER_BOT_`:
   before it is read), `joined=`, the monsters that joined its chasers on the run (one that came back counts again),
   and `wayAdds=`, 1 when its spot's straight way passed another aggressive monster's reach (there was no clear one), 0
   when clear, -1 with no spot, and `qcLeft=`, a caster's Quickcast disable left at the start in whole seconds, rounded
-  up as `DEATH`'s (-1: no caster, or no Quickcast). A break-off that would fire but doesn't logs once a fight as
+  up as `DEATH`'s (-1: no caster, or no Quickcast); then `cfSkip=`, 1 when a `cantfinish` run made its target's name
+  its picks' and plans' skip (yellow or harder, not killed at that con or harder in 15 minutes), 0 when it didn't, -1
+  for every other why and on a refusal. A break-off that would fire but doesn't logs once a fight as
   `outcome=refused` with `sec=0` and the bot's `hp=`, `end=`, `attackers=` and `rate=` then, and `why=`: `control` (an
   add's control comes first), `speed` (a chaser as fast as its sprint), `sprint` (its sprint too short for the
   fastest), `ranged` (a chaser that harms from range) or `point` (nowhere to run), with `sprintOff=-1`, `endLeft=` its

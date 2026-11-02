@@ -147,6 +147,11 @@ public sealed class PlayerBotState
     public readonly List<(ushort Region, Vector3 At, long Until)> FailedCamps = new();   // camps, 15 minutes (PlanRelocation)
     public readonly Dictionary<string, long> AvoidUntil = new(StringComparer.OrdinalIgnoreCase);   // DEATHS.md A3: the
     public bool KillerAvoided;                                   //   names of deaths' killers and targets (IsAvoided)
+    public readonly Dictionary<string, (long Until, ConColor Con)> CantFinishSkips =
+        new(StringComparer.OrdinalIgnoreCase);                   // #167 F-CS: the names a can't-finish run skips, from a
+                                                                 //   con on, 15 minutes (MarkCantFinish), and each name's
+    public readonly Dictionary<string, long> HardKills = new(StringComparer.OrdinalIgnoreCase);   //   last kill at
+                                                                 //   CantFinishSkipCon or harder (RememberHardKill)
     public readonly List<(ConColor Con, long Until)> KillerCons = new();   // #167 D6: and the killers' cons, 5 minutes
     public long AliveSince;                                      // PLAYER_BOT_DEATH: the last release or login
     public int Attackers;                                        //   and the attackers on the last think alive
@@ -291,6 +296,9 @@ public sealed class PlayerBotState
                                                                  //   start) and wayAdds= (WayInAddReach of its point)
     public int BreakOffQcLeft = -1;                              // #167 F-C: BREAKOFF qcLeft=, a caster's Quickcast disable
                                                                  //   at the start (s, rounded up; -1: none)
+    public int BreakOffCfSkip = -1;                              // #167 F-CS: BREAKOFF cfSkip=, 1: a can't-finish run
+                                                                 //   marked its target (MarkCantFinish), 0: it didn't;
+                                                                 //   -1: another why
     public bool BreakOffRunsOn;                                  // #167 E T2b: running on to its point past Done (RunsOnToClear)
     public bool BackPending, BackOwed, BackMoved;                // #167 C1: PLAYER_BOT_BACK, from a release to its first
     public long BackStepOutMs, BackHoldMs, BackWalkMs;           //   fight: the line due, the replan owed and a camp planned
@@ -496,6 +504,10 @@ public static class PlayerBotDriver
     public const string CantFinish = "cantfinish";           // #167 F-C: and a caster that can't finish (CasterCantFinish)
     public const int CantFinishCastMs = 3_000;               //   with no spell chosen, a nuke's cast (inf.: the kits'
                                                              //   caster nukes cast in 2.5-3.0 s)
+    public const ConColor CantFinishSkipCon = ConColor.YELLOW;   // #167 F-CS: a can't-finish run on a target of this con
+                                                             //   or harder skips its name (MarkCantFinish)
+    public const int HardKillNames = 32;                     //   the hard kills kept before old ones are walked out
+                                                             //   (RememberHardKill)
     public const byte CasterBreakOffTargetPercent = 25;      // #167 D1: a caster losing to one, or spent, with its target
                                                              //   above this breaks off (inf.)
     public const int BreakOffMaxMilliseconds = 45_000;       // #167 D2: still chased then, it fights (inf.); from
@@ -1556,6 +1568,9 @@ public static class PlayerBotDriver
         {
             state.LifeKills++;                                    // every fight won, a monster another bot counted too
             state.LastKillTick = GameLoop.GameLoopTime;
+            if (!string.IsNullOrEmpty(state.Target.Name))                               // #167 F-CS: a yellow-or-harder
+                RememberHardKill(state.HardKills, state.CantFinishSkips, state.Target.Name,   //   kill's name (its con read
+                    ConLevels.GetConColor(player.GetConLevel(state.Target)), GameLoop.GameLoopTime);   //   only for one)
             bool owed = state.RecoverBeforePull;                  // #167 F R2: a rest owed before the kill (F-C's
             state.RecoverBeforePull = true;                       //   cantfinish, a spent caster's) stays; rest before
             if (!owed) SkipRestAfterKill(state, player);          //   the next pull (WantsRest), unless it has what the
@@ -1696,7 +1711,8 @@ public static class PlayerBotDriver
                 leashed && Vector3.Distance(at, state.Anchor) > LeashRadius + RoamRadius)
                 continue;
             int score = TargetScore(player.GetDistanceTo(npc), con);                    // AWBC:3100
-            if (con <= cap && (state.HuntAvoided || !IsAvoided(state.AvoidUntil, npc.Name, now)))
+            if (con <= cap && (state.HuntAvoided || !IsAvoided(state.AvoidUntil, npc.Name, now) &&
+                    !CantFinishSkipped(state.CantFinishSkips, npc.Name, con, now)))     // #167 F-CS
             {
                 candidates.Add((npc, at, score));
                 limits.Add(limited ? MaxPullCrowd(role, con) : int.MaxValue);           // #167 F P1
@@ -1979,7 +1995,8 @@ public static class PlayerBotDriver
     /// RainbowSprites.cs) and its con to the bot (OverCapNear).</summary>
     public static List<(GameNPC Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> PlanMonsters(GamePlayer player,
         IEnumerable<GameNPC> npcs, Zone zone, ConColor natural, IReadOnlyDictionary<string, long> avoidUntil, long now,
-        List<(GameNPC Npc, Vector3 At, int AggroRange, ConColor Con)> adds = null)
+        List<(GameNPC Npc, Vector3 At, int AggroRange, ConColor Con)> adds = null,
+        IReadOnlyDictionary<string, (long Until, ConColor Con)> cantFinish = null)
     {
         List<(GameNPC Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> monsters = new();
         foreach (GameNPC npc in npcs)
@@ -1990,7 +2007,7 @@ public static class PlayerBotDriver
             if (con > ConColor.GREY)
                 monsters.Add((npc, at, con,
                     con <= natural && AutonomousPlayerPilot.IsEligibleExperienceTarget(con, npc.EffectiveLevel, player.Level, 1),
-                    IsAvoided(avoidUntil, npc.Name, now)));
+                    IsAvoided(avoidUntil, npc.Name, now) || CantFinishSkipped(cantFinish, npc.Name, con, now)));   // F-CS
             if (adds != null && npc.Brain is StandardMobBrain brain &&                     // #167 F P3
                 IsPotentialAdd(brain.AggroLevel, brain.AggroRange, player.IsObjectGreyCon(npc), false))
                 adds.Add((npc, at, brain.AggroRange, con));
@@ -2523,6 +2540,41 @@ public static class PlayerBotDriver
     /// median 6,117 units.</summary>
     public static bool RestsAfterBreakOff(string why) => why is Spent or CantFinish;
 
+    /// <summary>#167 F-CS: a can't-finish run's mark (BrokeOffFrom).</summary>
+    public static bool MarkCantFinish(Dictionary<string, (long Until, ConColor Con)> skips,
+        IReadOnlyDictionary<string, long> hardKills, string name, ConColor con, long now)
+    {
+        foreach (string old in skips.Where(pair => now >= pair.Value.Until).Select(pair => pair.Key).ToArray())
+            skips.Remove(old);
+        if (string.IsNullOrEmpty(name) || con < CantFinishSkipCon ||
+            hardKills.TryGetValue(name, out long killed) &&
+            now - killed < AutonomousDeathRecoveryPolicy.FailureMemoryMilliseconds)
+            return false;
+        skips[name] = (now + AutonomousDeathRecoveryPolicy.FailureMemoryMilliseconds,
+            skips.TryGetValue(name, out (long Until, ConColor Con) had) && had.Con < con ? had.Con : con);
+        return true;
+    }
+
+    /// <summary>#167 F-CS: whether the pick and the plan pass over name at con.</summary>
+    public static bool CantFinishSkipped(IReadOnlyDictionary<string, (long Until, ConColor Con)> skips, string name,
+        ConColor con, long now) =>
+        name != null && skips != null && skips.TryGetValue(name, out (long Until, ConColor Con) skip) &&
+        now < skip.Until && con >= skip.Con;
+
+    /// <summary>#167 F-CS: a kill of name at con (SettleTarget).</summary>
+    public static void RememberHardKill(Dictionary<string, long> hardKills,
+        Dictionary<string, (long Until, ConColor Con)> skips, string name, ConColor con, long now)
+    {
+        if (string.IsNullOrEmpty(name) || con < CantFinishSkipCon) return;
+        if (hardKills.Count >= HardKillNames)
+            foreach (string old in hardKills
+                         .Where(pair => now - pair.Value >= AutonomousDeathRecoveryPolicy.FailureMemoryMilliseconds)
+                         .Select(pair => pair.Key).ToArray())
+                hardKills.Remove(old);
+        hardKills[name] = now;
+        if (skips.TryGetValue(name, out (long Until, ConColor Con) skip) && con >= skip.Con) skips.Remove(name);
+    }
+
     /// <summary>A caster's hold on its target ready (#167 D1, OneMonsterCase's holdReady): the target held now, or a control
     /// CasterStep would cast at it now (hasControl: TargetControl's), which in melee with hits interrupting the bot
     /// (interrupted) goes only with Quickcast ready or on, as CasterAction casts one.</summary>
@@ -3019,8 +3071,11 @@ public static class PlayerBotDriver
     /// there; on the walk to its anchor, that too (BarOldAnchor, #167 D9). #167 D1: none of it for a spent caster's
     /// (BreakOffWhy Spent): the power was the problem, not the camp or the names. #167 F-C: a can't-finish one's too
     /// (RestsAfterBreakOff).</summary>
-    public static void BrokeOffFrom(PlayerBotState state, ushort region, Vector3 at, IEnumerable<string> names, long now)
+    public static void BrokeOffFrom(PlayerBotState state, ushort region, Vector3 at, IEnumerable<string> names, long now,
+        string target = null, ConColor targetCon = ConColor.UNKNOWN)
     {
+        state.BreakOffCfSkip = state.BreakOffWhy != CantFinish ? -1                     // #167 F-CS
+            : MarkCantFinish(state.CantFinishSkips, state.HardKills, target, targetCon, now) ? 1 : 0;
         if (RestsAfterBreakOff(state.BreakOffWhy)) return;
         foreach (string name in names) Remember(state.AvoidUntil, name, now);
         RememberFailedCamp(state.FailedCamps, region, at, now);
@@ -3057,6 +3112,7 @@ public static class PlayerBotDriver
         state.BreakOffSprintSeconds = -1;                                               // #167 F-O
         (state.BreakOffJoined, state.BreakOffWayAdds) = (0, -1);                        // #167 F-W
         state.BreakOffQcLeft = -1;                                                      // #167 F-C
+        state.BreakOffCfSkip = -1;                                                      // #167 F-CS
         state.BreakOffChasers.Clear();
         state.BreakOffBlocked.Clear();
         if (outcome == Died) return;
@@ -5229,7 +5285,7 @@ public static class PlayerBotDriver
         GameNPC[] npcs = WorldMgr.GetNPCsFromRegion(state.AnchorRegion);          // #167 E W1: one read, both passes
         List<(GameNPC Npc, Vector3 At, int AggroRange, ConColor Con)> planAdds = new();   // #167 F P3: its adds, in the
         List<(GameNPC Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> monsters = PlanMonsters(player, npcs,
-            zone, natural, state.AvoidUntil, now, planAdds);                       //   monsters' pass
+            zone, natural, state.AvoidUntil, now, planAdds, state.CantFinishSkips);  //   monsters' pass (#167 F-CS: skips)
         Vector3[] failed = FailedCamps(state.FailedCamps, state.AnchorRegion, now);
         bool barredOld = Array.IndexOf(failed, state.Anchor) >= 0;                 // #167 D9: RELOCATE barred=old
         Vector3[] crowdBarred = PlanCrowdBars(state, reason, now);                 // #167 F P1: a capped plan leaves the
@@ -5242,7 +5298,7 @@ public static class PlayerBotDriver
             NearAdds(afterDeath, nearZone, zone, planAdds);                        //   its adds)
         List<(GameNPC Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> nearMonsters =
             nearAdds == null ? null : nearZone == zone ? monsters
-                : PlanMonsters(player, npcs, nearZone, natural, state.AvoidUntil, now, nearAdds);
+                : PlanMonsters(player, npcs, nearZone, natural, state.AvoidUntil, now, nearAdds, state.CantFinishSkips);
         Vector3? nearFrom = nearZone != null && nav.HasNavmesh(nearZone) ? here : null;   // on the mesh (checked above)
         HashSet<GameNPC> overSkipped = new();                                      // #167 F P3: RELOCATE overSkipped=,
                                                                                    //   each spot once (the review)
@@ -5783,7 +5839,8 @@ public static class PlayerBotDriver
         (state.BreakOffWhy, state.CaughtSince) = (why, 0);                              // #167 D1 why= (BrokeOffFrom reads it)
         state.KilledWithAdds = false;
         BrokeOffFrom(state, player.CurrentRegionID, new(player.X, player.Y, player.Z),
-            chasers.Select(npc => npc.Name).Append(state.Target?.Name), now);
+            chasers.Select(npc => npc.Name).Append(state.Target?.Name), now, state.Target?.Name,   // #167 F-CS: and the
+            state.Target == null ? ConColor.UNKNOWN : ConLevels.GetConColor(player.GetConLevel(state.Target)));   //   con
         if (state.Engaged && state.Target != null)
         {
             (state.FightAdds, state.FightAdd) = FoldBreakOffAdds(state.FightAdds, state.FightAdd, onBot,   // #167 D2: adds=
@@ -6071,7 +6128,7 @@ public static class PlayerBotDriver
                 player.EndurancePercent, state.BreakOffTurn ?? "-", state.BreakOffHolds, state.BreakOffSpeed,   // #167 E T1
                 state.BreakOffChaserSpeed, state.BreakOffSprintSeconds,                 // #167 F-O
                 joined: state.BreakOffJoined, wayAdds: state.BreakOffWayAdds,           // #167 F-W
-                qcLeft: state.BreakOffQcLeft));                                         // #167 F-C
+                qcLeft: state.BreakOffQcLeft, cfSkip: state.BreakOffCfSkip));           // #167 F-C, F-CS
         FinishBreakOff(state, outcome, OwesReplan(state.Task != null, CanRelocate(state, player)), now);
         if (outcome == Died) return;
         player.Sprint(false);
