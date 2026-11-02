@@ -10628,11 +10628,11 @@ public sealed class UT_PlayerBotDriver
 
     // #167 F12-R, the wiring (RelocateIfOutgrown's TakeCamp): two yellow camps, a cyclops 2,884 units west of the bot
     // and a giant boar 5,116 east, its old camp 6,884 west; an orange drake, aggro 500, on the way west, 1,384 from the
-    // bot and 1,500 from the cyclops (no part of its camp). A route give-up's replan for the drake (or with the drake
-    // walked past, RoutePassed) skips the cyclops' camp, whose way passes it, for the boar's.
-    // With the cyclops given up on itself (aggressive, aggro 500), its own camp is skipped too. With no blocker, a dead
+    // bot and 1,500 from the cyclops (no part of its camp). A route give-up's replan for the drake skips the cyclops'
+    // camp, whose way passes it, for the boar's. With the cyclops given up on itself (aggressive, aggro 500), its own
+    // camp is skipped too. With no blocker, the drake only walked past (RoutePassed: not read, the review), a dead
     // drake, or an outgrown plan that still remembers the drake, it takes the cyclops' camp, as before.
-    [TestCase("drake", false, true, "boar")] [TestCase(null, true, true, "boar")] [TestCase("cyclops", false, true, "boar")]
+    [TestCase("drake", false, true, "boar")] [TestCase(null, true, true, "cyclops")] [TestCase("cyclops", false, true, "boar")]
     [TestCase(null, false, true, "cyclops")] [TestCase("dead", false, true, "cyclops")]
     [TestCase("drake", true, false, "cyclops")]
     public void A_route_give_ups_replan_skips_a_camp_behind_the_monster_it_gave_up_on_in_RelocateIfOutgrown(string gaveUpOn,
@@ -10687,6 +10687,109 @@ public sealed class UT_PlayerBotDriver
                     Is.EqualTo(((string)null, 0L, (Vector3?)oldCamp, oldCamp)));
                 Assert.That(PlayerBotDriver.FailedCamps(state.FailedCamps, region.ID, 130_000), Is.EqualTo(new[] { oldCamp }));
                 Assert.That(state.RelocateRejected, Is.Empty, "skipped, not rejected");
+            });
+        });
+    }
+
+    // #167 F12-R (the review): a mesh whose corridor from start to end bends through Bend (when set): start -> Bend ->
+    // end.
+    private sealed class BendMesh : PathfindingMgrBase
+    {
+        public Func<Vector3, Vector3, Vector3?> Bend = (_, _) => null;
+        public override bool HasNavmesh(Zone zone) => true;
+        public override PathfindingResult GetPathStraight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters,
+            Span<WrappedPathfindingNode> destination)
+        {
+            destination[0] = new(start, EDtPolyFlags.Walk);
+            if (Bend(start, end) is Vector3 bend)
+            {
+                destination[1] = new(bend, EDtPolyFlags.Walk);
+                destination[2] = new(end, EDtPolyFlags.Walk);
+                return new(PathfindingStatus.PathFound, 3);
+            }
+            destination[1] = new(end, EDtPolyFlags.Walk);
+            return new(PathfindingStatus.PathFound, 2);
+        }
+        public override Vector3? GetMoveAlongSurface(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => end;
+        public override bool HasLineOfSight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters) => false;
+    }
+
+    // #167 F12-R (the review), the whole chain: Roam's look-ahead gives the camp up for an orange drake (no detour: no sight), then the next
+    // idle think (IdleStep) replans: a yellow cyclops 2,500 east (its way passes the drake, 1,000 east and 100 aside)
+    // is skipped for a yellow boar 3,000 west; the same IdleStep's Roam then starts the new walk (RouteGaveUpOn
+    // cleared). corridor: "straight" (the straight line), "round" (the corridor to the cyclops bends 1,200 north round
+    // the drake: not skipped), "into" (the way to the boar bends into the drake's reach: both skipped, R1).
+    [TestCase("straight", "boar")] [TestCase("round", "cyclops")] [TestCase("into", "old")]
+    public void A_route_give_up_in_Roam_replans_by_the_corridors_way_on_the_next_think_in_IdleStep(string corridor,
+        string expected)
+    {
+        MethodInfo roam = typeof(PlayerBotDriver).GetMethod("Roam", BindingFlags.Static | BindingFlags.NonPublic)!;
+        MethodInfo idle = typeof(PlayerBotDriver).GetMethod("IdleStep", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var mesh = new BendMesh();
+        InTheField(mesh, OnPocket, (region, zone, bot) =>
+        {
+            Vector3 anchor = OnPocket + new Vector3(5_000, 0, 0);
+            Vector3 cyclopsAt = OnPocket + new Vector3(2_500, 0, 0), boarAt = OnPocket + new Vector3(-3_000, 0, 0);
+            Vector3 drakeAt = OnPocket + new Vector3(1_000, 100, 0);
+            GameNPC drake = MonsterAt(region, zone, drakeAt, LevelFor(bot, ConColor.ORANGE));
+            GameNPC cyclops = MonsterAt(region, zone, cyclopsAt, LevelFor(bot, ConColor.YELLOW));
+            GameNPC boar = MonsterAt(region, zone, boarAt, LevelFor(bot, ConColor.YELLOW));
+            var brain = (DOL.AI.Brain.StandardMobBrain)drake.Brain;
+            (brain.AggroLevel, brain.AggroRange) = (100, 500);
+            InWorld(region, [drake, cyclops, boar], () =>
+            {
+                (bot.X, bot.Y, bot.Z) = ((int)OnPocket.X, (int)OnPocket.Y, (int)OnPocket.Z);
+                var state = new PlayerBotState(bot) { AnchorRegion = region.ID, Anchor = anchor, RoamDestination = anchor,
+                    SearchAddsAt = 9_750 };
+                state.SearchAdds.Add(drake);
+                roam.Invoke(null, [state, bot, 9_750L]);
+                state.SearchAddsAt = 10_000;
+                bot.CurrentSpeed = 191;
+                roam.Invoke(null, [state, bot, 10_000L]);
+                Assert.That((state.ReplanOwed, state.RouteGaveUpOn), Is.EqualTo((PlayerBotDriver.RouteGiveUp, drake)), "gave up");
+                Vector3 here = new(bot.X, bot.Y, bot.Z);
+                mesh.Bend = corridor switch
+                {
+                    "round" => (s, e) => Vector3.Distance(e, cyclopsAt) < 1 ? here + new Vector3(1_000, 1_600, 0) : null,
+                    "into" => (s, e) => Vector3.Distance(e, boarAt) < 1 ? drakeAt + new Vector3(0, 300, 0) : null,
+                    _ => (_, _) => null,
+                };
+                state.SearchAddsAt = 0;
+                idle.Invoke(null, [state, bot, 10_250L]);
+                Vector3 want = expected switch { "boar" => boarAt, "cyclops" => cyclopsAt, _ => anchor };
+                Assert.That((state.Anchor, state.ReplanOwed), Is.EqualTo((want, (string)null)), corridor);
+                if (expected != "old")
+                    Assert.That((state.RouteGaveUpOn, state.RouteGoal), Is.EqualTo(((GameNPC)null, (Vector3?)want)),
+                        "the new walk started in the same IdleStep");
+                else
+                    Assert.That((state.RouteGaveUpOn, state.RoamDestination), Is.EqualTo((drake, (Vector3?)anchor)),
+                        "R1: walks on to its own camp, the walk's state kept");
+            });
+        });
+    }
+
+    // #167 F12-R (the review): a blocker out of the world (despawned), in another region or grey to the bot is not
+    // read; the cyclops is taken.
+    [TestCase("despawned")] [TestCase("region")] [TestCase("grey")]
+    public void A_blocker_gone_from_the_world_another_region_or_grey_is_not_read_in_RelocateIfOutgrown(string how)
+    {
+        MethodInfo relocate = typeof(PlayerBotDriver).GetMethod("RelocateIfOutgrown", BindingFlags.Static | BindingFlags.NonPublic)!;
+        InTheField(new SplitFloorMesh(), OnPocket, (region, zone, bot) =>
+        {
+            Vector3 cyclopsAt = new(838_000, OnPocket.Y, 8_700), oldCamp = new(834_000, OnPocket.Y, 8_700);
+            GameNPC cyclops = MonsterAt(region, zone, cyclopsAt, LevelFor(bot, ConColor.YELLOW));
+            GameNPC drake = MonsterAt(region, zone, new(839_500, OnPocket.Y, 8_700),
+                how == "grey" ? (byte)1 : LevelFor(bot, ConColor.ORANGE));
+            var brain = (DOL.AI.Brain.StandardMobBrain)drake.Brain;
+            (brain.AggroLevel, brain.AggroRange) = (100, 500);
+            if (how == "despawned") drake.ObjectState = GameObject.eObjectState.Inactive;
+            if (how == "region") drake.CurrentRegion = (Region)RuntimeHelpers.GetUninitializedObject(typeof(Region));
+            InWorld(region, how == "region" ? [cyclops] : [cyclops, drake], () =>
+            {
+                var state = new PlayerBotState(bot) { AnchorRegion = region.ID, Anchor = oldCamp, RoamDestination = oldCamp };
+                PlayerBotDriver.GiveUpRoute(state, 130_000, drake);
+                relocate.Invoke(null, [state, bot, 130_000L]);
+                Assert.That(state.Anchor, Is.EqualTo(cyclopsAt), how);
             });
         });
     }

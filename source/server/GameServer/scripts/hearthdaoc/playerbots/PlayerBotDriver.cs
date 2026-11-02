@@ -5783,7 +5783,8 @@ public static class PlayerBotDriver
                 Vector3 spot = new(npc.X, npc.Y, npc.Z);
                 List<WrappedPathfindingNode> corridor = null;
                 if (walkFrom is Vector3 origin &&
-                    !PlayerTravelPath.TryBuildCorridor(nav, campZone, origin, spot, out corridor))
+                    !PlayerTravelPath.TryBuildCorridor(nav, campZone, origin, spot, out corridor,
+                        layers: gaveUpOn is { Count: > 0 }))                 // F12-R: the mover's way (layers)
                 {
                     state.RelocateRejected.Add(npc);
                     continue;
@@ -5808,9 +5809,9 @@ public static class PlayerBotDriver
     }
 
     // #167 F12-R: a route give-up's blockers for its replan (ReplanBlocker): the monster the walk gave its camp up for
-    // (RouteGaveUpOn), then those it walked on past (RoutePassed), each still alive in the bot's region, where it
-    // stands now, at its aggro range: monsters the bot has seen on that walk. Read as the plan reads an add
-    // (PlanMonsters: aggressive, not grey to the bot, busy or not).
+    // (RouteGaveUpOn), if still alive in the bot's region, where it stands now, at its aggro range: a monster the bot
+    // saw a moment ago (the review: not the monsters walked past, RoutePassed, which may lie far back or have died and
+    // respawned unseen). Read as the plan reads an add (PlanMonsters: aggressive, not grey to the bot, busy or not).
     private static List<(Vector3 At, int AggroRange)> RouteGiveUpBlockers(PlayerBotState state, GamePlayer player)
     {
         List<(Vector3 At, int AggroRange)> blockers = new();
@@ -5822,8 +5823,6 @@ public static class PlayerBotDriver
                 blockers.Add((new(npc.X, npc.Y, npc.Z), brain.AggroRange));
         }
         Add(state.RouteGaveUpOn);
-        foreach (GameNPC npc in state.RoutePassed)
-            if (npc != state.RouteGaveUpOn) Add(npc);
         return blockers;
     }
 

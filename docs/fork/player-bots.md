@@ -300,9 +300,9 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   clearance its ways kept from it. A fight or a rest ends the walk round it. With no way round it gives the camp up, at
   most once in 10 minutes; else it walks on past the monster. The camp given up is barred for 15 minutes and the bot
   plans a new one from where it stands at once, standing still until then. That plan skips a camp in the reach of the
-  monster it gave up on, or of one it walked on past on that walk (each where it stands then, if still alive), and a
-  camp whose way there passes such a monster as the look-ahead reads one, along the whole way, not only its first 1,500
-  units. With no other camp, no way to one, or every one it tried skipped, it walks on to its own.
+  monster it gave up on (where it stands then, if still alive), and a camp whose way there passes it as the look-ahead
+  reads one, along the whole way, not only its first 1,500 units. With no other camp, no way to one, or every one it
+  tried skipped, it walks on to its own.
 - It walks on the navmesh. A bot made at a level from a spots line also trains on each level-up.
 - In a run of 3 bots or fewer, `hdbot-alb-01` also does quest 20206 (Immediate Resolution) and its class promotion.
 
@@ -351,10 +351,11 @@ Playing:
     camp's zone; it never pulls a monster on the way on its own terms, as a GameBot does. A plan doesn't yet weigh the
     monsters on the way to a camp, only those round it: it takes a camp whose corridor a monster blocks as readily as
     another, and the walk then goes round the monster, gives the camp up or walks on past it. Choosing the camp by the
-    way there is a follow-up. The plan after a give-up skips only the camps behind the monsters that walk gave up on or
-    walked past, among the camp spots it tries (at most 5): with every one skipped it walks on to the camp it gave up,
-    past the monster (another give-up waits 10 minutes). Where no camp fits, the GameBots' fallback can take that camp
-    again (a failed camp, when no other is left); it is skipped only while its way still passes the monster.
+    way there is a follow-up. The plan after a give-up skips only the camps behind the monster that walk gave up on (not
+    those it walked on past, nor the monsters of its pack), among the camp spots it tries (at most 5): with every one
+    skipped it walks on to the camp it gave up, past the monster (another give-up waits 10 minutes). Where no camp fits,
+    the GameBots' fallback can take that camp again (a failed camp, when no other is left); it is skipped only while its
+    way still passes the monster.
 - **Resting:** about half their time: 52.1% over the six legs, against 52.6% on v0.37b-hearth.16 (time-weighted).
   Most of it is the real cost of player regeneration. A kill now skips its rest when the bot has what its next pull
   needs. The 80% endurance stop still starts sits that health and power wouldn't, a quarter fewer than on
@@ -674,9 +675,8 @@ All start `PLAYER_BOT_`:
   crowd limits are then off there for 5 minutes. Any `RELOCATE` then ends with `overSkipped=`, the camps that fit but
   were left out for an aggressive monster over the cap in reach (each once, over the plan's passes), while there are
   any. A walk to its camp that gave the camp up for a monster on its route plans with `reason=route`: the line, with a
-  camp or `none`, has `barred=old` and ends with `routeSkipped=`, the camp spots that plan skipped for a monster the
-  walk gave up on or walked past (0 for none; no other `reason=` has it). A break-off drops its fight
-  (`FIGHT result=dropped`);
+  camp or `none`, has `barred=old` and ends with `routeSkipped=`, the camp spots that plan skipped for the monster the
+  walk gave up on (0 for none; no other `reason=` has it). A break-off drops its fight (`FIGHT result=dropped`);
 - `LIFT`: the same lift where no `RELOCATE` line is written, as the bot hunts where it is: its `reason=` and `why=`,
   `norelocate` (it may not relocate, as the lever test's bots, or stands in no zone) or `offmesh` (it stands off the
   navmesh), then `lifted=1`;
