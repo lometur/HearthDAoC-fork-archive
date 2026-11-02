@@ -273,6 +273,8 @@ public sealed class PlayerBotState
     public string BreakOffHoldWhy, BreakOffTurn;                 //   and why it began (nopoint, blocked), why it turned
     public int BreakOffSpeed = -1, BreakOffChaserSpeed = -1;     //   (turn=), and its run speed and the fastest chaser's
                                                                  //   when it began (speed=, chaserSpeed=; -1: not read)
+    public int BreakOffSprintSeconds = -1;                       // #167 F-O: BREAKOFF sprint=, its sprint's seconds at the
+                                                                 //   start (SprintSeconds; -1: not read)
     public bool BreakOffRunsOn;                                  // #167 E T2b: running on to its point past Done (RunsOnToClear)
     public bool BackPending, BackOwed, BackMoved;                // #167 C1: PLAYER_BOT_BACK, from a release to its first
     public long BackStepOutMs, BackHoldMs, BackWalkMs;           //   fight: the line due, the replan owed and a camp planned
@@ -471,10 +473,10 @@ public static class PlayerBotDriver
     public const int MaxEscapeReserve = 41;                  //   hybrid's damage cast keeps the endurance a run needs
     public const int CloseRacePercent = 30;                  //   from the fastest monster on the bot (EscapeEndurance)
     public const int SpellEnduranceCost = 5;                 //   and this margin; none when that is past MaxEscapeReserve
-                                                             //   (205 and faster: the two styles it costs buy no run). A
-                                                             //   race projecting the bot under 30 at its target's death
-                                                             //   is close (HealthLeftAtKill). A cast costs 5
-                                                             //   (SpellHandler.cs:1244-1250, :1442-1445)
+                                                             //   (#167 F-O: 196 and faster under its reach, the styles it
+                                                             //   costs buy no run). A race projecting the bot under 30
+                                                             //   at its target's death is close (HealthLeftAtKill). A
+                                                             //   cast costs 5 (SpellHandler.cs:1244-1250, :1442-1445)
     public const int SprintOffGap = 400, SprintOnGap = 300;  // #167 E-S: a break-off's sprint goes off with the nearest
                                                              //   free chaser this far behind and 25 s of its speed over the
                                                              //   run's more (it can't close to its reach while it chases),
@@ -2366,13 +2368,20 @@ public static class PlayerBotDriver
     /// turned its back on a 191 or 185 chaser that started in its reach, and it swung at the bot's back for the 30 s of
     /// the break-off; a sprint is the old canSprint); and the chaser is no faster than its run (RunSpeed: the world DB sets
     /// enable_pve_speed off, MaxSpeedCalculator.cs:52-57, so after the sprint it runs at 191), or under its sprint
-    /// (SprintSpeed) while the sprint's lead holds it off for the ChaseSeconds a monster chases after its last swing: from
-    /// melee, sprintSeconds of sprint keep a chaser of speed v from a swing for sprintSeconds x 57 / (v - 191) seconds (the
-    /// verifier's model). #167 D2: never from a chaser that harms from range (rangedHarm, RangedHarm).</summary>
-    public static bool Outruns(int fastestSpeed, int sprintSeconds, bool rangedHarm) =>
-        !rangedHarm && (long)sprintSeconds * (SprintSpeed - fastestSpeed) > ChaserReach &&
-        (fastestSpeed <= RunSpeed || fastestSpeed < SprintSpeed &&
-         (long)sprintSeconds * (SprintSpeed - RunSpeed) >= (long)ChaseSeconds * (fastestSpeed - RunSpeed));
+    /// (SprintSpeed) while the time from its last swing to its next is ChaseSeconds or more: a monster chases 25 s after
+    /// its last swing, and every swing in its reach starts the 25 s again (StandardMobState.cs:89-121). #167 F-O: its
+    /// last swing comes as the sprint's lead passes its reach, R / a s in (a = SprintSpeed - v); the run at RunSpeed lets
+    /// it close back to its reach s + (s a - R) / b s in (b = v - RunSpeed); in whole numbers s a b + (s a - R) a - R b
+    /// >= C a b. C2's clause (s x 57 >= 25 b) took the lead over a 191 runner from contact to contact: 5 s of sprint
+    /// against a 200 chaser had it back in reach 9.4 s into the run, 5.3 s after its last swing, and chasers of 196 or
+    /// more caught 91 runs on batch F's seven base legs, 68 of them dead within 60 s. #167 D2: never from a chaser that
+    /// harms from range (rangedHarm, RangedHarm).</summary>
+    public static bool Outruns(int fastestSpeed, int sprintSeconds, bool rangedHarm)
+    {
+        long s = sprintSeconds, a = SprintSpeed - fastestSpeed, b = fastestSpeed - RunSpeed;
+        if (rangedHarm || s * a <= ChaserReach) return false;
+        return b <= 0 || s * a * b + (s * a - ChaserReach) * a - (long)ChaserReach * b >= (long)ChaseSeconds * a * b;
+    }
 
     /// <summary>A chaser that harms the run from range (#167 D2, Outruns): one of its spells (GameNPC.Spells, GameNPC.cs:3379)
     /// a snare, a damage spell, a lifedrain, a stun or a mez at RangedHarmRange or more. All 6 of st-deathsC's break-offs
@@ -2387,6 +2396,10 @@ public static class PlayerBotDriver
                 return true;
         return false;
     }
+
+    // #167 D2, F-O: a monster that harms a run from range (RangedHarm over its spells; none, no).
+    private static bool HarmsFromRange(GameNPC npc) =>
+        npc.Spells is { Count: > 0 } spells && RangedHarm(spells.Select(spell => (spell.SpellType, spell.Range)));
 
     /// <summary>Why a break-off that would fire doesn't (#167 D2, BREAKOFF outcome=refused why=), in StartsBreakOff's order:
     /// none when it doesn't fire (fires: its rule held before the add's control); an add's control ready first (C4,
@@ -2414,8 +2427,9 @@ public static class PlayerBotDriver
 
     /// <summary>The least endurance whose sprint outruns a chaser of this speed (#167 E-R: Outruns over SprintSeconds, at
     /// the bot's regeneration, fatigue consumption and Long Wind), from just over SprintStartEndurance to
-    /// MaxEscapeReserve; none within it, int.MaxValue. 26 against 191 (4 s of sprint), 31 against 200, 41 against 205,
-    /// 21 against 150 (3 s).</summary>
+    /// MaxEscapeReserve; none within it, int.MaxValue. #167 F-O, with the chaser's reach: 26 against 191 (4 s of
+    /// sprint), 31 against 192-193, 36 against 194-195, 41 against 196-197, none from 198 within 41 (46 at 198, 51 at
+    /// 200, 61 at 205, 91 at 215, none from 218 within 100); 21 against 150 (3 s).</summary>
     public static int EscapeEndurance(int fastestSpeed, int regeneration, int fatigueConsumption, int longWind)
     {
         for (int endurance = SprintStartEndurance + 1; endurance <= MaxEscapeReserve; endurance++)
@@ -2426,8 +2440,9 @@ public static class PlayerBotDriver
 
     /// <summary>The endurance a close fight keeps for a run (#167 E-R): EscapeEndurance against the fastest monster, read
     /// at the run's 191 at the least (a choice, not the arithmetic: a 150-180 chaser needs 21, and the floor keeps 5 more
-    /// in hand), and ReserveMargin; 0 when that passes MaxEscapeReserve (a 205-or-faster monster: no reserve it could keep
-    /// buys a run, so it keeps its styles).</summary>
+    /// in hand), and ReserveMargin; 0 when that passes MaxEscapeReserve. #167 F-O: 31 against 191 or slower, 36 against
+    /// 192-193, 41 against 194-195, 0 from 196 (no reserve within 41 buys a run, so it keeps its styles: refused runs
+    /// from 196+ chasers died 62 of 84 within 60 s as runs, refusals there about as often).</summary>
     public static int EscapeReserve(int fastestSpeed, int regeneration, int fatigueConsumption, int longWind)
     {
         int need = EscapeEndurance(Math.Max(fastestSpeed, RunSpeed), regeneration, fatigueConsumption, longWind);
@@ -2526,15 +2541,15 @@ public static class PlayerBotDriver
     /// not; 0 with none alive): the close fight's reserve (CloseFight on onBot's count, EscapeReserve against the
     /// fastest), the run's need against that fastest chaser itself (RunNeed: EscapeEndurance, not EscapeReserve's 191
     /// floor; 0 with no reserve) and whether no monster but the target is on the bot (TargetAlone), HoldingReserve's
-    /// terms.</summary>
+    /// terms. #167 F-O: none when one of them harms from range (rangedHarm, RangedHarm): no run starts from it.</summary>
     public static (int Reserve, int RunNeed, bool TargetAlone) ReserveRead(int targetSpeed,
         IReadOnlyList<(int Speed, bool IsTarget)> onBot, int fightAdds, bool defence, int? leftAtKill, int regeneration,
-        int fatigue, int longWind)
+        int fatigue, int longWind, bool rangedHarm)
     {
         int others = 0, fastest = targetSpeed;
         for (int i = 0; i < onBot.Count; i++)
             (others, fastest) = (onBot[i].IsTarget ? others : others + 1, Math.Max(fastest, onBot[i].Speed));
-        int reserve = CloseFight(onBot.Count, fightAdds, defence, leftAtKill)
+        int reserve = !rangedHarm && CloseFight(onBot.Count, fightAdds, defence, leftAtKill)
             ? EscapeReserve(fastest, regeneration, fatigue, longWind)
             : 0;
         return (reserve, reserve > 0 ? EscapeEndurance(fastest, regeneration, fatigue, longWind) : 0, others == 0);
@@ -2770,6 +2785,7 @@ public static class PlayerBotDriver
         (state.BreakOffTurn, state.BreakOffHolds, state.NextBreakOffRetryTick) = (null, 0, 0);   // #167 E T1
         (state.BreakOffHoldSince, state.BreakOffHoldWhy) = (0, null);
         (state.BreakOffSpeed, state.BreakOffChaserSpeed, state.BreakOffRunsOn) = (-1, -1, false);   // #167 E T2b: the run-on
+        state.BreakOffSprintSeconds = -1;                                               // #167 F-O
         state.BreakOffChasers.Clear();
         state.BreakOffBlocked.Clear();
         if (outcome == Died) return;
@@ -4263,15 +4279,19 @@ public static class PlayerBotDriver
             state.NextReserveTick = now + StyleMilliseconds;
             ICollection<GameLiving> attackers = player.attackComponent.AttackerTracker.Attackers;
             var onBot = new List<(int Speed, bool IsTarget)>(attackers.Count);
+            bool ranged = targetAlive && target is GameNPC targetNpc && HarmsFromRange(targetNpc);   // #167 F-O
             foreach (GameLiving living in attackers)
                 if (living is GameNPC npc && IsAttacking(player, npc))
+                {
                     onBot.Add((npc.MaxSpeed, npc == target));
+                    ranged = ranged || HarmsFromRange(npc);
+                }
             int? left = targetAlive ? HealthLeftAtKill(player.HealthPercent, target.HealthPercent, state.FightHpAtReach,
                 state.FightTargetHpAtReach) : null;
             (state.Reserve, state.RunNeed, state.TargetAlone) = ReserveRead(targetAlive ? target.MaxSpeed : 0, onBot,
                 state.FightAdds, state.FromDefence || state.FollowsAddKill, left,
                 player.GetModified(eProperty.EnduranceRegenerationAmount), player.GetModified(eProperty.FatigueConsumption),
-                LongWindCost(player));
+                LongWindCost(player), ranged);
         }
         return HoldingReserve(state.Reserve, state.RunNeed, player.Endurance, targetAlive ? target.HealthPercent : (byte)100,
             state.TargetAlone);
@@ -5005,8 +5025,7 @@ public static class PlayerBotDriver
         foreach (GameNPC npc in chasers)
         {
             fastest = Math.Max(fastest, npc.MaxSpeed);
-            if (!ranged && npc.Spells is { Count: > 0 } spells)                         // #167 D2
-                ranged = RangedHarm(spells.Select(spell => (spell.SpellType, spell.Range)));
+            ranged = ranged || HarmsFromRange(npc);                                     // #167 D2
         }
         int sprint = SprintSeconds(player.Endurance, player.GetModified(eProperty.EnduranceRegenerationAmount),
             player.GetModified(eProperty.FatigueConsumption), LongWindCost(player));
@@ -5016,11 +5035,13 @@ public static class PlayerBotDriver
         {
             chasers.Clear();
             state.NextBreakOffTick = now + TargetRefreshMilliseconds;
-            ReportRefusal(state, player, now, onBot, refusal, player.MaxSpeed, fastest);   // #167 D2; E T1: the speeds
+            ReportRefusal(state, player, now, onBot, refusal, player.MaxSpeed, fastest,   // #167 D2; E T1: the speeds;
+                sprint);                                                                //   F-O: sprint=
             return false;
         }
         (state.BreakOffSince, state.BreakOffGoal, state.BreakOffArrived, state.BreakOffSprintOffAt) = (now, goal, false, -1);
         (state.BreakOffSpeed, state.BreakOffChaserSpeed) = (player.MaxSpeed, fastest);   // #167 E T1: before the sprint
+        state.BreakOffSprintSeconds = sprint;                                           // #167 F-O: sprint=
         (state.BreakOffHealth, state.BreakOffEndurance, state.BreakOffAttackers) = (health, player.EndurancePercent, onBot);
         state.BreakOffRate = HealthRate(state.HealthSamples, now, health);              // #167 BREAKOFF rate=
         (state.BreakOffWhy, state.CaughtSince) = (why, 0);                              // #167 D1 why= (BrokeOffFrom reads it)
@@ -5130,16 +5151,17 @@ public static class PlayerBotDriver
 
     // #167 D2: PLAYER_BOT_BREAKOFF outcome=refused why= (BreakOffRefusal) at the bot's health, endurance and the monsters on
     // it now, once a fight (BreakOffRefused, cleared by OpenFight). #167 E T1: and its run speed and the fastest chaser's
-    // (speed=, chaserSpeed=; -1 before they are read: a control refusal).
+    // (speed=, chaserSpeed=; -1 before they are read: a control refusal). #167 F-O: and its sprint's seconds (sprint=).
     private static void ReportRefusal(PlayerBotState state, GamePlayer player, long now, int onBot, string why,
-        int speed = -1, int chaserSpeed = -1)
+        int speed = -1, int chaserSpeed = -1, int sprint = -1)
     {
         if (state.BreakOffRefused) return;
         state.BreakOffRefused = true;
         if (Log.IsInfoEnabled)
             Log.Info(PlayerBotDriverReport.FormatBreakOff(player.Name, player.Level, player.HealthPercent,
                 player.EndurancePercent, onBot, 0, Refused, HealthRate(state.HealthSamples, now, player.HealthPercent), why,
-                -1, player.EndurancePercent, speed: speed, chaserSpeed: chaserSpeed));      // #167 E-S: no run
+                -1, player.EndurancePercent, speed: speed, chaserSpeed: chaserSpeed,       // #167 E-S: no run
+                sprint: sprint));                                                       // #167 F-O
     }
 
     // A sprint's cost a second before the regeneration (GamePlayer.cs:2396-2405): LongWind, less Long Wind's 20-100%.
@@ -5276,7 +5298,8 @@ public static class PlayerBotDriver
 
     // A break-off's end: its line (PLAYER_BOT_BREAKOFF, #167 D1 why=), the state's end (FinishBreakOff: the relocation
     // owed, OwesReplan's rule as after a death; fought, no new break-off for BreakOffMilliseconds), and unless the bot died
-    // (the death's own recovery then, HandleDeath) the sprint off. #167 E T1: turn=, holds=, speed= and chaserSpeed=.
+    // (the death's own recovery then, HandleDeath) the sprint off. #167 E T1: turn=, holds=, speed= and chaserSpeed=;
+    // #167 F-O: sprint=.
     private static void EndBreakOff(PlayerBotState state, GamePlayer player, long now, string outcome)
     {
         if (Log.IsInfoEnabled)
@@ -5284,7 +5307,7 @@ public static class PlayerBotDriver
                 state.BreakOffEndurance, state.BreakOffAttackers, (now - state.BreakOffSince) / 1000, outcome, state.BreakOffRate,
                 state.BreakOffWhy, state.BreakOffSprintOffAt < 0 ? -1 : state.BreakOffSprintOffAt / 1000,   // #167 E-S
                 player.EndurancePercent, state.BreakOffTurn ?? "-", state.BreakOffHolds, state.BreakOffSpeed,   // #167 E T1
-                state.BreakOffChaserSpeed));
+                state.BreakOffChaserSpeed, state.BreakOffSprintSeconds));                // #167 F-O
         FinishBreakOff(state, outcome, OwesReplan(state.Task != null, CanRelocate(state, player)), now);
         if (outcome == Died) return;
         player.Sprint(false);

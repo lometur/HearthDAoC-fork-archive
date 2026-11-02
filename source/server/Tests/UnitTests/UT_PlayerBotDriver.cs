@@ -1652,16 +1652,25 @@ public sealed class UT_PlayerBotDriver
     }
 
     // It outruns a chaser no faster than its run (191, GamePlayer.cs:8250; enable_pve_speed is off in the world DB), or
-    // one under its sprint (1.3 x 191 = 248, MaxSpeedCalculator.cs:25) while the sprint's lead, 57 units a second, holds
-    // it off for the 25 s a monster chases after its last swing (StandardMobState.cs:89, :121): S x 57 >= 25 x (v - 191).
-    // The review of 9aacd69: either way the sprint's lead must clear the chaser's melee reach first, S x (248 - v) above
-    // 200 (MeleeAttackRange, GameLiving.cs:303), and it needs a sprint (the old canSprint). With none (endurance 10 or
-    // less) the bot turned its back on a 191 or 185 chaser that started in its reach, which swung at its back for 30 s; a
-    // 247 one gains 99 units on a 99-s sprint, a 200 one 192 on a 4-s one.
+    // one under its sprint (1.3 x 191 = 248, MaxSpeedCalculator.cs:25) while its next swing comes 25 s or more after its
+    // last (StandardMobState.cs:89, :121). The review of 9aacd69: either way the sprint's lead must clear the chaser's
+    // melee reach first, S x (248 - v) above 200 (MeleeAttackRange, GameLiving.cs:303), and it needs a sprint (the old
+    // canSprint). With none (endurance 10 or less) the bot turned its back on a 191 or 185 chaser that started in its
+    // reach, which swung at its back for 30 s; a 247 one gains 99 units on a 99-s sprint, a 200 one 192 on a 4-s one.
+    // #167 F-O: the last swing as the lead passes the reach, the next when the run lets it close back to the reach:
+    // S a b + (S a - 200) a - 200 b >= 25 a b, a = 248 - v, b = v - 191. With 5 s of sprint a 200 chaser was back in
+    // reach 9.4 s into the run, 5.3 s after its last swing: it takes 9 s; 192 takes 5 s, 194 6, 196 7, 205 11, 218 19.
     [TestCase(191, 0, false)] [TestCase(185, 0, false)] [TestCase(150, 0, false)] [TestCase(191, 4, true)]
     [TestCase(191, 3, false)] [TestCase(150, 3, true)] [TestCase(150, 2, false)]
-    [TestCase(220, 13, true)] [TestCase(220, 12, false)]
-    [TestCase(248, 99, false)] [TestCase(247, 99, false)] [TestCase(200, 5, true)] [TestCase(200, 4, false)]
+    [TestCase(192, 5, true)] [TestCase(192, 4, false)]                    // C2's clause: 4 s passed
+    [TestCase(194, 6, true)] [TestCase(194, 5, false)]                    //   5 s passed
+    [TestCase(196, 7, true)] [TestCase(196, 6, false)]                    //   6 s passed
+    [TestCase(200, 9, true)] [TestCase(200, 8, false)]                    //   8 s passed
+    [TestCase(200, 5, false)]                                             //   true (5 x 57 >= 25 x 9)
+    [TestCase(205, 11, true)] [TestCase(205, 10, false)]                  //   10 s passed
+    [TestCase(218, 19, true)] [TestCase(218, 18, false)]                  //   18 s passed
+    [TestCase(220, 13, false)] [TestCase(220, 12, false)]                 //   13 s passed
+    [TestCase(248, 99, false)] [TestCase(247, 99, false)] [TestCase(200, 4, false)]
     [TestCase(200, 3, false)] [TestCase(200, int.MaxValue, true)]
     public void A_bot_outruns_a_chaser_while_its_sprint_lasts(int fastestSpeed, int sprintSeconds, bool outruns) =>
         Assert.That(PlayerBotDriver.Outruns(fastestSpeed, sprintSeconds, rangedHarm: false), Is.EqualTo(outruns));
@@ -1708,18 +1717,21 @@ public sealed class UT_PlayerBotDriver
         int longWind, int seconds) =>
         Assert.That(PlayerBotDriver.SprintSeconds(endurance, regeneration, fatigueConsumption, longWind), Is.EqualTo(seconds));
 
-    // #167 E-R: the least endurance whose sprint outruns a chaser (Outruns over SprintSeconds): 4 s of sprint against one
-    // no faster than the run (26), 5 against 192-200 (31), 6 against 203-204 (36), 7 against 205 (41); none at 220 within
-    // 41. Long Wind's 1 a second less makes the 4 s cost 16 (22); a 150 chaser needs 3 s (21).
-    [TestCase(191, 5, 26)] [TestCase(200, 5, 31)] [TestCase(204, 5, 36)] [TestCase(205, 5, 41)]
-    [TestCase(220, 5, int.MaxValue)] [TestCase(191, 4, 22)] [TestCase(150, 5, 21)]
+    // #167 E-R: the least endurance whose sprint outruns a chaser (Outruns over SprintSeconds). #167 F-O, with its
+    // reach: 4 s of sprint against one no faster than the run (26), 5 against 192-193 (31), 6 against 194-195 (36), 7
+    // against 196-197 (41); none from 198 within 41 (46 at 198, 51 at 200). Long Wind's 1 a second less makes the 4 s
+    // cost 16 (22); a 150 chaser needs 3 s (21).
+    [TestCase(191, 5, 26)] [TestCase(192, 5, 31)] [TestCase(194, 5, 36)] [TestCase(196, 5, 41)]
+    [TestCase(198, 5, int.MaxValue)] [TestCase(200, 5, int.MaxValue)] [TestCase(204, 5, int.MaxValue)]
+    [TestCase(205, 5, int.MaxValue)] [TestCase(220, 5, int.MaxValue)] [TestCase(191, 4, 22)] [TestCase(150, 5, 21)]
     public void The_escape_endurance_is_the_least_sprint_that_outruns_the_chaser(int fastest, int longWind, int endurance) =>
         Assert.That(PlayerBotDriver.EscapeEndurance(fastest, 0, 100, longWind), Is.EqualTo(endurance));
 
     // #167 E-R: a close fight keeps that endurance and 5 more, read at the run's 191 at the least (a choice, not the
-    // arithmetic: a 150-180 chaser needs 21, and the floor holds 5 more); none against 205 and faster (41 + 5 is past 41:
-    // the two styles it costs buy no run).
-    [TestCase(150, 31)] [TestCase(191, 31)] [TestCase(200, 36)] [TestCase(204, 41)] [TestCase(205, 0)] [TestCase(248, 0)]
+    // arithmetic: a 150-180 chaser needs 21, and the floor holds 5 more); none when that passes 41 (the styles it costs
+    // buy no run). #167 F-O: 36 against 192-193, 41 against 194-195, none from 196 (41 + 5 is past 41).
+    [TestCase(150, 31)] [TestCase(191, 31)] [TestCase(192, 36)] [TestCase(194, 41)] [TestCase(196, 0)]
+    [TestCase(200, 0)] [TestCase(204, 0)] [TestCase(205, 0)] [TestCase(248, 0)]
     public void A_close_fight_keeps_a_runs_endurance_and_a_margin(int fastest, int reserve) =>
         Assert.That(PlayerBotDriver.EscapeReserve(fastest, 0, 100, PlayerBotDriver.LongWind), Is.EqualTo(reserve));
 
@@ -1888,21 +1900,27 @@ public sealed class UT_PlayerBotDriver
     // whether no monster but the target is on the bot (TargetAlone). A mutation run read the need at the floor (26 for a
     // 150 chaser, not 21) and TargetAlone always true (a target at 10% or less with an add on the bot released the hold)
     // with every test green: the other R2 test sets the three itself. At regeneration 0, fatigue 100, Long Wind 5.
-    [TestCase(150, new[] { 150 }, new[] { true }, 1, true, null, 31, 21, true)]          // a 150 target alone, a defence
-    [TestCase(150, new[] { 150, 200 }, new[] { true, false }, 2, false, null, 36, 31, false)]   // and a 200 add on it
-    [TestCase(150, new[] { 200 }, new[] { false }, 2, false, null, 36, 31, false)]       // the add only, not the target
-    [TestCase(200, new[] { 150 }, new[] { false }, 1, true, null, 36, 31, false)]        // the target's speed off the bot
-    [TestCase(150, new[] { 150, 150 }, new[] { true, false }, 1, false, null, 31, 21, false)]   // 2 on the bot now
-    [TestCase(150, new[] { 150 }, new[] { true }, 1, false, 29, 31, 21, true)]           // the race under 30 at the kill
-    [TestCase(150, new[] { 150 }, new[] { true }, 1, false, null, 0, 0, true)]           // no close fight
-    [TestCase(205, new[] { 205 }, new[] { true }, 1, true, null, 0, 0, true)]            // 205: no reserve buys a run
+    // #167 F-O: 36 / 31 against a 192 chaser (5 s of sprint with its reach), none against 200, none against a monster
+    // that harms from range.
+    [TestCase(150, new[] { 150 }, new[] { true }, 1, true, null, false, 31, 21, true)]   // a 150 target alone, a defence
+    [TestCase(150, new[] { 150, 192 }, new[] { true, false }, 2, false, null, false, 36, 31, false)]   // and a 192 add
+    [TestCase(150, new[] { 192 }, new[] { false }, 2, false, null, false, 36, 31, false)]   // the add only, not the target
+    [TestCase(192, new[] { 150 }, new[] { false }, 1, true, null, false, 36, 31, false)]    // the target's speed off the bot
+    [TestCase(150, new[] { 150, 150 }, new[] { true, false }, 1, false, null, false, 31, 21, false)]   // 2 on the bot now
+    [TestCase(150, new[] { 150 }, new[] { true }, 1, false, 29, false, 31, 21, true)]    // the race under 30 at the kill
+    [TestCase(150, new[] { 150 }, new[] { true }, 1, false, null, false, 0, 0, true)]    // no close fight
+    [TestCase(205, new[] { 205 }, new[] { true }, 1, true, null, false, 0, 0, true)]     // 205: no reserve buys a run
+    [TestCase(200, new[] { 200 }, new[] { true }, 1, true, null, false, 0, 0, true)]     // #167 F-O: nor at 200
+    [TestCase(194, new[] { 194 }, new[] { true }, 1, true, null, false, 41, 36, true)]   //   41 / 36 at 194
+    [TestCase(150, new[] { 150 }, new[] { true }, 1, true, null, true, 0, 0, true)]      //   ranged: no run starts
     public void The_reserve_read_takes_the_need_and_the_adds_from_the_monsters_on_the_bot(int targetSpeed, int[] speeds,
-        bool[] isTarget, int fightAdds, bool defence, int? leftAtKill, int reserve, int runNeed, bool targetAlone)
+        bool[] isTarget, int fightAdds, bool defence, int? leftAtKill, bool rangedHarm, int reserve, int runNeed,
+        bool targetAlone)
     {
         var onBot = new List<(int Speed, bool IsTarget)>();
         for (int i = 0; i < speeds.Length; i++) onBot.Add((speeds[i], isTarget[i]));
         Assert.That(PlayerBotDriver.ReserveRead(targetSpeed, onBot, fightAdds, defence, leftAtKill, 0, 100,
-            PlayerBotDriver.LongWind), Is.EqualTo((reserve, runNeed, targetAlone)));
+            PlayerBotDriver.LongWind, rangedHarm), Is.EqualTo((reserve, runNeed, targetAlone)));
     }
 
     // Where it runs: ahead of straight away from its chasers (a dot product above 0, so never square to them), out of
@@ -2388,21 +2406,28 @@ public sealed class UT_PlayerBotDriver
     // endurance at the run's end (a refused one's: then); then (#167 E T1) turn=, why a fought one turned (caught,
     // nopoint, blocked or cap; - for none), holds=, its one-second tries that found no point while it held, and speed= and
     // chaserSpeed=, its run speed and the fastest chaser's when it began (an encumbered bot runs under 191; -1 before
-    // they are read).
+    // they are read); then (#167 F-O) sprint=, the seconds its sprint lasts from its endurance at the start
+    // (SprintSeconds; 999: no end; -1: not read), a refusal's too.
     [Test]
     public void A_break_off_line_gives_its_start_and_outcome()
     {
         Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 72, 2, 26, "shook", 6.26, "adds", 9, 41),
             Is.EqualTo("PLAYER_BOT_BREAKOFF bot=Pbotaaaaz level=34 hp=38 end=72 attackers=2 sec=26 outcome=shook rate=6.3 " +
-                "why=adds sprintOff=9 endLeft=41 turn=- holds=0 speed=-1 chaserSpeed=-1"));
+                "why=adds sprintOff=9 endLeft=41 turn=- holds=0 speed=-1 chaserSpeed=-1 sprint=-1"));
         Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 72, 1, 0, "refused", 3.0, "speed", -1, 72,
                 speed: 191, chaserSpeed: 191),
             Is.EqualTo("PLAYER_BOT_BREAKOFF bot=Pbotaaaaz level=34 hp=38 end=72 attackers=1 sec=0 outcome=refused rate=3.0 " +
-                "why=speed sprintOff=-1 endLeft=72 turn=- holds=0 speed=191 chaserSpeed=191"));
+                "why=speed sprintOff=-1 endLeft=72 turn=- holds=0 speed=191 chaserSpeed=191 sprint=-1"));
         Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 72, 2, 12, "fought", 6.26, "adds", 4, 30,
                 "nopoint", 3, 170, 248),
             Is.EqualTo("PLAYER_BOT_BREAKOFF bot=Pbotaaaaz level=34 hp=38 end=72 attackers=2 sec=12 outcome=fought rate=6.3 " +
-                "why=adds sprintOff=4 endLeft=30 turn=nopoint holds=3 speed=170 chaserSpeed=248"));
+                "why=adds sprintOff=4 endLeft=30 turn=nopoint holds=3 speed=170 chaserSpeed=248 sprint=-1"));
+        Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 51, 1, 0, "refused", 3.0, "sprint", -1, 51,
+                speed: 191, chaserSpeed: 200, sprint: 9),
+            Is.EqualTo("PLAYER_BOT_BREAKOFF bot=Pbotaaaaz level=34 hp=38 end=51 attackers=1 sec=0 outcome=refused rate=3.0 " +
+                "why=sprint sprintOff=-1 endLeft=51 turn=- holds=0 speed=191 chaserSpeed=200 sprint=9"));
+        Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 72, 1, 4, "shook", 3.0, "race",
+                sprint: int.MaxValue), Does.EndWith(" sprint=999"), "a sprint that never ends");
     }
 
     // The dropped FIGHT line's adds= (#167 D2): BreaksOffNow returns before Engage folds the attackers in, so the monsters

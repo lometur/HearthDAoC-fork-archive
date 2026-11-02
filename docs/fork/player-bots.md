@@ -186,8 +186,11 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   is above 25% with no damage spell it can pay for breaks off at any health, then rests: it takes no camp or names to
   avoid from that one and doesn't move camp. Only from monsters it can outrun, and only with a sprint whose lead takes
   it out of the fastest one's 200-unit reach: none faster than its run (191), or none as fast as its sprint (248) when
-  its endurance holds the sprint long enough to keep the fastest off it for the 25 s a monster chases. Never from a
-  monster with a snare, stun, mez or damage spell of 1,000 units' range or more. It stops its fight, sprints, and runs
+  its endurance holds the sprint long enough that the fastest one, which last swung as the sprint's lead passed its
+  reach, is still out of its reach 25 s later, when a monster stops chasing: with no Long Wind or regeneration, 31
+  endurance against a monster of speed 192-193, 36 against 194-195, 41 against 196-197, 51 against 200, 61 against
+  205, 91 against 215, and none against 218 or faster. It doesn't run from one it can't outrun: it fights on. Never
+  from a monster with a snare, stun, mez or damage spell of 1,000 units' range or more. It stops its fight, sprints, and runs
   1,500-2,500 units straight away from them to a spot clear of other aggressive monsters that it can walk to, or with
   none, to the spot 1,500 units straight away from them if it can walk there; on again from there while one still chases
   it. Once the nearest chaser that isn't held is 400 units behind (more for one faster than its run: 25 s of what it
@@ -207,13 +210,14 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   units short of it, bars that camp too for 15 minutes.
 - In a close fight (2 or more monsters on it now or earlier in the fight, a defence, the fight after a kill with adds,
   or a fight the race since the first hit on it projects it to end under 30% health) a bot keeps the endurance a sprint
-  away from the fastest monster on it would need, plus 5: 31 against a monster no faster than its run, up to 41 against
-  one of speed 204. Its styles, and for a class that isn't a caster or pet class its damage spells (5 endurance a cast),
-  wait while they would take it under that; a cheaper style that leaves it goes instead. Heals don't wait, nor does a
-  lifetap (a Reaver's Siphons, a Valewalker's Cycle of Life): it heals the bot too. Against a monster of speed 205 or
-  more it keeps none, since no sprint it could keep would outrun it. It waits only while waiting can still buy a run:
-  not once its endurance is under what that sprint needs (21 against a monster of speed 148-181, 26 against 182-197, 31
-  against 198-202), since endurance doesn't come back in a fight, and not while its target, the only monster on it, is
+  away from the fastest monster on it would need, plus 5: 31 against a monster no faster than its run, 36 against one
+  of speed 192-193, 41 against 194-195. Its styles, and for a class that isn't a caster or pet class its damage spells
+  (5 endurance a cast), wait while they would take it under that; a cheaper style that leaves it goes instead. Heals
+  don't wait, nor does a lifetap (a Reaver's Siphons, a Valewalker's Cycle of Life): it heals the bot too. Against a
+  monster of speed 196 or more, or one with a snare, stun, mez or damage spell of 1,000 units' range or more, it keeps
+  none, since no sprint it could keep would outrun it. It waits only while waiting can still buy a run: not once its
+  endurance is under what that sprint needs (16 against a monster slower than 148, 21 against 148-181, 26 against
+  182-191, 31 against 192-193, 36 against 194-195), since endurance doesn't come back in a fight, and not while its target, the only monster on it, is
   at 10% health or less, since a bot never breaks off from a target that low. With another monster on it, it keeps
   waiting there, for the run from that one at the kill. Out of a close fight it styles as before.
 - It releases 10 s after a death, counted from when the server has handled the death, never before: a bow's or a bolt's
@@ -576,11 +580,12 @@ All start `PLAYER_BOT_`:
   250 units, a hit while it held, or as a caster or pet class with power), `blocked` (the same after a blocked step) or
   `cap` (45 s), `-` otherwise; `holds=`, its one-second tries that found no point while it held; `speed=` and
   `chaserSpeed=`, its run speed (191 unencumbered, less when encumbered) and the fastest chaser's when it began (-1
-  before they are read). A break-off that would fire but doesn't logs once a fight as `outcome=refused` with `sec=0` and
+  before they are read); then `sprint=`, the seconds its sprint lasts from its endurance at the start (999: no end; -1
+  before it is read). A break-off that would fire but doesn't logs once a fight as `outcome=refused` with `sec=0` and
   the bot's `hp=`, `end=`, `attackers=` and `rate=` then, and `why=`: `control` (an add's control comes first), `speed`
   (a chaser as fast as its sprint), `sprint` (its sprint too short for the fastest), `ranged` (a chaser that harms from
-  range) or `point` (nowhere to run), with `sprintOff=-1`, `endLeft=` its endurance then and its `speed=` and
-  `chaserSpeed=` (-1 for `control`); it is no break-off, so leave it out of break-off counts. The fight it dropped
+  range) or `point` (nowhere to run), with `sprintOff=-1`, `endLeft=` its endurance then and its `speed=`,
+  `chaserSpeed=` and `sprint=` (-1 for `control`); it is no break-off, so leave it out of break-off counts. The fight it dropped
   (`FIGHT result=dropped breakOff=1`) counts the monsters on the bot then in its `adds=` (never fewer than
   `attackers=`), and with 2 or more and no add seen before, its `addAt=` and `addHp=` are the break-off's;
 - `TURRET`: an Animist's new turret by its target (`step=replant`) or a monster it left because it couldn't plant
