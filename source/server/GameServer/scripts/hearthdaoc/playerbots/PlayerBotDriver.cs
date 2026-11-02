@@ -689,15 +689,7 @@ public static class PlayerBotDriver
         if (BreaksOffNow(state, player, now)) return;                                    //     #167 C2: losing to two
         if (SelfHeal(state, player, now) || SummonPet(state, player, now) || SelfBuff(state, player, now))
             return;                                                                      // 11b. DEATHS.md A6, A5, #167 F8: before a rest
-        bool skipping = state.RestSkipPending || state.FightRestSkip && !state.Engaged;   // #167 F R2: a skip still
-        if (state.RestSkipPending && !RestSkipHolds(state, player))                     //   open; a cast since the
-            (state.RecoverBeforePull, state.RestSkipPending) = (true, false);           //   kill spent what it read,
-        else if (skipping) RefreshTarget(state, player, now);                           //   else the pick (step 14's)
-        if (skipping && state.RecoverBeforePull)                                        //   here; refused, the rest
-        {                                                                               //   from the next think, so
-            state.NextSelfBuffTick = 0;                                                 //   11b's chant reads it
-            return;                                                                     //   (WantedChant's resting)
-        }
+        if (RestSkipStep(state, player, now)) return;                                    //     #167 F R2: a skip still open
         if (state.RecoverBeforePull && Recovered(player)) state.RecoverBeforePull = false;
         bool hit = Attacker(state, player, now, anyHitter: true) != null, liveFight = state.Engaged && state.Target?.IsAlive == true;
         bool incoming = !hit && !liveFight && Incoming(state, player, now) != null;      //    #167 F7: one coming at it too
@@ -4241,6 +4233,21 @@ public static class PlayerBotDriver
         (state.RestSkipPowerNeed, state.RestSkipEnduranceCost) = (powerNeed, enduranceCost);
         state.NextTargetRefreshTick = 0;                                                 // the first pick at once,
         state.NextLootTick = 0;                                                          //   the loot (step 11) before it
+    }
+
+    // #167 F R2: Think's step for a skip still open, after 11b (the review of F: a seam, so its re-check is tested). A
+    // pending skip is re-checked first (RestSkipHolds): a cast since the kill may have spent what it read, and the rest
+    // is owed; else the pick (step 14's) runs here (RefreshTarget, SettleRestSkip). Refused, the rest from the next
+    // think, so 11b's chant reads it (WantedChant's resting): true, Think ends here.
+    private static bool RestSkipStep(PlayerBotState state, GamePlayer player, long now)
+    {
+        bool skipping = state.RestSkipPending || state.FightRestSkip && !state.Engaged;
+        if (state.RestSkipPending && !RestSkipHolds(state, player))
+            (state.RecoverBeforePull, state.RestSkipPending) = (true, false);
+        else if (skipping) RefreshTarget(state, player, now);
+        if (!skipping || !state.RecoverBeforePull) return false;
+        state.NextSelfBuffTick = 0;
+        return true;
     }
 
     // #167 F R2: Think's re-check of a skip still pending: a heal, a summon or a buff since the kill (step 11b) may have

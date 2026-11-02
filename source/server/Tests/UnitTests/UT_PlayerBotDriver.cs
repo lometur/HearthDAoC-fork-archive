@@ -3799,6 +3799,43 @@ public sealed class UT_PlayerBotDriver
         }
     }
 
+    // #167 F R2 (the review of F): Think's skip step (RestSkipStep) re-checks a pending skip first: a heal, summon or buff
+    // since the kill (step 11b) may have spent what it read. At 30% health the skip no longer holds: the rest is owed and
+    // Think ends there, with no pick (the uncrowded green one by the bot would have been kept). Nothing pending: Think
+    // goes on. The calculators swapped: 100 health, no pool, 100 endurance.
+    [Test]
+    public void A_skip_spent_since_the_kill_owes_the_rest_before_any_pick_in_RestSkipStep()
+    {
+        MethodInfo step = typeof(PlayerBotDriver).GetMethod("RestSkipStep", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var calculators = (DOL.GS.PropertyCalc.IPropertyCalculator[])typeof(GameLiving)
+            .GetField("m_propertyCalc", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        eProperty[] fixedOnes = [eProperty.MaxHealth, eProperty.MaxMana, eProperty.Fatigue];
+        DOL.GS.PropertyCalc.IPropertyCalculator[] saved = fixedOnes.Select(p => calculators[(int)p]).ToArray();
+        int[] values = [100, 0, 100];
+        for (int i = 0; i < fixedOnes.Length; i++) calculators[(int)fixedOnes[i]] = new Fixed(values[i]);
+        try
+        {
+            InTheField(new SplitFloorMesh(), new(840_884, 702_153, 8_784), (region, zone, bot) =>
+            {
+                MonsterAt(region, zone, new(840_700, 702_100, 8_700), LevelFor(bot, ConColor.GREEN));
+                typeof(GameLiving).GetField("m_endurance", Hidden)!.SetValue(bot, 100);
+                var idle = new PlayerBotState(bot) { NukesLevel = 39, Nukes = [] };
+                Assert.That((step.Invoke(null, [idle, bot, 10_000L]), idle.Target, idle.RecoverBeforePull),
+                    Is.EqualTo((false, (GameLiving)null, false)), "nothing pending");
+                typeof(GameObject).GetField("m_health", Hidden)!.SetValue(bot, 30);
+                var state = new PlayerBotState(bot)
+                    { NukesLevel = 39, Nukes = [], RestSkipPending = true, RestSkipCon = ConColor.GREEN, NextSelfBuffTick = 99 };
+                Assert.That(step.Invoke(null, [state, bot, 10_000L]), Is.True, "Think ends here");
+                Assert.That((state.Target, state.RecoverBeforePull, state.RestSkipPending, state.NextSelfBuffTick),
+                    Is.EqualTo(((GameLiving)null, true, false, 0L)));
+            });
+        }
+        finally
+        {
+            for (int i = 0; i < fixedOnes.Length; i++) calculators[(int)fixedOnes[i]] = saved[i];
+        }
+    }
+
     // #167 F R2 (the review of F): a new life drops a skip of the last life's (StartLife).
     [Test]
     public void A_new_life_drops_the_rest_skip()
