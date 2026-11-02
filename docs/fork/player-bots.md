@@ -530,7 +530,10 @@ All start `PLAYER_BOT_`:
   left unstyled though it could pay for a style, and `castHeld=`, the thinks the reserve held a damage spell back (-1
   each out of a fight). `FIGHT` then gives `sight=`, the sight checks its target hitting it in contact answered (the
   navmesh's line said no), and `blind=` (1: dropped after 5 s out of sight in contact, fighting neither the bot nor its
-  pet, nor coming at it), and ends with `blindSteps=`, the steps it took toward its target out of sight.
+  pet, nor coming at it), and `blindSteps=`, the steps it took toward its target out of sight. `FIGHT` then gives
+  `healCast=`, the heal requests that began a cast that lasted to the next think, or landed (`heals=` counts requests,
+  which the server may refuse while an interrupt runs), and `healLanded=`, the heals cast; `DEATH` gives `heals=` and
+  the same two (-1 each out of a fight).
   `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `walkout`, `rest`, `kite`, `turret`
   or `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
   after a break-off its `reason=` is `brokeoff`. Either ends with `barred=old` when the death or the break-off came on

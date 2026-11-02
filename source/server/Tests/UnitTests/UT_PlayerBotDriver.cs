@@ -5433,6 +5433,77 @@ public sealed class UT_PlayerBotDriver
         Assert.That(SelfHealName(spells, ready: _ => false), Is.EqualTo("-"));
     }
 
+    // #167 F H1 healCast=: a heal asked for began a cast when the bot casts it at the next think, or cast it since it was
+    // asked: an instant one ends in the Casting phase of the tick it was asked in, after the bot's timer
+    // (GameLoop.cs:149-154), so it lands before the settle (the next think's, or the death line's); a refused one ("You
+    // must wait", SpellHandler.cs:570-585) is neither, and a heal that landed before the request doesn't count for it.
+    [Test]
+    public void A_heal_request_began_a_cast_when_the_bot_casts_it_or_cast_it_since()
+    {
+        Spell heal = Heal(20, 400).Item1, other = Heal(10, 150).Item1;
+        Assert.That(PlayerBotDriver.HealBegan(heal, heal, landedTick: 0, askedAt: 4_000), Is.True);
+        Assert.That(PlayerBotDriver.HealBegan(heal, null, landedTick: 4_000, askedAt: 4_000), Is.True,
+            "an instant heal: landed in the tick it was asked in, before the settle");
+        Assert.That(PlayerBotDriver.HealBegan(heal, null, landedTick: 6_500, askedAt: 4_000), Is.True, "landed since");
+        Assert.That(PlayerBotDriver.HealBegan(heal, null, landedTick: 3_999, askedAt: 4_000), Is.False,
+            "refused: the last heal landed before it");
+        Assert.That(PlayerBotDriver.HealBegan(heal, other, landedTick: 0, askedAt: 4_000), Is.False);
+        Assert.That(PlayerBotDriver.HealBegan(null, heal, landedTick: 4_000, askedAt: 4_000), Is.False);
+    }
+
+    // #167 F H1 healLanded=: a cast the server finished (CastFinished, SpellHandler.cs:1447) counts when it is a heal in
+    // a fight.
+    [Test]
+    public void A_heal_cast_in_a_fight_counts_as_landed()
+    {
+        Assert.That(PlayerBotDriver.CountsHealLanded(Heal(20, 400).Item1, engaged: true), Is.True);
+        Assert.That(PlayerBotDriver.CountsHealLanded(Heal(20, 400).Item1, engaged: false), Is.False, "out of a fight");
+        Assert.That(PlayerBotDriver.CountsHealLanded(Damage("DirectDamage", 20, 90), engaged: true), Is.False);
+        Assert.That(PlayerBotDriver.CountsHealLanded(null, engaged: true), Is.False);
+    }
+
+    // #167 F H1 healLanded=: the CastFinished handler counts a driven bot's heals in a fight, never more than its requests
+    // (a heal asked for out of a fight that lands after the fight opened counts none), ignores anyone else, never throws,
+    // and goes with Stop.
+    [Test]
+    public void The_cast_finished_handler_counts_a_bots_heals_in_a_fight_up_to_its_requests()
+    {
+        FieldInfo instance = typeof(GameEventMgr).GetField("_soleInstance", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var previous = (GameEventMgr)instance.GetValue(null)!;
+        var states = (ConcurrentDictionary<GamePlayer, PlayerBotState>)typeof(PlayerBotDriver)
+            .GetField("_states", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        GamePlayer bot = Player(null), human = Player(null);
+        bot.ObjectState = GameObject.eObjectState.Inactive;                             // Stop leaves the world alone
+        var state = (PlayerBotState)RuntimeHelpers.GetUninitializedObject(typeof(PlayerBotState));
+        Spell heal = Heal(20, 400).Item1;
+        CastingEventArgs Cast(Spell spell) => new(new DOL.GS.Spells.SpellHandler(bot, spell, Mending));
+        try
+        {
+            GameEventMgr.LoadTestDouble(new GameEventMgr());
+            states[bot] = state;
+            GameEventMgr.AddHandler(bot, GameLivingEvent.CastFinished, PlayerBotDriver.OnBotCastFinished);   // as Start adds it
+            state.Engaged = true;
+            Assert.DoesNotThrow(() => PlayerBotDriver.OnBotCastFinished(GameLivingEvent.CastFinished, human, Cast(heal)));
+            Assert.DoesNotThrow(() => PlayerBotDriver.OnBotCastFinished(GameLivingEvent.CastFinished, null, null));
+            Assert.DoesNotThrow(() => PlayerBotDriver.OnBotCastFinished(GameLivingEvent.CastFinished, bot, EventArgs.Empty));
+            Assert.DoesNotThrow(() => PlayerBotDriver.OnBotCastFinished(GameLivingEvent.CastFinished, bot, new CastingEventArgs(null)));
+            GameEventMgr.Notify(GameLivingEvent.CastFinished, bot, Cast(heal));
+            Assert.That(state.FightHealsLanded, Is.Zero, "no request in this fight: asked for before it opened");
+            state.FightHeals = 1;
+            GameEventMgr.Notify(GameLivingEvent.CastFinished, bot, Cast(Damage("DirectDamage", 20, 90)));
+            GameEventMgr.Notify(GameLivingEvent.CastFinished, bot, Cast(heal));
+            GameEventMgr.Notify(GameLivingEvent.CastFinished, bot, Cast(heal));
+            Assert.That(state.FightHealsLanded, Is.EqualTo(1), "one landed per request");
+            PlayerBotDriver.Stop(bot);
+            Assert.That(GameEventMgr.NumObjectHandlers, Is.Zero, "Stop removes the handler Start added");
+        }
+        finally
+        {
+            states.TryRemove(bot, out _);
+            GameEventMgr.LoadTestDouble(previous);
+        }
+    }
+
     // The nominal cost, before focus and the like: a negative power is a percent of the pool (SpellHandler.cs:1207-1213).
     [TestCase(200, 50, 50, true)] [TestCase(200, 49, 50, false)] [TestCase(200, 50, -25, true)] [TestCase(200, 49, -25, false)]
     [TestCase(0, 0, 0, true)]
@@ -5964,7 +6035,9 @@ public sealed class UT_PlayerBotDriver
     // target; then (#167 E-L) raceLeft=, the race's projection of its target's health at its death, at its first think
     // under 40% with a read (-999: none); then (#167 E-R) endStart= and end=, its endurance at the first think and at
     // the line, styleHeld= and castHeld=, the style choices and the thinks that held one back for a run's reserve; then
-    // (#167 E M2) sight= and blind=, and (#167 E R1) blindSteps=, its steps in toward the target out of sight.
+    // (#167 E M2) sight= and blind=, and (#167 E R1) blindSteps=, its steps in toward the target out of sight; then (#167
+    // F H1) healCast=, the heal requests that began a cast that lasted to the next think or landed, and healLanded=, the
+    // heals cast.
     [Test]
     public void FightFormat()
     {
@@ -5973,13 +6046,14 @@ public sealed class UT_PlayerBotDriver
                 Controls: 2, Kites: 1, CtlBroken: 1, AddControls: 1, AddAt: 6, AddHp: 71, BreakOff: true, EngageDistance: 1_450,
                 Crowd: 1, HeldSeconds: 7, CtlLanded: 1, CtlFailed: 1, HpAtReach: 92, TargetHpAtReach: 64, Rate: 4.26, WouldBreak: 38,
                 Walk: PlayerBotWalk.Hunt, KiteNone: (1, 0, 2, 3), Dots: 2, KillingQuickcast: true, TargetMezzes: 1,
-                RaceLeft: 22, EndStart: 85, End: 31, StylesHeld: 3, CastsHeld: 2, Sight: 4, Blind: true, BlindSteps: 2)),
+                RaceLeft: 22, EndStart: 85, End: 31, StylesHeld: 3, CastsHeld: 2, Sight: 4, Blind: true, BlindSteps: 2,
+                HealCasts: 1, HealsLanded: 1)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbotaaaac level=40 target=\"widow claw\" targetLevel=40 con=YELLOW from=pull result=kill " +
                        "startHp=100 endHp=38 startMana=100 endMana=12 sec=21 adds=1 swings=9 notVisible=2 casts=4 lifeKills=0 rests=0 " +
                        "pet=alive heals=2 qc=1 buffs=3 petCasts=2 waits=5 ctl=2 kites=1 ctlBroken=1 addCtl=1 addAt=6 addHp=71 " +
                        "breakOff=1 engageDist=1450 crowd=1 heldSec=7 ctlLanded=1 ctlFailed=1 hpAtReach=92 tHpAtReach=64 rate=4.3 " +
                        "wouldBreak=38 walk=hunt kiteNone=1:0:2:3 dots=2 qcKill=1 ctlMez=1 raceLeft=22 endStart=85 end=31 " +
-                       "styleHeld=3 castHeld=2 sight=4 blind=1 blindSteps=2"));
+                       "styleHeld=3 castHeld=2 sight=4 blind=1 blindSteps=2 healCast=1 healLanded=1"));
         Assert.That(PlayerBotDriverReport.FormatFight(new PlayerBotFight("Pbothaaab", 43, "empyrean guardian", 36, ConColor.BLUE, true,
                 false, 64, 51, 100, 100, 7, 2, 3, 0, 0, 3, 1, Rate: -0.04, Walk: PlayerBotWalk.BreakOff)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbothaaab level=43 target=\"empyrean guardian\" targetLevel=36 con=BLUE from=defence " +
@@ -5987,7 +6061,8 @@ public sealed class UT_PlayerBotDriver
                        "lifeKills=3 rests=1 pet=none heals=0 qc=0 buffs=0 petCasts=0 waits=0 ctl=0 kites=0 ctlBroken=0 addCtl=0 " +
                        "addAt=-1 addHp=-1 breakOff=0 engageDist=-1 crowd=-1 heldSec=0 ctlLanded=0 ctlFailed=0 hpAtReach=-1 " +
                        "tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=breakoff kiteNone=0:0:0:0 dots=0 qcKill=0 ctlMez=0 " +
-                       "raceLeft=-999 endStart=-1 end=-1 styleHeld=0 castHeld=0 sight=0 blind=0 blindSteps=0"),
+                       "raceLeft=-999 endStart=-1 end=-1 styleHeld=0 castHeld=0 sight=0 blind=0 blindSteps=0 healCast=0 " +
+                       "healLanded=0"),
             "a gain under 0.05 a second: 0.0, not -0.0");
     }
 
@@ -6982,7 +7057,7 @@ public sealed class UT_PlayerBotDriver
     // fight), rate= at the death, walk=, the fight's (FIGHT's) or, out of a fight, the last think's alive, and end=, the
     // endurance; then (#167 D8) FIGHT's kiteNone=, (#167 E C1) dots=, (#167 E C2b) qcKill= and (#167 E C4) ctlMez= (-1
     // out of a fight), and (#167 E-L) raceLeft= (-999 out of a fight), and (#167 E-R) styleHeld= and castHeld= (-1 out
-    // of a fight).
+    // of a fight); then (#167 F H1) FIGHT's heals=, healCast= and healLanded= (-1 each out of a fight).
     [Test]
     public void DeathDetailFormat()
     {
@@ -6991,13 +7066,13 @@ public sealed class UT_PlayerBotDriver
                 Controls: 2, Kites: 1, Casts: 4, Quickcast: 1, Waits: 3, CtlBroken: 1, AddControls: 1, AddAt: 6, AddHp: 71,
                 EngageDistance: 1_450, HeldSeconds: 5, CtlLanded: 1, CtlFailed: 0, HpAtReach: 88, TargetHpAtReach: 90, Rate: 12.5,
                 WouldBreak: 52, Walk: PlayerBotWalk.Anchor, Endurance: 64, KiteNone: (0, 2, 1, 0), Dots: 1, KillingQuickcast: 1,
-                TargetMezzes: 1, RaceLeft: 35, StylesHeld: 3, CastsHeld: 1)),
+                TargetMezzes: 1, RaceLeft: 35, StylesHeld: 3, CastsHeld: 1, Heals: 2, HealCasts: 1, HealsLanded: 0)),
             Is.EqualTo("activity=Fighting startHp=62 fightSec=14 targetHp=71 from=pull adds=2 lifeKills=3 rests=0 sinceKillSec=40 " +
                        "mana=100 swings=6 notVisible=1 killer=\"widow claw\" killerLevel=40 killerIsTarget=True fromBind=748 " +
                        "avoided=2 again=True sinceRelease=42 ill=True ctl=2 kites=1 casts=4 qc=1 waits=3 ctlBroken=1 addCtl=1 " +
                        "addAt=6 addHp=71 breakOff=0 engageDist=1450 heldSec=5 ctlLanded=1 ctlFailed=0 hpAtReach=88 tHpAtReach=90 " +
                        "rate=12.5 wouldBreak=52 walk=anchor end=64 kiteNone=0:2:1:0 dots=1 qcKill=1 ctlMez=1 raceLeft=35 " +
-                       "styleHeld=3 castHeld=1"));
+                       "styleHeld=3 castHeld=1 heals=2 healCast=1 healLanded=0"));
         // Out of a fight, no target, no kill this life, no killer named by the Dying event, the bind in another region.
         Assert.That(PlayerBotDriverReport.FormatDeathDetail(new PlayerBotDeathDetail(PlayerBotActivity.Hunting, -1, -1, -1, true,
                 -1, 0, 2, -1, 37, -1, -1, null, 0, false, -1, BreakOff: true, Rate: 3, Walk: PlayerBotWalk.Clear, Endurance: 100)),
@@ -7006,7 +7081,7 @@ public sealed class UT_PlayerBotDriver
                        "again=False sinceRelease=-1 ill=False ctl=-1 kites=-1 casts=-1 qc=-1 waits=-1 ctlBroken=-1 addCtl=-1 " +
                        "addAt=-1 addHp=-1 breakOff=1 engageDist=-1 heldSec=-1 ctlLanded=-1 ctlFailed=-1 hpAtReach=-1 tHpAtReach=-1 " +
                        "rate=3.0 wouldBreak=-1 walk=clear end=100 kiteNone=-1:-1:-1:-1 dots=-1 qcKill=-1 ctlMez=-1 " +
-                       "raceLeft=-999 styleHeld=-1 castHeld=-1"),
+                       "raceLeft=-999 styleHeld=-1 castHeld=-1 heals=-1 healCast=-1 healLanded=-1"),
             "died on a break-off's run: out of a fight (the dropped one's FIGHT has it)");
     }
 
@@ -7043,7 +7118,7 @@ public sealed class UT_PlayerBotDriver
             "killerLevel=40 killerIsTarget=True fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False ctl=-1 kites=-1 casts=-1 " +
             "qc=-1 waits=-1 ctlBroken=-1 addCtl=-1 addAt=-1 addHp=-1 breakOff=0 engageDist=-1 heldSec=-1 ctlLanded=-1 ctlFailed=-1 " +
             "hpAtReach=-1 tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=none end=-1 kiteNone=-1:-1:-1:-1 dots=-1 qcKill=-1 " +
-            "ctlMez=-1 raceLeft=-999 styleHeld=-1 castHeld=-1"));
+            "ctlMez=-1 raceLeft=-999 styleHeld=-1 castHeld=-1 heals=-1 healCast=-1 healLanded=-1"));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, add, target),
             Does.Contain(" killer=\"a wolf\" killerLevel=38 killerIsTarget=False fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False "));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, null, null),

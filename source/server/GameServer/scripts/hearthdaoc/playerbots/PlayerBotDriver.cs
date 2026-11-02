@@ -206,6 +206,11 @@ public sealed class PlayerBotState
     public bool EngagePet;                                       // PLAYER_BOT_FIGHT pet=, heals= and qc=: a living pet at
     public int FightHeals;                                       //   the fight's first think, its heals on itself since,
     public bool FightQuickcast;                                  //   and a cast with Quickcast on
+    public int FightHealCasts, FightHealsLanded;                 // #167 F H1: FIGHT and DEATH healCast= and healLanded=:
+    public (Spell Spell, long At) PendingHeal;                   //   the heal requests that began a cast (SettleHeal, at the
+    public long HealLandedTick;                                  //   next think or the death's line) and the heals cast
+                                                                 //   (OnBotCastFinished), the request awaited, and when a
+                                                                 //   heal last landed
     public int EngageBuffs, FightPetCasts, FightWaits;           // #167 FIGHT buffs=, petCasts= and waits=
     public long SitSince;                                        // #167 PLAYER_BOT_REST: when the bot sat down, 0 standing
     public (string Head, PlayerBotDeathDetail Detail, GameObject Target)? PendingDeath;   // a DEATH line awaiting Dying (AwaitsDying)
@@ -469,6 +474,7 @@ public static class PlayerBotDriver
         if (!_states.TryAdd(player, state))
             return true;
         GameEventMgr.AddHandler(player, GameLivingEvent.Dying, OnBotDying);   // the DEATH line's killer; Stop removes it
+        GameEventMgr.AddHandler(player, GameLivingEvent.CastFinished, OnBotCastFinished);   // #167 F H1 healLanded=
         if (player.Client is HeadlessClient headless)
             headless.HeartbeatEnabled = false;                  // the mover's IdleBroadcast takes over
         player.CurrentSpeed = 0;
@@ -487,6 +493,7 @@ public static class PlayerBotDriver
     {
         if (player == null || !_states.TryRemove(player, out PlayerBotState state)) return;
         GameEventMgr.RemoveHandler(player, GameLivingEvent.Dying, OnBotDying);
+        GameEventMgr.RemoveHandler(player, GameLivingEvent.CastFinished, OnBotCastFinished);
         state.Stopped = true;
         state.Task = null;
         state.Timer?.Stop();
@@ -573,6 +580,7 @@ public static class PlayerBotDriver
         state.DeathRecorded = false;
         (state.ReleaseAskedAt, state.ReleaseTries) = (0, 0);                             //    #167 D7: alive, the release took
         state.Attackers = player.attackComponent.AttackerTracker.Count;                 //    Die clears it (GameLiving.cs:2050)
+        SettleHeal(state, player);                                                       //    #167 F H1 healCast=
         if (state.Engaged) state.FightAdds = Math.Max(state.FightAdds, state.Attackers);   //    #167 D2: adds= on a think
                                                                                          //    Engage doesn't reach too
         PlayerBotWake.OnThink(state, player, now);                                       // 6b. the #137 lever's wakes
@@ -1917,6 +1925,7 @@ public static class PlayerBotDriver
         state.EngageHealth = health;
         state.EngageMana = mana;
         state.FightAdds = state.Swings = state.NotVisible = state.FightCasts = state.FightHeals = 0;
+        (state.FightHealCasts, state.FightHealsLanded, state.PendingHeal) = (0, 0, default);   // #167 F H1
         state.FightPetCasts = state.FightWaits = state.FightControls = state.FightKites = state.FightCtlBroken = 0;
         state.FightKiteNone = default;                                              // #167 D8 kiteNone=
         state.FightDots = 0;                                                        // #167 E C1 dots=
@@ -3461,6 +3470,42 @@ public static class PlayerBotDriver
     {
         if (sender is GamePlayer player && StateOf(player) is PlayerBotState state && args is DyingEventArgs dying)
             state.Killer = dying.Killer;
+    }
+
+    /// <summary>#167 F H1 healLanded=: the heals the bot cast, from the server's CastFinished (SpellHandler.cs:1447, in
+    /// the Casting phase after the cast's StartSpell: the heal took effect; one refused or broken in its first half,
+    /// SpellHandler.cs:332-356, 570-585, never gets there), never more than the fight's requests (a heal asked for out of
+    /// a fight that lands after the fight opened counts none). Never throws: any sender but a driven bot is ignored.
+    /// Start adds it, Stop removes it.</summary>
+    public static void OnBotCastFinished(DOLEvent e, object sender, EventArgs args)
+    {
+        if (sender is not GamePlayer player || StateOf(player) is not PlayerBotState state || args is not CastingEventArgs cast)
+            return;
+        Spell spell = cast.SpellHandler?.Spell;
+        if (spell?.SpellType is eSpellType.Heal) state.HealLandedTick = GameLoop.GameLoopTime;
+        if (CountsHealLanded(spell, state.Engaged) && state.FightHealsLanded < state.FightHeals) state.FightHealsLanded++;
+    }
+
+    /// <summary>#167 F H1 healLanded=: a finished cast counts when it is a heal and the bot is in a fight (the bot casts
+    /// heals only on itself, SelfHeal; out of a fight a heal shows as REST why=heal).</summary>
+    public static bool CountsHealLanded(Spell spell, bool engaged) => engaged && spell?.SpellType is eSpellType.Heal;
+
+    /// <summary>#167 F H1 healCast=: a heal asked for (at askedAt) began a cast: the bot casts it now (casting: the casting
+    /// component's spell, CastingComponent.cs:29; the request becomes it in the Casting phase of the tick it was asked
+    /// in) or a heal landed since it was asked (landedTick, at or after askedAt: an instant one ends in that same phase,
+    /// after the bot's timer, GameLoop.cs:149-154, so before the settle). A refused one (SpellHandler.cs:570-585) is
+    /// neither; so is one broken within the think (no spell cast, none landed).</summary>
+    public static bool HealBegan(Spell asked, Spell casting, long landedTick, long askedAt) =>
+        asked != null && (landedTick >= askedAt || casting?.ID == asked.ID);
+
+    // #167 F H1 healCast=: the heal asked for on the last think (PendingHeal), settled at this think's start, or before a
+    // death's line (ReportDeath: an instant heal landed in the death's tick is counted there). Settles once.
+    private static void SettleHeal(PlayerBotState state, GamePlayer player)
+    {
+        if (state.PendingHeal.Spell is not Spell asked) return;
+        if (HealBegan(asked, player.castingComponent?.SpellHandler?.Spell, state.HealLandedTick, state.PendingHeal.At))
+            state.FightHealCasts++;
+        state.PendingHeal = default;
     }
 
     /// <summary>DEATH again= (#167 F4): a death with no kill since the bot's last release (releasedAt, 0 with none this
@@ -5156,6 +5201,7 @@ public static class PlayerBotDriver
     // this life's kills and sits, the killer the Dying event named, and the distance from the bind.
     private static void ReportDeath(PlayerBotState state, GamePlayer player, long now, PlayerBotActivity last)
     {
+        SettleHeal(state, player);                            // #167 F H1: a heal landed in the death's tick counts
         if (!Log.IsInfoEnabled) return;
         GameLiving target = state.Target;
         string fight = target == null ? "target=none" :
@@ -5187,7 +5233,9 @@ public static class PlayerBotDriver
             inFight ? (state.FightKillingQuickcast ? 1 : 0) : -1,                         // #167 E C2b qcKill=,
             inFight ? state.FightTargetMezzes : -1,                                       // #167 E C4 ctlMez=,
             inFight ? state.FightRaceLeft : NoRace,                                       // #167 E-L raceLeft=,
-            inFight ? state.FightStylesHeld : -1, inFight ? state.FightCastsHeld : -1);   // #167 E-R as FIGHT's
+            inFight ? state.FightStylesHeld : -1, inFight ? state.FightCastsHeld : -1,    // #167 E-R as FIGHT's
+            inFight ? state.FightHeals : -1, inFight ? state.FightHealCasts : -1,         // #167 F H1 heals=, healCast=
+            inFight ? state.FightHealsLanded : -1);                                       //   and healLanded=
         string head = $"PLAYER_BOT_DEATH bot={player.Name} level={player.Level} at=({player.X},{player.Y},{player.Z}) " +
                       $"zone={player.CurrentZone?.ID} {fight} attackers={state.Attackers} deathSteps={state.DeathSafetySteps} " +
                       $"aliveSec={(now - state.AliveSince) / 1000} task={state.Task != null}";
@@ -5263,7 +5311,8 @@ public static class PlayerBotDriver
             state.FightKiteNone, state.FightDots, state.FightKillingQuickcast,          // #167 D8, E C1, E C2b,
             state.FightTargetMezzes, state.FightRaceLeft, state.EngageEndurance,       //   E C4, E-L, E-R
             player.EndurancePercent, state.FightStylesHeld, state.FightCastsHeld,
-            state.FightSight, state.FightBlind, state.FightBlindSteps)));               // #167 E M2, R1
+            state.FightSight, state.FightBlind, state.FightBlindSteps,                  // #167 E M2, R1
+            state.FightHealCasts, state.FightHealsLanded)));                            // #167 F H1
     }
 
     // APP:585-624, changed: every 10 s, no inventory count, no saves; after 15 minutes with no progress, back to the
@@ -5826,7 +5875,11 @@ public static class PlayerBotDriver
             !WantsSelfHeal(player.HealthPercent, player.IsCasting, now, nextTry, inFight, mana, CostPercent(player.MaxMana, heal.Power)) ||
             !CastOnSelf(state, player, now, heal, line, "heal"))
             return false;
-        if (state.Engaged) state.FightHeals++;
+        if (state.Engaged)
+        {
+            state.FightHeals++;
+            state.PendingHeal = (heal, now);                                            // #167 F H1 healCast=: SettleHeal
+        }
         return true;
     }
 
