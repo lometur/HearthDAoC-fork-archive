@@ -157,24 +157,26 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   Reaver's Surge) goes up in a hard fight instead, at the start of one against a yellow or harder monster, or when a
   second monster comes on it; one with a cast time (a Spiritmaster's Benison) not at all yet, and a regeneration one
   (a Shaman's Frigg's Cure) only while what it regenerates is short of where the rest stops.
-- It picks a monster with no aggressive neighbours, none within reach of the target, of its walk in, or of the spot
-  it would fight from (its spell's range for a caster, else melee). Where none within 2,600 units is that clear, it
-  takes the least crowded within 5,000, a melee or archer bot only a pull whose crowd (those potential adds round the
-  target and along the walk in) fits the target's con: 3 at a green, 1 at a blue, none at a yellow or harder, nor one
-  with an aggressive monster over its cap among those adds. A pull over that is refused, not taken, and counts as
-  passed over, so after 30 s of searches with no pull it plans a new camp, which leaves out for 10 minutes the camps
-  within 1,400 units of the pulls it refused. With no camp to go to it hunts where it is, its limits off there for 5
-  minutes, as they are at such a barred camp when only that is left to take. It searches again every 2 s as it walks
-  in, so a pick whose crowd rises past its limit on the walk in is dropped. A melee, archer or caster bot's pick also
-  knows its own kills come back: the spawn spot of one of its last 5 kills that would aggro, from 50 s to 150 s after
-  the kill while that monster is still dead, counts as a potential add by the target or where the bot would stand (not
-  on its walk in: it often stands on that spot), so the 2,600-unit ring takes no such target and the 5,000-unit ring
-  ranks it as more crowded; it never refuses a pull for one, nor counts one in `crowd=`. After deaths it moves to
-  an easier camp. A camp it plans is none that an aggressive monster over the plan's cap reaches (its aggro range and
-  200 units, each monster's own); where none fits and it takes the safest camps as its fallback, it tries first those
-  that no aggressive monster over their con reaches, if they lie no more than 10,000 units farther than the nearest.
-  It avoids what killed it for 15 minutes. Training dummies are no monsters: it neither plans camps at them nor pulls
-  them.
+- It picks a monster with no aggressive neighbours, none within reach of the target, of its walk in, or of the spot it
+  would fight from (its spell's range for a caster, else melee). Where none within 2,600 units is that clear, it takes
+  the least crowded within 5,000, a melee or archer bot only a pull whose crowd (those potential adds round the target
+  and along the walk in) fits the target's con: 3 at a green, 1 at a blue, none at a yellow or harder, nor one with an
+  aggressive monster over its cap among those adds. A pull over that is refused, not taken, and counts as passed over,
+  so after 30 s of searches with no pull it plans a new camp, which leaves out for 10 minutes the camps within 1,400
+  units of the pulls it refused. With no camp to go to it hunts where it is, its limits off there for 5 minutes, as
+  they are at such a barred camp when only that is left to take. It searches again every 2 s as it walks in, so a pick
+  whose crowd rises past its limit on the walk in is dropped. For a new target more than 1,000 units away a melee or
+  archer bot also counts those potential adds along the navmesh corridor it will walk, not the straight line, at most
+  once every 4 s; that count is only logged (`pathCrowd=`): it refuses nothing for it yet. A melee, archer or caster
+  bot's pick also knows its own kills come back: the spawn spot of one of its last 5 kills that would aggro, from 50 s
+  to 150 s after the kill while that monster is still dead, counts as a potential add by the target or where the bot
+  would stand (not on its walk in: it often stands on that spot), so the 2,600-unit ring takes no such target and the
+  5,000-unit ring ranks it as more crowded; it never refuses a pull for one, nor counts one in `crowd=`. After deaths
+  it moves to an easier camp. A camp it plans is none that an aggressive monster over the plan's cap reaches (its
+  aggro range and 200 units, each monster's own); where none fits and it takes the safest camps as its fallback, it
+  tries first those that no aggressive monster over their con reaches, if they lie no more than 10,000 units farther
+  than the nearest. It avoids what killed it for 15 minutes. Training dummies are no monsters: it neither plans camps
+  at them nor pulls them.
 - It swings and casts only at a target in sight, by the navmesh's line; a target hitting it in contact (within 250
   units) counts as in sight though that line says not, as a player sees what hits it. A target out of sight that
   fights neither it nor its pet, nor has the bot as its target (coming at it round an obstacle), is walked toward 300
@@ -588,7 +590,12 @@ All start `PLAYER_BOT_`:
   none), and `lifted=` (1: a melee or archer bot's pick made while its crowd limits were off). Both then give `over=`,
   of the pick's `crowd=` the aggressive monsters over the bot's cap (-1 for a defence or a monster coming at it, and on
   `DEATH` with no target), and `due=`, its own kills' spawn spots coming due by the target or where it would stand at
-  the pick (-1 as `over=`, and for a healer or pet class, which reads none).
+  the pick (-1 as `over=`, and for a healer or pet class, which reads none). Both then give `seen=`, for a target that
+  was not the rings' pick (a defence, or a monster coming at it): `counted` (among the potential adds the pick it
+  replaced counted), `scanned` (that search had it, but its reach covered neither the target nor the straight walk in)
+  or `unseen` (that search never had it), `-` for a rings' pick; and `pathCrowd=`, the potential adds along the
+  corridor of the pick's walk in, counted for a melee or archer bot's new target over 1,000 units away, at most once
+  every 4 s (-1: not counted, or no corridor; logged only).
   `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `walkout`, `rest`, `kite`, `turret`
   or `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
   after a break-off its `reason=` is `brokeoff`. Either ends with `barred=old` when the death or the break-off came on

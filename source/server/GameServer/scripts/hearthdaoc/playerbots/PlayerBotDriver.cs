@@ -306,6 +306,10 @@ public sealed class PlayerBotState
                                                                  //   crowding (crowd=, FindWithin's; -1 for another pick);
     public bool PickLifted;                                      //   #167 F P1: FIGHT lifted=, a pick under a crowd lift
     public int PickOver = -1;                                    //   #167 F P1b: FIGHT and DEATH over=, its adds over the cap
+    public readonly HashSet<GameNPC> PickCounted = new();        // #167 F P4: the adds the last rings' pick counted for its
+    public string PickSeen = "-";                                //   target (ReadPick; cleared as its target ends), seen=
+    public int PickPathCrowd = -1;                               //   (SeenAtPick) for one not the rings', pathCrowd= (log
+    public long NextPathCheckTick;                               //   only), and the next corridor check's earliest
     public byte SitHealth, SitMana;                              //   REST hp= and mp= when it sat, and respawn=: the spawn
     public int RestRespawns;                                     //   spots the rest spot was read against (WalksToRestSpot)
     public int SitBlocked;                                       // #167 D10: REST blocked= and inReach= as it sat (Rest)
@@ -415,6 +419,8 @@ public static class PlayerBotDriver
     public const int RespawnDueToMilliseconds = 150_000;      //   after the kill (the add peak is 78-90 s; DueAfterKill);
     public const int RespawnDueWatchMilliseconds = 600_000;   //   the kills' monsters kept this long, the last 5
     public const int RespawnDueCount = 5;                     //   (RememberRespawn)
+    public const int PathCheckMinWalk = 1_000;                // #167 F P4: a walk in longer than this is counted along its
+    public const int PathCheckMilliseconds = 4_000;           //   corridor, at most one count per bot this often (log only)
     public const int CrowdLiftMilliseconds = 300_000;         // #167 F P1: the crowd limits off this long where no clean
                                                               //   camp is left (TakeCamp, FallBackInPlace)
     public const int CrowdBarMilliseconds = 600_000;          //   a capped plan's crowd bar kept this long (the review:
@@ -530,6 +536,7 @@ public static class PlayerBotDriver
     [ThreadStatic] private static List<GameNPC> _refused;                                      //   limits and refusals,
     [ThreadStatic] private static HashSet<GameNPC> _overCap;                                   //   and P1b's adds over the cap
     [ThreadStatic] private static List<(GameNPC Npc, Vector3 At, int AggroRange)> _due;        // #167 F P2: FindWithin's
+    [ThreadStatic] private static List<Vector3> _route;                                        // #167 F P4: PathCrowding's
 
     public static IEnumerable<PlayerBotState> States => _states.Values;
     public static bool IsDriven(GamePlayer player) => player != null && _states.ContainsKey(player);
@@ -1556,6 +1563,7 @@ public static class PlayerBotDriver
         state.KilledWithAdds = state.Engaged && dead && state.FightAdds >= 2;   // #167 C2: the second-monster case
         state.Target = null;
         state.Engaged = false;
+        state.PickCounted.Clear();                                // #167 F P4: seen='s, with its target
     }
 
     /// <summary>SettleTarget's idle clock (RoamingSince): a target that died stops it, its camp not outgrown, engaged or
@@ -1575,6 +1583,7 @@ public static class PlayerBotDriver
         state.Target = null;
         state.Engaged = false;
         state.KiteGoal = null;                                                          // #167 F11
+        state.PickCounted.Clear();                                                      // #167 F P4
     }
 
     private static void RefreshTarget(PlayerBotState state, GamePlayer player, long now)
@@ -1599,6 +1608,11 @@ public static class PlayerBotDriver
     // and its damage spell. #167 F: the rings' pick's reading (PlayerBotPickReading; None for another pick).
     private static void TakeTarget(PlayerBotState state, GamePlayer player, GameNPC found, PlayerBotPickReading reading)
     {
+        state.PickSeen = found != null && reading.Crowd < 0                               // #167 F P4: seen= for a pick
+            ? SeenAtPick(state.Target != null && state.PickCounted.Contains(found),       //   not the rings', while the
+                state.SearchAdds.Contains(found)) : "-";                                  //   pick it was read for (or
+        if (found == null) state.PickCounted.Clear();                                     //   one after it) is held
+        state.PickPathCrowd = reading.PathCrowd;                                           //   pathCrowd=
         state.Target = found;
         state.FromDefence = found != null && IsAttacking(player, found);                  // FIGHT and DEATH from=
         (state.PickCrowd, state.PickLifted) = (reading.Crowd, reading.Lifted);            //   crowd= (#167), lifted= (F P1)
@@ -1637,8 +1651,9 @@ public static class PlayerBotDriver
         ConColor cap = Cap(state, now), natural = MaximumTargetCon(1, 0);
         bool leashed = Leashed(state, player);
         PlayerBotRole role = RoleOf(player.CharacterClass.ID);
-        bool limited = radius >= SearchRadius && LimitsCrowd(role, state.CrowdLiftedUntil, now);   // #167 F P1: the wider
-        List<(GameNPC Npc, Vector3 At, int Score)> candidates = _candidates ??= new();                //   ring only
+        bool roleLimited = LimitsCrowd(role, state.CrowdLiftedUntil, now);              // #167 F P1, P4
+        bool limited = radius >= SearchRadius && roleLimited;                           // #167 F P1: the wider ring only
+        List<(GameNPC Npc, Vector3 At, int Score)> candidates = _candidates ??= new();
         List<(GameNPC Npc, Vector3 At, int AggroRange)> adds = _adds ??= new();
         List<int> limits = _limits ??= new();
         List<GameNPC> refused = _refused ??= new();
@@ -1681,9 +1696,19 @@ public static class PlayerBotDriver
                 if (DueAfterKill(killedAt, now, dead.IsAlive)) due.Add((dead, spawn, reach));
         GameNPC best = PickUncrowded(candidates, adds, uncrowdedOnly: radius < SearchRadius, from, stop,   // #167 C5: the
             out int crowd, limited ? limits : null, overCap, refused, due);     //   walk in too; crowd= its count; #167 F
-        reading = best == null ? PlayerBotPickReading.None                      //   P1: the limits, P1b: over the cap,
-            : ReadPick(best, from, stop, adds, overCap, crowd, CrowdLifted(role, state.CrowdLiftedUntil, now),   //   P2:
-                readsDue ? due : null);                                         //   the due ones rank
+        reading = PlayerBotPickReading.None;                                    //   P1: the limits, P1b: over the cap,
+        if (best != null)                                                       //   P2: the due ones rank
+        {
+            reading = ReadPick(state, best, from, stop, adds, overCap, crowd, CrowdLifted(role, state.CrowdLiftedUntil, now),
+                readsDue ? due : null);
+            Vector3 at = new(best.X, best.Y, best.Z);
+            if (PathCheckDue(roleLimited, best != state.Target, Vector3.Distance(from, at), now, state.NextPathCheckTick))
+            {
+                state.NextPathCheckTick = now + PathCheckMilliseconds;                  // #167 F P4: the corridor's walk
+                if (PathCrowding(player, best, at, from, StandPoint(from, at, stop), adds, overCap) is (int count, _))   //   in,
+                    reading = reading with { PathCrowd = count };                       //   once per pick: logged only
+            }                                                                           //   (BATCH-F: it refuses nothing)
+        }
         state.SearchAdds.Clear();                                                       // #167 F7: the rest spot's, read
         foreach ((GameNPC add, _, _) in adds) state.SearchAdds.Add(add);                //   live (WalksToRestSpot)
         candidates.Clear();                                                             // no other monster held past the
@@ -1706,14 +1731,39 @@ public static class PlayerBotDriver
 
     // #167 F: the pick's reading of the target it took (PlayerBotPickReading): its live crowding (PickUncrowded's), and
     // (P1b) the over-cap adds among it, read once for the one taken; lifted= (P1); (P2) its kills' spots coming due by
-    // it or its stand point (null: a role that reads none, due=-1).
-    private static PlayerBotPickReading ReadPick(GameNPC best, Vector3 from, int stop,
+    // it or its stand point (null: a role that reads none, due=-1); (P4) the adds it counted (PickCounted, seen=).
+    private static PlayerBotPickReading ReadPick(PlayerBotState state, GameNPC best, Vector3 from, int stop,
         List<(GameNPC Npc, Vector3 At, int AggroRange)> adds, HashSet<GameNPC> overCap, int crowd, bool lifted,
         List<(GameNPC Npc, Vector3 At, int AggroRange)> due)
     {
         Vector3 at = new(best.X, best.Y, best.Z), stand = StandPoint(from, at, stop);
-        return new(crowd, CrowdingAlong(best, at, from, stand, adds, overCap).Over,
-            due == null ? -1 : CrowdingAt(at, stand, due), -1, lifted);
+        int over = 0;
+        state.PickCounted.Clear();
+        foreach ((GameNPC npc, Vector3 position, int aggroRange) in adds)
+        {
+            if (npc == best || !Covers(position, aggroRange, at, from, stand)) continue;
+            state.PickCounted.Add(npc);
+            if (overCap.Contains(npc)) over++;
+        }
+        return new(crowd, over, due == null ? -1 : CrowdingAt(at, stand, due), -1, lifted);
+    }
+
+    // #167 F P4: the pick's walk in along the corridor the mover walks (TryBuildCorridor with layers, as the mover's,
+    // PlayerBotPathMover.cs:191): CrowdingAlongPath over it. Null with no navmesh or no corridor (the walk then finds
+    // out, as before). One Detour corridor query; PathCheckDue bounds the rate.
+    private static (int Count, int Over)? PathCrowding(GamePlayer player, GameNPC target, Vector3 at, Vector3 from,
+        Vector3 stand, IReadOnlyList<(GameNPC Npc, Vector3 At, int AggroRange)> adds, ISet<GameNPC> overCap)
+    {
+        IPathfindingMgr nav = PathfindingProvider.Instance;
+        Zone zone = player.CurrentZone;
+        if (zone == null || !nav.HasNavmesh(zone) ||
+            !PlayerTravelPath.TryBuildCorridor(nav, zone, from, stand, out List<WrappedPathfindingNode> route, layers: true))
+            return null;
+        List<Vector3> points = _route ??= new();
+        points.Clear();
+        points.Add(from);
+        foreach (WrappedPathfindingNode node in route) points.Add(node.Position);
+        return CrowdingAlongPath(target, at, points, adds, overCap);
     }
 
     // The adds rule's view of a monster (IsExperienceTarget) near a candidate: its aggro range when it would join that
@@ -3046,6 +3096,42 @@ public static class PlayerBotDriver
         }
         return crowd;
     }
+
+    /// <summary>#167 F P4: CrowdingAlong over a walked route (route: from the bot to its stand point, corner by corner,
+    /// the corridor PlayerTravelPath.TryBuildCorridor gives): each potential add once when its reach covers the target
+    /// or any leg (SegmentDistanceSquared, BATCH-F: reused, not copied); and of those, the ones in overCap.</summary>
+    public static (int Count, int Over) CrowdingAlongPath<T>(T candidate, Vector3 at, IReadOnlyList<Vector3> route,
+        IReadOnlyList<(T Npc, Vector3 At, int AggroRange)> adds, ISet<T> overCap) where T : class
+    {
+        int count = 0, over = 0;
+        for (int i = 0; i < adds.Count; i++)
+        {
+            (T npc, Vector3 position, int aggroRange) = adds[i];
+            if (ReferenceEquals(npc, candidate)) continue;
+            float reach = aggroRange + AddMargin, reach2 = reach * reach;
+            bool covered = Vector3.DistanceSquared(position, at) <= reach2;
+            for (int j = 1; !covered && j < route.Count; j++)
+                covered = SegmentDistanceSquared(position, route[j - 1], route[j]) <= reach2;
+            if (!covered) continue;
+            count++;
+            if (overCap != null && overCap.Contains(npc)) over++;
+        }
+        return (count, over);
+    }
+
+    /// <summary>#167 F P4: whether the pick counts its new target's walk in along the corridor (PathCrowding, log only):
+    /// a bot the crowd limits hold (LimitsCrowd), a new target (once per pick), a walk over PathCheckMinWalk (a shorter
+    /// one runs as the straight line CrowdingAlong reads), and at most one count per bot every
+    /// PathCheckMilliseconds.</summary>
+    public static bool PathCheckDue(bool limited, bool newTarget, float walk, long now, long nextCheck) =>
+        limited && newTarget && walk > PathCheckMinWalk && now >= nextCheck;
+
+    /// <summary>#167 F P4: FIGHT and DEATH seen= for a target that was not the rings' pick (self-defence, a monster coming
+    /// at it): counted when it was among the adds the last pick counted for its target (its reach covered the target or
+    /// the straight walk in), scanned when that search had it but its reach covered neither (the walk left the line, or
+    /// it moved), unseen when the search never had it (out of the scan, busy, or not aggressive then). Scanned and
+    /// unseen on hunt and anchor walks are what only F12's look-ahead reaches.</summary>
+    public static string SeenAtPick(bool counted, bool scanned) => counted ? "counted" : scanned ? "scanned" : "unseen";
 
     /// <summary>#167 F P2: the roles whose pick reads due respawns: melee, archers and casters, not healers and pets (the
     /// base legs' respawn-add deaths: melee 18, archer 9, caster 7, healer 3, pet 1; the ranking costs walk time on every
@@ -5901,7 +5987,8 @@ public static class PlayerBotDriver
             QuickcastLeftSeconds(quickcast != null,                                       //   qcLeft= at any death
                 quickcast == null ? 0 : player.GetSkillDisabledDuration(quickcast)),
             target != null ? state.PickCrowd : -1, target != null ? state.PickOver : -1,   // #167 F P1 crowd=, P1b
-            target != null ? state.PickDue : -1);                                         //   over=, P2 due=
+            target != null ? state.PickDue : -1,                                          //   over=, P2 due=, P4
+            target != null ? state.PickSeen : "-", target != null ? state.PickPathCrowd : -1);   //   seen= and pathCrowd=
         string head = $"PLAYER_BOT_DEATH bot={player.Name} level={player.Level} at=({player.X},{player.Y},{player.Z}) " +
                       $"zone={player.CurrentZone?.ID} {fight} attackers={state.Attackers} deathSteps={state.DeathSafetySteps} " +
                       $"aliveSec={(now - state.AliveSince) / 1000} task={state.Task != null}";
@@ -6042,7 +6129,8 @@ public static class PlayerBotDriver
             state.FightReserve,                                                         // #167 F-R
             state.PickLifted,                                                           // #167 F P1
             state.PickOver,                                                             // #167 F P1b
-            state.PickDue)));                                                           // #167 F P2
+            state.PickDue,                                                              // #167 F P2
+            state.PickSeen, state.PickPathCrowd)));                                     // #167 F P4
     }
 
     // APP:585-624, changed: every 10 s, no inventory count, no saves; after 15 minutes with no progress, back to the
