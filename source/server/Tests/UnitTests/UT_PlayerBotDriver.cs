@@ -1998,6 +1998,37 @@ public sealed class UT_PlayerBotDriver
             Is.EqualTo((true, false)));
     }
 
+    // #167 F-CS, the wiring: SettleTarget reads the kill's own con and the game loop's time. A blue kill of a marked name
+    // (the bot outlevelled it: level 20 on a level 17) is no hard kill and leaves the mark; a yellow one is kept at the
+    // kill's time, so MarkCantFinish's 15 minutes run from it.
+    [TestCase((byte)17, false)]
+    [TestCase((byte)20, true)]
+    public void A_kill_is_remembered_hard_at_its_own_con_and_time_in_SettleTarget(byte targetLevel, bool hard)
+    {
+        var calculators = (DOL.GS.PropertyCalc.IPropertyCalculator[])typeof(GameLiving)
+            .GetField("m_propertyCalc", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        PropertyInfo time = typeof(GameLoop).GetProperty(nameof(GameLoop.GameLoopTime))!;
+        long previous = GameLoop.GameLoopTime;
+        try
+        {
+            time.SetValue(null, 5_000_000L);
+            PlayerBotState state = KillAsWarrior(70, before: s =>
+            {
+                calculators[(int)eProperty.LivingEffectiveLevel] = new LevelOnly();     // KillAsWarrior puts it back
+                typeof(GameObject).GetField("m_level", Hidden)!.SetValue(s.Player, (byte)20);
+                typeof(GameObject).GetField("m_level", Hidden)!.SetValue(s.Target, targetLevel);
+                typeof(GameObject).GetField("m_name", Hidden)!.SetValue(s.Target, "cyclops");
+                s.CantFinishSkips["cyclops"] = (long.MaxValue, ConColor.YELLOW);
+            });
+            Assert.That((state.HardKills.TryGetValue("cyclops", out long at) ? at : -1L,
+                state.CantFinishSkips.ContainsKey("cyclops")), Is.EqualTo((hard ? 5_000_000L : -1L, !hard)));
+        }
+        finally
+        {
+            time.SetValue(null, previous);
+        }
+    }
+
     // #167 F-CS: a can't-finish break-off's start (BrokeOffFrom) still bars no camp and avoids no name (F-C), and marks
     // its yellow target, a name the bot hasn't killed, for the pick and the plan: BREAKOFF cfSkip=1; a blue one, 0; a
     // spent caster's, -1 and no mark. The run's end clears cfSkip= and owes the rest as before.
@@ -2032,6 +2063,53 @@ public sealed class UT_PlayerBotDriver
             PlayerBotDriver.IsAvoided(state.AvoidUntil, "empyrean elder", 2_001)), Is.EqualTo((-1, 0, true)));
     }
 
+    // #167 F-CS, the wiring (StartsBreakOff's call to BrokeOffFrom: the target's name and its con): a Runemaster that
+    // can't finish its yellow elder (hits interrupt it, no Quickcast, 30% health left at 15% a second, the elder at 20%)
+    // breaks off why=cantfinish and marks the elder's name at yellow: BREAKOFF cfSkip=1, and the pick passes over the
+    // name at yellow. A 191 elder, the bot's endurance 100 (a 19-s sprint, no regeneration): it outruns it.
+    [Test]
+    public void A_cant_finish_break_off_marks_its_targets_name_at_its_con_in_StartsBreakOff()
+    {
+        MethodInfo starts = typeof(PlayerBotDriver).GetMethod("StartsBreakOff", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var calculators = (DOL.GS.PropertyCalc.IPropertyCalculator[])typeof(GameLiving)
+            .GetField("m_propertyCalc", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        (eProperty Property, DOL.GS.PropertyCalc.IPropertyCalculator Calculator)[] swapped =
+            [(eProperty.Fatigue, new Fixed(100)), (eProperty.EnduranceRegenerationAmount, new Fixed(0)),
+             (eProperty.FatigueConsumption, new Fixed(0))];
+        var saved = swapped.Select(swap => calculators[(int)swap.Property]).ToArray();
+        try
+        {
+            foreach ((eProperty property, DOL.GS.PropertyCalc.IPropertyCalculator calculator) in swapped)
+                calculators[(int)property] = calculator;
+            InTheField(new SplitFloorMesh(), OnPocket, (region, zone, bot) =>
+            {
+                typeof(GamePlayer).GetField("m_characterClass", Hidden)!.SetValue(bot, new DOL.GS.PlayerClass.ClassRunemaster());
+                typeof(GameObject).GetField("m_health", Hidden)!.SetValue(bot, 30);
+                typeof(GameLiving).GetField("m_endurance", Hidden)!.SetValue(bot, 100);
+                typeof(GameLiving).GetField("<InterruptTime>k__BackingField", Hidden)!
+                    .SetValue(bot, GameLoop.GameLoopTime + 2_000);                          // hits interrupt it
+                GameNPC elder = MonsterAt(region, zone, new(OnPocket.X + 100, OnPocket.Y, OnPocket.Z),
+                    LevelFor(bot, ConColor.YELLOW));
+                typeof(GameObject).GetField("m_name", Hidden)!.SetValue(elder, "empyrean elder");
+                typeof(GameObject).GetField("m_health", Hidden)!.SetValue(elder, 20);
+                ((GameLiving)elder).movementComponent = elder.movementComponent;      // its speed (TimeToContact)
+                elder.TargetObject = bot;
+                bot.attackComponent.AttackerTracker.AddOrUpdate(elder, true, long.MaxValue);
+                var state = new PlayerBotState(bot) { Target = elder, Engaged = true, EngagedSince = 1_000, NukesLevel = 39,
+                    Nukes = [], Controls = [], CombatPets = [] };                  // no spell (KnowSpells)
+                state.HealthSamples.Enqueue((8_000L, (byte)60));                             // 30% in 2 s
+                Assert.That(starts.Invoke(null, [state, bot, 10_000L]), Is.True);
+                Assert.That((state.BreakOffWhy, state.BreakOffCfSkip,
+                        PlayerBotDriver.CantFinishSkipped(state.CantFinishSkips, "empyrean elder", ConColor.YELLOW, 10_001)),
+                    Is.EqualTo((PlayerBotDriver.CantFinish, 1, true)));
+            });
+        }
+        finally
+        {
+            for (int i = 0; i < swapped.Length; i++) calculators[(int)swapped[i].Property] = saved[i];
+        }
+    }
+
     // #167 F-CS, the wiring: FindWithin passes over a name a can't-finish run skips at its con or harder and takes the
     // next (a blue one, a con step's 220 behind on TargetScore); a mark from a harder con, or one past its time, leaves
     // the yellow one to the pick. The near ring: no crowd limits.
@@ -2051,6 +2129,25 @@ public sealed class UT_PlayerBotDriver
             state.CantFinishSkips["Empyrean Elder"] = (until, from);                    // any case, as AvoidUntil
             object[] args = [state, bot, PlayerBotDriver.ImmediateSearchRadius, 10_000L, PlayerBotPickReading.None];
             Assert.That(find.Invoke(null, args), Is.SameAs(elderTaken ? elder : guardian));
+        });
+    }
+
+    // #167 F-CS, the wiring: a bot sent to a camp of names it avoids (HuntAvoided: a stale fallback camp) hunts them, a
+    // name a can't-finish run skips too, as PlanMonsters counts that one avoided: the yellow elder is taken.
+    [Test]
+    public void A_bot_hunting_its_avoided_names_takes_a_cant_finish_skip_too_in_FindWithin()
+    {
+        MethodInfo find = typeof(PlayerBotDriver).GetMethod("FindWithin", BindingFlags.Static | BindingFlags.NonPublic)!;
+        InTheField(new SplitFloorMesh(), new(840_884, 702_153, 8_784), (region, zone, bot) =>
+        {
+            GameNPC elder = MonsterAt(region, zone, new(840_700, 702_100, 8_700), LevelFor(bot, ConColor.YELLOW));
+            GameNPC guardian = MonsterAt(region, zone, new(840_600, 702_100, 8_700), LevelFor(bot, ConColor.BLUE));
+            typeof(GameObject).GetField("m_name", Hidden)!.SetValue(elder, "empyrean elder");
+            typeof(GameObject).GetField("m_name", Hidden)!.SetValue(guardian, "empyrean guardian");
+            var state = new PlayerBotState(bot) { NukesLevel = 39, Nukes = [], HuntAvoided = true };
+            state.CantFinishSkips["empyrean elder"] = (910_000, ConColor.YELLOW);
+            object[] args = [state, bot, PlayerBotDriver.ImmediateSearchRadius, 10_000L, PlayerBotPickReading.None];
+            Assert.That(find.Invoke(null, args), Is.SameAs(elder));
         });
     }
 
@@ -2087,6 +2184,77 @@ public sealed class UT_PlayerBotDriver
         {
             calculators[(int)eProperty.LivingEffectiveLevel] = previous;
         }
+    }
+
+    // The region registered with WorldMgr, its objects these (WorldMgr.GetNPCsFromRegion: the plan's read), for body;
+    // taken out after.
+    private static void InWorld(Region region, GameObject[] objects, Action body)
+    {
+        typeof(Region).GetField("m_objects", Hidden)!.SetValue(region, objects);
+        WorldMgr.Regions.TryGetValue(region.ID, out Region previous);
+        WorldMgr.Regions[region.ID] = region;
+        try
+        {
+            body();
+        }
+        finally
+        {
+            if (previous != null) WorldMgr.Regions[region.ID] = previous;
+            else WorldMgr.Regions.Remove(region.ID);
+        }
+    }
+
+    // #167 F-CS, the wiring (RelocateIfOutgrown's plan, the monsters' pass): a capped plan counts a name a can't-finish
+    // run skips as avoided: of a yellow cyclops 2,900 units off and a yellow giant boar 6,900 off, it takes the boar's
+    // camp.
+    [Test]
+    public void A_capped_plan_passes_over_a_cant_finish_skip_in_RelocateIfOutgrown()
+    {
+        MethodInfo relocate = typeof(PlayerBotDriver).GetMethod("RelocateIfOutgrown", BindingFlags.Static | BindingFlags.NonPublic)!;
+        InTheField(new SplitFloorMesh(), OnPocket, (region, zone, bot) =>
+        {
+            Vector3 cyclopsAt = new(838_000, OnPocket.Y, 8_700), boarAt = new(834_000, OnPocket.Y, 8_700);
+            GameNPC cyclops = MonsterAt(region, zone, cyclopsAt, LevelFor(bot, ConColor.YELLOW));
+            GameNPC boar = MonsterAt(region, zone, boarAt, LevelFor(bot, ConColor.YELLOW));
+            typeof(GameObject).GetField("m_name", Hidden)!.SetValue(cyclops, "cyclops");
+            typeof(GameObject).GetField("m_name", Hidden)!.SetValue(boar, "giant boar");
+            InWorld(region, [cyclops, boar], () =>
+            {
+                var state = new PlayerBotState(bot) { AnchorRegion = region.ID, Anchor = OnPocket, CappedSince = 100_000 };
+                state.CantFinishSkips["cyclops"] = (long.MaxValue, ConColor.YELLOW);
+                relocate.Invoke(null, [state, bot, 130_000L]);
+                Assert.That((state.Anchor, state.CappedSince), Is.EqualTo((boarAt, 0L)));
+            });
+        });
+    }
+
+    // #167 F-CS, the wiring (RelocateIfOutgrown's near pass after a death, from a bind in another zone than the death's:
+    // its own PlanMonsters): the near zone's monsters count a can't-finish skip as avoided too: of a yellow cyclops 2,900
+    // units off and a yellow giant boar 6,900 off, both within NearWalk, it takes the boar's camp.
+    [Test]
+    public void A_near_plan_after_a_death_passes_over_a_cant_finish_skip_in_RelocateIfOutgrown()
+    {
+        MethodInfo relocate = typeof(PlayerBotDriver).GetMethod("RelocateIfOutgrown", BindingFlags.Static | BindingFlags.NonPublic)!;
+        InTheField(new SplitFloorMesh(), OnPocket, (region, zone, bot) =>
+        {
+            var zones = (List<Zone>)typeof(Region).GetField("m_zones", Hidden)!.GetValue(region)!;
+            zones.Add(new Zone(region, 2, "Died", Muspelheim.X - 65_536, Muspelheim.Y, 65536, 65536, 1, false, 0, false, 0, 0,
+                0, 0, 0));
+            Vector3 cyclopsAt = new(838_000, OnPocket.Y, 8_700), boarAt = new(834_000, OnPocket.Y, 8_700);
+            GameNPC cyclops = MonsterAt(region, zone, cyclopsAt, LevelFor(bot, ConColor.YELLOW));
+            GameNPC boar = MonsterAt(region, zone, boarAt, LevelFor(bot, ConColor.YELLOW));
+            typeof(GameObject).GetField("m_name", Hidden)!.SetValue(cyclops, "cyclops");
+            typeof(GameObject).GetField("m_name", Hidden)!.SetValue(boar, "giant boar");
+            InWorld(region, [cyclops, boar], () =>
+            {
+                var state = new PlayerBotState(bot) { AnchorRegion = region.ID, Anchor = OnPocket,
+                    ReplanOwed = PlayerBotDriver.Died, DeathSpot = new(Muspelheim.X - 30_000, OnPocket.Y, 8_700),
+                    LastDeathTick = 100_000 };
+                state.CantFinishSkips["cyclops"] = (long.MaxValue, ConColor.YELLOW);
+                relocate.Invoke(null, [state, bot, 130_000L]);
+                Assert.That((state.Anchor, state.ReplanOwed), Is.EqualTo((boarAt, (string)null)));
+            });
+        });
     }
 
     // It outruns a chaser no faster than its run (191, GamePlayer.cs:8250; enable_pve_speed is off in the world DB), or
@@ -4411,6 +4579,31 @@ public sealed class UT_PlayerBotDriver
         });
     }
 
+    // #167 F-WD: a capped clock still running (FindWithin's next refusal: the same clock) keeps the hold's step-out
+    // count, spot and ring test; only a clock begun afresh starts them afresh.
+    [Test]
+    public void A_capped_clock_still_running_keeps_the_holds_steps_in_FindWithin()
+    {
+        MethodInfo find = typeof(PlayerBotDriver).GetMethod("FindWithin", BindingFlags.Static | BindingFlags.NonPublic)!;
+        InTheField(new SplitFloorMesh(), new(840_884, 702_153, 8_784), (region, zone, bot) =>
+        {
+            MonsterAt(region, zone, new(840_700, 702_100, 8_700), LevelFor(bot, ConColor.BLUE));
+            foreach (float y in new[] { 702_000f, 702_200f })
+            {
+                GameNPC add = MonsterAt(region, zone, new(840_650, y, 8_700), LevelFor(bot, ConColor.BLUE));
+                ((DOL.AI.Brain.StandardMobBrain)add.Brain).AggroLevel = 100;
+                ((DOL.AI.Brain.StandardMobBrain)add.Brain).AggroRange = 400;
+                typeof(GameObject).GetField("m_name", Hidden)!.SetValue(add, "wolf");
+            }
+            var state = new PlayerBotState(bot) { NukesLevel = 39, Nukes = [], CappedSince = 4_000, HoldSteps = 3,
+                HoldSpot = new Vector3(1, 1, 1), NextHoldReachTick = 9_000 };
+            state.AvoidUntil["wolf"] = 10_000_000;
+            find.Invoke(null, [state, bot, PlayerBotDriver.SearchRadius, 10_000L, PlayerBotPickReading.None]);
+            Assert.That((state.CappedSince, state.HoldSteps, state.HoldSpot, state.NextHoldReachTick),
+                Is.EqualTo((4_000L, 3, (Vector3?)new Vector3(1, 1, 1), 9_000L)));
+        });
+    }
+
     // #167 F-WD (the review): step 15 (IdleStep): a capped bot in an aggressive monster's reach steps out of it first
     // (HoldStepsClear: walk=clear, its step counted), a capped one standing clear stands (no walk, no step), and one with
     // no capped clock roams. A BLUE wolf, aggro range 400, 300 units off the bot on its pocket.
@@ -4436,6 +4629,26 @@ public sealed class UT_PlayerBotDriver
             idle.Invoke(null, [free, bot, 10_000L]);
             Assert.That((free.HoldSpot.HasValue, free.Walk, free.BackWalkMs), Is.EqualTo((false, PlayerBotWalk.Roam,
                 (long)PlayerBotDriver.TickMilliseconds)), "no capped clock: it roams");
+        });
+    }
+
+    // #167 F-WD: step 15's walk out is a walk: IdleStep stops the bot only when HoldStepsClear doesn't walk it (a stop
+    // after each step sends its stop every think), and the roam, no hold, drops a hold's spot left over.
+    [Test]
+    public void A_capped_bots_step_out_is_not_stopped_and_a_roam_drops_the_holds_spot_in_IdleStep()
+    {
+        MethodInfo idle = typeof(PlayerBotDriver).GetMethod("IdleStep", BindingFlags.Static | BindingFlags.NonPublic)!;
+        InTheField(new SplitFloorMesh(), OnPocket, (region, zone, bot) =>
+        {
+            GameNPC wolf = MonsterAt(region, zone, new(OnPocket.X + 300, OnPocket.Y, OnPocket.Z), LevelFor(bot, ConColor.BLUE));
+            var brain = (DOL.AI.Brain.StandardMobBrain)wolf.Brain;
+            (brain.AggroLevel, brain.AggroRange) = (100, 400);
+            var capped = new PlayerBotState(bot) { CappedSince = 5_000 };
+            idle.Invoke(null, [capped, bot, 10_000L]);
+            Assert.That((capped.HoldSpot.HasValue, bot.CurrentSpeed > 0), Is.EqualTo((true, true)), "it walks out");
+            var free = new PlayerBotState(bot) { HoldSpot = new Vector3(1, 1, 1) };
+            idle.Invoke(null, [free, bot, 10_000L]);
+            Assert.That(free.HoldSpot, Is.Null, "no hold: no spot left");
         });
     }
 
@@ -4469,6 +4682,60 @@ public sealed class UT_PlayerBotDriver
             Assert.That((state.HoldSteps, state.Walk, state.NextHoldReachTick),
                 Is.EqualTo((1, PlayerBotWalk.Clear, 12_000L)));
             Assert.That(Vector3.Distance(Here(), at), Is.GreaterThanOrEqualTo(300f), "not toward it");
+        });
+    }
+
+    // #167 F-WD: SplitFloorMesh with no corridor anywhere: a step out's walk is blocked at once.
+    private sealed class NoWayMesh : SplitFloorMesh
+    {
+        public override PathfindingResult GetPathStraight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters,
+            Span<WrappedPathfindingNode> destination) => new(PathfindingStatus.NoPathFound, 0);
+    }
+
+    // #167 F-WD: the hold's ring test: no hold, no spot kept; none while it walks to its spot; 2 s after an arrival
+    // (NextHoldReachTick), not before; none during a blocked step's pause (StepOutPauseMilliseconds), and a blocked step
+    // stands the bot (false: IdleStep stops it), drops its spot and starts that pause.
+    [Test]
+    public void A_capped_holds_ring_test_waits_for_its_walk_its_2_s_and_a_blocked_pause_in_HoldStepsClear()
+    {
+        MethodInfo hold = typeof(PlayerBotDriver).GetMethod("HoldStepsClear", BindingFlags.Static | BindingFlags.NonPublic)!;
+        void Field(IPathfindingMgr mesh, Action<FieldBot, Func<PlayerBotState, long, bool>> body) =>
+            InTheField(mesh, OnPocket, (region, zone, bot) =>
+            {
+                GameNPC add = MonsterAt(region, zone, new(OnPocket.X + 300, OnPocket.Y, OnPocket.Z), LevelFor(bot, ConColor.BLUE));
+                ((DOL.AI.Brain.StandardMobBrain)add.Brain).AggroLevel = 100;
+                ((DOL.AI.Brain.StandardMobBrain)add.Brain).AggroRange = 400;
+                body(bot, (state, now) => (bool)hold.Invoke(null, [state, bot, now])!);
+            });
+
+        Field(new SplitFloorMesh(), (bot, Step) =>
+        {
+            var ended = new PlayerBotState(bot) { HoldSpot = new Vector3(1, 1, 1) };
+            Assert.That((Step(ended, 10_000), ended.HoldSpot), Is.EqualTo((false, (Vector3?)null)), "no hold: no spot");
+
+            var walking = new PlayerBotState(bot) { CappedSince = 5_000 };
+            Assert.That(Step(walking, 10_000), Is.True);
+            Vector3? spot = walking.HoldSpot;
+            Assert.That((Step(walking, 12_000), walking.HoldSteps, walking.HoldSpot), Is.EqualTo((true, 1, spot)),
+                "on its walk: no ring test");
+
+            var arrived = new PlayerBotState(bot) { CappedSince = 5_000, HoldSteps = 1, NextHoldReachTick = 12_000 };
+            Assert.That((Step(arrived, 11_999), arrived.HoldSteps, arrived.HoldSpot), Is.EqualTo((false, 1, (Vector3?)null)),
+                "under 2 s since its arrival");
+            Assert.That((Step(arrived, 12_000), arrived.HoldSteps, arrived.NextHoldReachTick), Is.EqualTo((true, 2, 14_000L)),
+                "2 s on: in reach again, a step out");
+
+            var paused = new PlayerBotState(bot) { CappedSince = 5_000, HoldStepBlockedUntil = 20_000 };
+            Assert.That((Step(paused, 10_000), paused.HoldSpot, paused.HoldSteps, paused.NextHoldReachTick),
+                Is.EqualTo((false, (Vector3?)null, 0, 12_000L)), "a blocked step's pause: no spot");
+        });
+
+        Field(new NoWayMesh(), (bot, Step) =>
+        {
+            var blocked = new PlayerBotState(bot) { CappedSince = 5_000 };
+            Assert.That((Step(blocked, 10_000), blocked.HoldSpot, blocked.HoldSteps, blocked.HoldStepBlockedUntil),
+                Is.EqualTo((false, (Vector3?)null, 1, 10_000L + PlayerBotDriver.StepOutPauseMilliseconds)), "blocked");
+            Assert.That((Step(blocked, 12_000), blocked.HoldSteps), Is.EqualTo((false, 1)), "its pause");
         });
     }
 
@@ -8522,7 +8789,8 @@ public sealed class UT_PlayerBotDriver
     // A bot in the world the driver's private steps run on, where the seams' rows can't reach their call sites: mortal
     // (the attack rules: AbstractServerRules.cs:385-393), of a realm (a realm-less player may attack no monster of none,
     // NormalServerRules.cs:56-78), with the components Engage and the scans read, and a floor step (TryFloorStep's
-    // MoveTo) that lands where the mesh puts it.
+    // MoveTo) that lands where the mesh puts it. #167 F-CS: its sprint (a break-off's start) sends nothing: it has no
+    // client, and GamePlayer.Sprint messages it and starts the sprint effect.
     private sealed class FieldBot : GamePlayer
     {
         private FieldBot() : base(null, null) { }
@@ -8532,6 +8800,7 @@ public sealed class UT_PlayerBotDriver
             (X, Y, Z) = (x, y, z);
             return true;
         }
+        public override bool Sprint(bool state) => state;                              // no client: no sprint effect
     }
 
     // Runs body in Muspelheim's zone (Pbotmaada's, at its offsets) on mesh, with a level 39 bot at at: a 47.75-unit step
