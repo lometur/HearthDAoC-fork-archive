@@ -1903,19 +1903,27 @@ public static class PlayerBotDriver
     /// <summary>#167 D4: the plan's monsters (RelocateIfOutgrown, PlanRelocation's) among npcs: those in zone it counts
     /// (IsPlannable; the review of D: with the old filter, IsAttackable, put back no test failed) over GREY, each with
     /// its con to the bot, whether the bot would hunt it under natural (IsEligibleExperienceTarget) and whether it
-    /// avoids its name (avoidUntil).</summary>
+    /// avoids its name (avoidUntil). #167 F P3: with adds, the plan's potential adds there in the same pass (the review:
+    /// one pass over the region's NPCs): each such monster that would aggro the bot (IsPotentialAdd, busy or not: the
+    /// plan looks ahead), with its own brain's aggro range (each rainbow sprite colour is its own brain,
+    /// RainbowSprites.cs) and its con to the bot (OverCapNear).</summary>
     public static List<(GameNPC Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> PlanMonsters(GamePlayer player,
-        IEnumerable<GameNPC> npcs, Zone zone, ConColor natural, IReadOnlyDictionary<string, long> avoidUntil, long now)
+        IEnumerable<GameNPC> npcs, Zone zone, ConColor natural, IReadOnlyDictionary<string, long> avoidUntil, long now,
+        List<(GameNPC Npc, Vector3 At, int AggroRange, ConColor Con)> adds = null)
     {
         List<(GameNPC Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> monsters = new();
         foreach (GameNPC npc in npcs)
         {
             if (npc.CurrentZone != zone || !IsPlannable(player, npc)) continue;
             ConColor con = ConLevels.GetConColor(player.GetConLevel(npc));
+            Vector3 at = new(npc.X, npc.Y, npc.Z);
             if (con > ConColor.GREY)
-                monsters.Add((npc, new(npc.X, npc.Y, npc.Z), con,
+                monsters.Add((npc, at, con,
                     con <= natural && AutonomousPlayerPilot.IsEligibleExperienceTarget(con, npc.EffectiveLevel, player.Level, 1),
                     IsAvoided(avoidUntil, npc.Name, now)));
+            if (adds != null && npc.Brain is StandardMobBrain brain &&                     // #167 F P3
+                IsPotentialAdd(brain.AggroLevel, brain.AggroRange, player.IsObjectGreyCon(npc), false))
+                adds.Add((npc, at, brain.AggroRange, con));
         }
         return monsters;
     }
@@ -2008,19 +2016,20 @@ public static class PlayerBotDriver
     /// pass took (RelocateSuffix).</summary>
     public static string RelocateLine(string bot, int level, Vector3 from, Vector3 to, int distance, string monster,
         int monsterLevel, ushort zone, string reason, ConColor? fallback, long sinceReleaseMs, bool barredOld,
-        ConColor? capKill, bool recent = false, bool near = false, int crowdRefused = 0, bool lifted = false) =>
+        ConColor? capKill, bool recent = false, bool near = false, int crowdRefused = 0, bool lifted = false,
+        int overSkipped = 0) =>
         $"PLAYER_BOT_RELOCATE bot={bot} level={level} from=({from.X:0},{from.Y:0}) to=({to.X:0},{to.Y:0},{to.Z:0}) " +
         $"distance={distance} monster=\"{monster}\" monsterLevel={monsterLevel} zone={zone} reason={reason} " +
         $"fallback={fallback?.ToString() ?? "-"}" +
-        RelocateSuffix(reason, sinceReleaseMs, barredOld, capKill, recent, near, crowdRefused, lifted);
+        RelocateSuffix(reason, sinceReleaseMs, barredOld, capKill, recent, near, crowdRefused, lifted, overSkipped);
 
     /// <summary>PLAYER_BOT_RELOCATE when no camp checked had a corridor (or none was found): checked= of them. #167 F
     /// P1: lifted=1 when the fallback in place that follows lifted the crowd limits (FallBackInPlace).</summary>
     public static string RelocateNoneLine(string bot, int level, int candidates, ushort zone, string reason,
         long sinceReleaseMs, bool barredOld, ConColor? capKill, bool recent = false, int crowdRefused = 0,
-        bool lifted = false) =>
+        bool lifted = false, int overSkipped = 0) =>
         $"PLAYER_BOT_RELOCATE bot={bot} level={level} none checked={candidates} zone={zone} reason={reason}" +
-        RelocateSuffix(reason, sinceReleaseMs, barredOld, capKill, recent, false, crowdRefused, lifted);
+        RelocateSuffix(reason, sinceReleaseMs, barredOld, capKill, recent, false, crowdRefused, lifted, overSkipped);
 
     /// <summary>#167 F P1 (the review: every lift logged): PLAYER_BOT_LIFT, a fallback in place that lifted the crowd
     /// limits where RelocateIfOutgrown writes no RELOCATE line (why=norelocate: it can't move its leash, or no zone to
@@ -2033,12 +2042,14 @@ public static class PlayerBotDriver
     // barred=old when the plan bars the anchor the bot had (BarOldAnchor); D6: then capKill=, the lowest con that killed
     // the bot in the last 5 minutes, YELLOW or harder (RememberKillerCon), while it keeps one (PlanCaps). #167 E W1: then
     // recent=1 and near=1. #167 F P1: then crowdRefused=, the crowd bars' spots a capped plan barred, and lifted=1 on a
-    // camp it took anyway (InCrowdBarred) or a fallback in place that lifted the limits.
+    // camp it took anyway (InCrowdBarred) or a fallback in place that lifted the limits. #167 F P3: then overSkipped=, the
+    // fit spots skipped for an over-cap aggressive monster in reach (each once).
     private static string RelocateSuffix(string reason, long sinceReleaseMs, bool barredOld, ConColor? capKill,
-        bool recent, bool near, int crowdRefused = 0, bool lifted = false) =>
+        bool recent, bool near, int crowdRefused = 0, bool lifted = false, int overSkipped = 0) =>
         (reason == Died ? $" sinceRelease={sinceReleaseMs}" : "") + (barredOld ? " barred=old" : "") +
         (capKill is ConColor kill ? $" capKill={kill}" : "") + (recent ? " recent=1" : "") + (near ? " near=1" : "") +
-        (crowdRefused > 0 ? $" crowdRefused={crowdRefused}" : "") + (lifted ? " lifted=1" : "");
+        (crowdRefused > 0 ? $" crowdRefused={crowdRefused}" : "") + (lifted ? " lifted=1" : "") +
+        (overSkipped > 0 ? $" overSkipped={overSkipped}" : "");
 
     /// <summary>The capped clock after a search of the wider ring (or one that found a target): set at the first that
     /// passed a monster over for the cap and found none, kept while that lasts, 0 once a search finds a target or
@@ -2273,21 +2284,27 @@ public static class PlayerBotDriver
     /// <summary>#167 E W1: the camp a plan takes. After a death (afterDeath, AfterDeathPlan) it first looks near the bot
     /// (tryNear): nearMonsters (the zone it stands in) from here, within NearWalk, no fallback over NearFallbackMax
     /// (BLUE), never a camp it failed at (PlanRelocation's maxWalk); a fresh one is taken (Near). Else the plan as
-    /// before: monsters (the plan's zone) from from (RelocationOrigin).</summary>
+    /// before: monsters (the plan's zone) from from (RelocationOrigin). #167 F P3: each pass with its zone's adds
+    /// (nearAdds, planAdds; PlanRelocation's over-cap bar), overSkipped a set, so a spot both passes skip counts once
+    /// (the review).</summary>
     public static (T[] Spots, ConColor? Fallback, bool Stale, bool Near) PlanCampChoice<T>(
         IReadOnlyList<(T Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> nearMonsters,
         IReadOnlyList<(T Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> monsters, Vector3 here, Vector3 from,
         ConColor cap, ConColor natural, IReadOnlyCollection<Vector3> failedCamps, ISet<T> rejected, int count,
-        ConColor? killerCon, bool afterDeath, bool tryNear = true) where T : class
+        ConColor? killerCon, bool afterDeath, bool tryNear = true,
+        IReadOnlyList<(T Npc, Vector3 At, int AggroRange, ConColor Con)> nearAdds = null,
+        IReadOnlyList<(T Npc, Vector3 At, int AggroRange, ConColor Con)> planAdds = null, ISet<T> overSkipped = null)
+        where T : class
     {
         if (afterDeath && tryNear && nearMonsters != null)
         {
             (T[] spots, ConColor? fallback, bool stale) = PlanRelocation(nearMonsters, here, cap, natural, failedCamps,
-                rejected, count, killerCon, natural < NearFallbackMax ? natural : NearFallbackMax, NearWalk);
+                rejected, count, killerCon, natural < NearFallbackMax ? natural : NearFallbackMax, NearWalk, nearAdds,
+                overSkipped);
             if (spots.Length > 0 && !stale) return (spots, fallback, false, true);
         }
         (T[] far, ConColor? farFallback, bool farStale) = PlanRelocation(monsters, from, cap, natural, failedCamps, rejected,
-            count, killerCon);
+            count, killerCon, planAdds: planAdds, overSkipped: overSkipped);
         return (far, farFallback, farStale, false);
     }
 
@@ -3555,11 +3572,15 @@ public static class PlayerBotDriver
     /// over the cap's limit after killerCon, the lowest con that killed the bot in the last 5 minutes (KillerLimit: under
     /// a YELLOW or harder one, never under GREEN; none: no camp). #167 E W1: a near pass bounds it (maxWalk: only
     /// monsters within it of here; 0, none) and then takes no failed camp at all; fallbackMax (none: natural) is the
-    /// hardest fallback median.</summary>
+    /// hardest fallback median. #167 F P3: with planAdds, the fit pass takes no spot an aggressive monster over the cap
+    /// reaches (OverCapNear; overSkipped gets each, once), and the fallback's safest camps go clear ones (none over their
+    /// own median reaching them) first, but only those within the nearest one's distance + NearWalk (the review: no
+    /// clear camp anywhere in the zone before the nearest one).</summary>
     public static (T[] Spots, ConColor? Fallback, bool Stale) PlanRelocation<T>(
         IReadOnlyList<(T Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> monsters, Vector3 here, ConColor cap,
         ConColor natural, IReadOnlyCollection<Vector3> failedCamps, ISet<T> rejected, int count, ConColor? killerCon = null,
-        ConColor? fallbackMax = null, int maxWalk = 0)
+        ConColor? fallbackMax = null, int maxWalk = 0,
+        IReadOnlyList<(T Npc, Vector3 At, int AggroRange, ConColor Con)> planAdds = null, ISet<T> overSkipped = null)
         where T : class
     {
         Dictionary<(int, int), List<int>> grid = new();
@@ -3570,6 +3591,9 @@ public static class PlayerBotDriver
             if (!grid.TryGetValue(cell, out List<int> list)) grid[cell] = list = new();
             list.Add(i);
         }
+        Dictionary<(int, int), List<int>> addGrid = AddGrid(planAdds);                  // #167 F P3
+        bool OverCap(int i, ConColor campCap) =>
+            addGrid != null && OverCapNear(monsters[i].Npc, monsters[i].At, campCap, planAdds, addGrid);
         float reach = (float)maxWalk * maxWalk;                                          // #167 E W1
         int[] order = Enumerable.Range(0, monsters.Count)
             .Where(i => monsters[i].Huntable && monsters[i].Con > ConColor.GREY && !rejected.Contains(monsters[i].Npc) &&
@@ -3582,7 +3606,10 @@ public static class PlayerBotDriver
         foreach (int i in order)
         {
             if (monsters[i].Con <= cap && !monsters[i].Avoided && !Failed(i) && CampCon(monsters, grid, i).Fresh <= cap)
-                fit.Add(monsters[i].Npc);
+            {
+                if (OverCap(i, cap)) overSkipped?.Add(monsters[i].Npc);                 // #167 F P3
+                else fit.Add(monsters[i].Npc);
+            }
             if (fit.Count == count) break;
         }
         if (fit.Count > 0) return (fit.ToArray(), null, false);
@@ -3600,10 +3627,50 @@ public static class PlayerBotDriver
         if (pool.Any(c => !c.Failed)) pool = pool.Where(c => !c.Failed);
         else if (maxWalk > 0) return (Array.Empty<T>(), null, false);                   // #167 E W1: near, never a failed one
         ConColor safest = pool.Min(c => c.Median);
-        return (pool.Where(c => c.Median == safest).Take(count).Select(c => monsters[c.I].Npc).ToArray(), safest, stale);
+        (int I, ConColor Median, bool Fresh, bool Failed)[] safestCamps = pool.Where(c => c.Median == safest).ToArray();
+        float preferWithin = Vector3.Distance(monsters[safestCamps[0].I].At, here) + NearWalk;   // #167 F P3: the review's
+        return (safestCamps                                                                       //   bound
+            .OrderBy(c => !OverCap(c.I, c.Median) && Vector3.Distance(monsters[c.I].At, here) <= preferWithin ? 0 : 1)
+            .Take(count).Select(c => monsters[c.I].Npc).ToArray(), safest, stale);   // a stable sort: nearest first
     }
 
     private static (int, int) CampCell(Vector3 at) => ((int)MathF.Floor(at.X / RoamRadius), (int)MathF.Floor(at.Y / RoamRadius));
+
+    // #167 F P3: the plan's adds by CampCell, null with none.
+    private static Dictionary<(int, int), List<int>> AddGrid<T>(
+        IReadOnlyList<(T Npc, Vector3 At, int AggroRange, ConColor Con)> planAdds)
+    {
+        if (planAdds == null || planAdds.Count == 0) return null;
+        Dictionary<(int, int), List<int>> grid = new();
+        for (int i = 0; i < planAdds.Count; i++)
+        {
+            (int, int) cell = CampCell(planAdds[i].At);
+            if (!grid.TryGetValue(cell, out List<int> list)) grid[cell] = list = new();
+            list.Add(i);
+        }
+        return grid;
+    }
+
+    // #167 F P3: whether an aggressive monster over campCap reaches the spot at `at` (its aggro range + AddMargin, the
+    // pick's ring), other than the spot's own. The 3x3 cells hold every reach up to RoamRadius (aggro 1,200); the 23
+    // realm-0 Mob rows over that (of 47,531 aggressive) are read to 1,400.
+    private static bool OverCapNear<T>(T spot, Vector3 at, ConColor campCap,
+        IReadOnlyList<(T Npc, Vector3 At, int AggroRange, ConColor Con)> planAdds, Dictionary<(int, int), List<int>> addGrid)
+        where T : class
+    {
+        (int cx, int cy) = CampCell(at);
+        for (int dx = -1; dx <= 1; dx++)
+            for (int dy = -1; dy <= 1; dy++)
+                if (addGrid.TryGetValue((cx + dx, cy + dy), out List<int> list))
+                    foreach (int j in list)
+                    {
+                        (T npc, Vector3 position, int aggroRange, ConColor con) = planAdds[j];
+                        float reach = aggroRange + AddMargin;
+                        if (con > campCap && !ReferenceEquals(npc, spot) && Vector3.DistanceSquared(position, at) <= reach * reach)
+                            return true;
+                    }
+        return false;
+    }
 
     // The median con of the camp at monsters[centre], its non-grey monsters within RoamRadius (the grid's cells), and the
     // same with each avoided one as purple.
@@ -4861,8 +4928,9 @@ public static class PlayerBotDriver
             corridorFrom = null;                                                 //   test then, as before
         ConColor natural = MaximumTargetCon(1, 0);
         GameNPC[] npcs = WorldMgr.GetNPCsFromRegion(state.AnchorRegion);          // #167 E W1: one read, both passes
+        List<(GameNPC Npc, Vector3 At, int AggroRange, ConColor Con)> planAdds = new();   // #167 F P3: its adds, in the
         List<(GameNPC Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> monsters = PlanMonsters(player, npcs,
-            zone, natural, state.AvoidUntil, now);
+            zone, natural, state.AvoidUntil, now, planAdds);                       //   monsters' pass
         Vector3[] failed = FailedCamps(state.FailedCamps, state.AnchorRegion, now);
         bool barredOld = Array.IndexOf(failed, state.Anchor) >= 0;                 // #167 D9: RELOCATE barred=old
         if (reason == Capped)                                                      // #167 F P1: a capped plan bars the
@@ -4876,23 +4944,29 @@ public static class PlayerBotDriver
         (ConColor fit, ConColor? killerCon) = PlanCaps(state, now);                 // #167 D6
         bool afterDeath = AfterDeathPlan(reason, state.LastDeathTick == 0 ? -1 : now - state.LastDeathTick);   // #167 E W1
         Zone nearZone = player.CurrentZone;                                        // the zone it stands in: after a
-        List<(GameNPC Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> nearMonsters =   //   death its bind's
-            !afterDeath || nearZone == null ? null : nearZone == zone ? monsters
-                : PlanMonsters(player, npcs, nearZone, natural, state.AvoidUntil, now);
+        List<(GameNPC Npc, Vector3 At, int AggroRange, ConColor Con)> nearAdds =   //   death its bind's (#167 F P3: and
+            !afterDeath || nearZone == null ? null : nearZone == zone ? planAdds : new();   //   its adds)
+        List<(GameNPC Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> nearMonsters =
+            nearAdds == null ? null : nearZone == zone ? monsters
+                : PlanMonsters(player, npcs, nearZone, natural, state.AvoidUntil, now, nearAdds);
         Vector3? nearFrom = nearZone != null && nav.HasNavmesh(nearZone) ? here : null;   // on the mesh (checked above)
+        HashSet<GameNPC> overSkipped = new();                                      // #167 F P3: RELOCATE overSkipped=,
+                                                                                   //   each spot once (the review)
         (GameNPC[] spots, ConColor? fallback, bool stale, bool near) = PlanCampChoice(nearMonsters, monsters, here, from,
-            fit, natural, failed, state.RelocateRejected, RelocateCandidates, killerCon, afterDeath);
+            fit, natural, failed, state.RelocateRejected, RelocateCandidates, killerCon, afterDeath, nearAdds: nearAdds,
+            planAdds: planAdds, overSkipped: overSkipped);
         if (TakeCamp(spots, fallback, stale, near)) return;
         if (near)                                                                  // no corridor to any near camp: the
         {                                                                          //   plan as before
             (spots, fallback, stale, near) = PlanCampChoice(nearMonsters, monsters, here, from, fit, natural, failed,
-                state.RelocateRejected, RelocateCandidates, killerCon, afterDeath, tryNear: false);
+                state.RelocateRejected, RelocateCandidates, killerCon, afterDeath, tryNear: false, nearAdds: nearAdds,
+                planAdds: planAdds, overSkipped: overSkipped);
             if (TakeCamp(spots, fallback, stale, near)) return;
         }
         bool lifted = spots.Length == 0 && FallBack(state, player, reason, now);   // no camp in the zone: none to try next
         if (Log.IsInfoEnabled)                                                     //   time either; #167 F P1: a lift
             Log.Info(RelocateNoneLine(player.Name, player.Level, spots.Length, zone.ID, reason, now - state.ReleasedAt,
-                barredOld, killerCon, afterDeath, crowdRefused, lifted));
+                barredOld, killerCon, afterDeath, crowdRefused, lifted, overSkipped.Count));
 
         // The first of a camp's spots it has a corridor to (one without is rejected, RelocateRejected): RELOCATE, PlanCamp.
         // #167 F P1: a spot the crowd bar barred (only the fallback takes one) lifts the limits there (InCrowdBarred).
@@ -4912,7 +4986,7 @@ public static class PlayerBotDriver
                 if (Log.IsInfoEnabled)
                     Log.Info(RelocateLine(player.Name, player.Level, state.Anchor, spot, (int)Vector3.Distance(here, spot),
                         npc.Name, npc.EffectiveLevel, campZone.ID, reason, campFallback, now - state.ReleasedAt, barredOld,
-                        killerCon, afterDeath, nearCamp, crowdRefused, liftedCamp));
+                        killerCon, afterDeath, nearCamp, crowdRefused, liftedCamp, overSkipped.Count));
                 PlanCamp(state, spot, campFallback, campStale, reason,            // and BACK replan=moved (#167 C1)
                     liftedCamp ? now + CrowdLiftMilliseconds : 0);
                 return true;

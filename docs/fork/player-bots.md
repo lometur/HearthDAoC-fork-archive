@@ -170,8 +170,11 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   the kill while that monster is still dead, counts as a potential add by the target or where the bot would stand (not
   on its walk in: it often stands on that spot), so the 2,600-unit ring takes no such target and the 5,000-unit ring
   ranks it as more crowded; it never refuses a pull for one, nor counts one in `crowd=`. After deaths it moves to
-  an easier camp. It avoids what killed it for 15 minutes. Training dummies are no monsters: it neither plans camps at
-  them nor pulls them.
+  an easier camp. A camp it plans is none that an aggressive monster over the plan's cap reaches (its aggro range and
+  200 units, each monster's own); where none fits and it takes the safest camps as its fallback, it tries first those
+  that no aggressive monster over their con reaches, if they lie no more than 10,000 units farther than the nearest.
+  It avoids what killed it for 15 minutes. Training dummies are no monsters: it neither plans camps at them nor pulls
+  them.
 - It swings and casts only at a target in sight, by the navmesh's line; a target hitting it in contact (within 250
   units) counts as in sight though that line says not, as a player sees what hits it. A target out of sight that
   fights neither it nor its pet, nor has the bot as its target (coming at it round an obstacle), is walked toward 300
@@ -595,8 +598,10 @@ All start `PLAYER_BOT_`:
   camp came from its near pass (within 10,000 units of where the bot stood). A capped plan (`reason=capped`) then gives
   `crowdRefused=`, the spots of a melee or archer bot's pulls refused for their crowd in the last 10 minutes, which it
   leaves out, while there are any. `lifted=1` ends a line whose camp lies among those spots, and a line with no camp
-  after a last search that only refused crowded pulls: the bot's crowd limits are then off there for 5 minutes. A
-  break-off drops its fight (`FIGHT result=dropped`);
+  after a last search that only refused crowded pulls: the bot's crowd limits are then off there for 5 minutes. Any
+  `RELOCATE` then ends with `overSkipped=`, the camps that fit but were left out for an aggressive monster over the cap
+  in reach (each once, over the plan's passes), while there are any. A break-off drops its fight (`FIGHT
+  result=dropped`);
 - `LIFT`: the same lift where no `RELOCATE` line is written, as the bot hunts where it is: its `reason=` and `why=`,
   `norelocate` (it may not relocate, as the lever test's bots, or stands in no zone) or `offmesh` (it stands off the
   navmesh), then `lifted=1`;

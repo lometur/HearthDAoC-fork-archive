@@ -329,6 +329,122 @@ public sealed class UT_PlayerBotDriver
             5).Spots, Is.EqualTo(new[] { "m700", "m900", "m1100" }));
     }
 
+    // --- #167 F P3: the plan skips a camp an aggressive monster over its cap reaches ---
+
+    private static (string, Vector3, int, ConColor) PlanAdd(string name, float x, ConColor con, int aggroRange = 400) =>
+        (name, new Vector3(x, 0, 0), aggroRange, con);
+
+    // The fit pass takes no camp an aggressive monster over the cap reaches (its aggro range + 200, the pick's ring): in
+    // the seven base legs such planned spots died 0.27-0.29 a relocation against 0.09-0.11 (160 relocations, 46 deaths),
+    // the rainbow sprites among them (19 of their 35 deaths). One at or under the cap, or out of reach, is no bar.
+    [Test]
+    public void A_plan_skips_a_camp_an_aggressive_monster_over_its_cap_reaches()
+    {
+        var monsters = new[] { Monster("near camp", 1_000, ConColor.BLUE), Monster("far camp", 10_000, ConColor.BLUE) };
+        var skipped = new HashSet<string>();
+        string[] Plan(params (string, Vector3, int, ConColor)[] adds) => PlayerBotDriver.PlanRelocation(monsters, Vector3.Zero,
+            ConColor.BLUE, ConColor.YELLOW, null, new HashSet<string>(), 5, planAdds: adds, overSkipped: skipped).Spots;
+        Assert.That(Plan(PlanAdd("orange", 1_500, ConColor.ORANGE)), Is.EqualTo(new[] { "far camp" }));
+        Assert.That(skipped, Is.EqualTo(new[] { "near camp" }));
+        Assert.That(Plan(PlanAdd("blue", 1_500, ConColor.BLUE)), Is.EqualTo(new[] { "near camp", "far camp" }), "at the cap");
+        Assert.That(Plan(PlanAdd("far orange", 1_601, ConColor.ORANGE)), Is.EqualTo(new[] { "near camp", "far camp" }),
+            "out of its reach");
+        Assert.That(Plan(), Is.EqualTo(new[] { "near camp", "far camp" }), "none: as before");
+    }
+
+    // With no fit camp, the fallback's safest camps go clear ones first: of two YELLOW camps the one no monster over
+    // YELLOW reaches is tried before the nearer one an orange reaches, but only within the nearest one's distance +
+    // NearWalk (the review: fallback RELOCATEs already run a median 7,837 and p90 28,002 units): 12,000 is past 1,000 +
+    // 10,000, so the nearer goes first as before.
+    [TestCase(10_000f, new[] { "far yellow", "near yellow" })] [TestCase(11_000f, new[] { "far yellow", "near yellow" })]
+    [TestCase(12_000f, new[] { "near yellow", "far yellow" })]
+    public void A_fallback_tries_a_camp_no_monster_over_its_con_reaches_first(float farX, string[] expected)
+    {
+        var monsters = new[] { Monster("near yellow", 1_000, ConColor.YELLOW), Monster("far yellow", farX, ConColor.YELLOW) };
+        (string[] spots, ConColor? fallback, _) = PlayerBotDriver.PlanRelocation(monsters, Vector3.Zero, ConColor.BLUE,
+            ConColor.YELLOW, null, new HashSet<string>(), 5, planAdds: new[] { PlanAdd("orange", 1_300, ConColor.ORANGE) });
+        Assert.That(spots, Is.EqualTo(expected));
+        Assert.That(fallback, Is.EqualTo(ConColor.YELLOW));
+    }
+
+    // After a death the near pass reads the near zone's adds: it takes the clear near camp.
+    [Test]
+    public void The_near_pass_skips_a_camp_a_monster_over_its_cap_reaches()
+    {
+        var near = new[] { Monster("near camp", 1_000, ConColor.BLUE), Monster("next near", 4_000, ConColor.BLUE) };
+        (string[] spots, _, _, bool isNear) = PlayerBotDriver.PlanCampChoice(near, near, Vector3.Zero, Vector3.Zero,
+            ConColor.BLUE, ConColor.YELLOW, null, new HashSet<string>(), 5, null, afterDeath: true,
+            nearAdds: new[] { PlanAdd("orange", 1_300, ConColor.ORANGE) });
+        Assert.That(spots, Is.EqualTo(new[] { "next near" }));
+        Assert.That(isNear, Is.True);
+    }
+
+    // A spot skipped in the near pass and again in the far one counts once (the review: overSkipped a set). The near
+    // pass finds no camp (its fallback is BLUE at most), so the far pass plans.
+    [Test]
+    public void A_spot_skipped_in_both_passes_counts_once()
+    {
+        var near = new[] { Monster("near camp", 1_000, ConColor.YELLOW) };
+        var all = new[] { Monster("near camp", 1_000, ConColor.YELLOW), Monster("far camp", 20_000, ConColor.YELLOW) };
+        var adds = new[] { PlanAdd("red", 1_300, ConColor.RED) };
+        var skipped = new HashSet<string>();
+        (string[] spots, _, _, bool isNear) = PlayerBotDriver.PlanCampChoice(near, all, Vector3.Zero, Vector3.Zero,
+            ConColor.YELLOW, ConColor.YELLOW, null, new HashSet<string>(), 5, null, afterDeath: true, nearAdds: adds,
+            planAdds: adds, overSkipped: skipped);
+        Assert.That(spots, Is.EqualTo(new[] { "far camp" }));
+        Assert.That(isNear, Is.False);
+        Assert.That(skipped, Is.EqualTo(new[] { "near camp" }));
+    }
+
+    // The plan's adds come from the same pass over the region's NPCs as its monsters (the review): each alive monster in
+    // the zone that would aggro the bot, with its own brain's aggro range and its con; a passive one, one outside the
+    // zone and a dead one are none.
+    [Test]
+    public void The_plans_adds_come_from_its_monsters_pass()
+    {
+        var calculators = (DOL.GS.PropertyCalc.IPropertyCalculator[])typeof(GameLiving)
+            .GetField("m_propertyCalc", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        DOL.GS.PropertyCalc.IPropertyCalculator previous = calculators[(int)eProperty.LivingEffectiveLevel];
+        calculators[(int)eProperty.LivingEffectiveLevel] = new LevelOnly();
+        try
+        {
+            var (region, zone) = World();
+            ImmunePlayer player = LiveImmunePlayer();
+            typeof(GameObject).GetField("m_level", Hidden)!.SetValue(player, (byte)20);
+            player.CurrentRegion = region;
+            GameNPC aggressive = CampMonster(region, 1_000, 1_000, 20), passive = CampMonster(region, 1_500, 1_000, 20),
+                outside = CampMonster(region, 70_000, 1_000, 20), dead = CampMonster(region, 2_000, 1_000, 20);
+            foreach (GameNPC npc in new[] { aggressive, outside, dead })
+                ((DOL.AI.Brain.StandardMobBrain)npc.Brain).AggroLevel = 50;
+            foreach (GameNPC npc in new[] { aggressive, passive, outside, dead })
+                ((DOL.AI.Brain.StandardMobBrain)npc.Brain).AggroRange = 400;
+            typeof(GameObject).GetField("m_health", Hidden)!.SetValue(dead, 0);
+            var adds = new List<(GameNPC Npc, Vector3 At, int AggroRange, ConColor Con)>();
+            var monsters = PlayerBotDriver.PlanMonsters(player, [aggressive, passive, outside, dead], zone, ConColor.YELLOW,
+                new Dictionary<string, long>(), 0, adds);
+            Assert.That(monsters.Select(m => m.Npc), Is.EqualTo(new[] { aggressive, passive }));
+            Assert.That(adds, Is.EqualTo(new[] { (aggressive, new Vector3(1_000, 1_000, 0), 400, ConColor.YELLOW) }));
+        }
+        finally
+        {
+            calculators[(int)eProperty.LivingEffectiveLevel] = previous;
+        }
+    }
+
+    // RELOCATE overSkipped=, the fit spots skipped for an aggressive monster over the cap in reach, after lifted=, on a
+    // camp's line and on the none-line.
+    [Test]
+    public void A_relocation_gives_the_spots_it_skipped_for_a_monster_over_the_cap()
+    {
+        Assert.That(PlayerBotDriver.RelocateLine("Pbotaaaad", 41, Vector3.Zero, new Vector3(6_000, 0, 0), 6_000, "giant boar",
+            40, 12, PlayerBotDriver.Outgrown, null, 0, false, null, overSkipped: 2), Does.EndWith(" fallback=- overSkipped=2"));
+        Assert.That(PlayerBotDriver.RelocateLine("Pbotaaaad", 41, Vector3.Zero, new Vector3(6_000, 0, 0), 6_000, "giant boar",
+                40, 12, PlayerBotDriver.Capped, null, 0, false, null, crowdRefused: 1, lifted: true, overSkipped: 3),
+            Does.EndWith(" crowdRefused=1 lifted=1 overSkipped=3"));
+        Assert.That(PlayerBotDriver.RelocateNoneLine("Pbotaaaad", 41, 0, 12, PlayerBotDriver.Outgrown, 0, false, null,
+            overSkipped: 1), Does.EndWith(" reason=outgrown overSkipped=1"));
+    }
+
     // No camp fits: a GameBot takes the safest camp there is, not its failed one while another exists, and hunts it at
     // that camp's con (SelectSafestAvailableAfterDeath, AutonomousBotDecisionEngine.cs:293-313; AWBC:3422-3452). A camp
     // over the natural cap is none (AWBC:3426).
