@@ -285,6 +285,18 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
 - At login it also first steps out of the reach of every monster round it that would aggro, then hunts: no wait and
   no new camp. A caster rests first, after its login buffs, as after a kill; a life after a release needs no such rest
   (the release restores full power).
+- On its walk to a camp (one it planned, or back to its leash) it looks ahead along its route at each search, every 2 s:
+  1,500 units along the navmesh corridor it walks (none before the walk's first step on it), against the aggressive
+  monsters that search found, where they stand then. A monster blocks the walk when its reach (its aggro range and 200
+  units) crosses that stretch, it reaches neither the bot (a fight already) nor the camp (the camp's own), and it is
+  over the bot's cap or in a pack bigger than its con allows on the way: 3 at a green, 2 at a blue, 1 at a yellow or
+  harder (itself and the others whose reach covers where the bot would pass it). The bot then goes round it, to a point
+  beside it its aggro range and 320 units out, from which a straight way on the navmesh leads back to the route past it,
+  both straight ways clear of every such monster by its aggro range and 100: at most twice round one monster and four
+  times on a walk, and none while it walks round one already. On the walk to the point it reads the others by their
+  aggro range and 100, the clearance its ways were checked at. With no way round it gives the camp up, at most once in
+  10 minutes: the camp is barred for 15 minutes and it plans a new one from where it stands at once, standing still
+  until then (with no other camp, or no way to one, it walks on to its own). Else it walks on past the monster.
 - It walks on the navmesh. A bot made at a level from a spots line also trains on each level-up.
 - In a run of 3 bots or fewer, `hdbot-alb-01` also does quest 20206 (Immediate Resolution) and its class promotion.
 
@@ -325,7 +337,13 @@ Playing:
     the exceptions). One put on such a piece some other way (a respawn, a teleport) is teleported back to its camp
     (`CUTOFF`), never in a fight or in sight of a real player. One whose camp is itself on such a piece is still put
     back onto it, and then keeps to it.
-  - Walks don't look ahead for monsters on the route.
+  - Only the walk to a camp looks ahead on its route (#167 F12). A walk to a target, a roam, the walk to a rest spot, a
+    step out or back, and the walk out after a release don't (a break-off's run checks its straight way only). The
+    look-ahead reads the last search's monsters (within 3,300 to 5,700 units, every 2 s) along the corridor's next 1,500
+    units, from the walk's first step on its corridor; it never pulls a monster on the way on its own terms, as a
+    GameBot does. A plan doesn't yet weigh the monsters on the way to a camp, only those round it: it takes a camp whose
+    corridor a monster blocks as readily as another, and the walk then goes round the monster, gives the camp up or
+    walks on past it. Choosing the camp by the way there is a follow-up.
 - **Resting:** about half their time: 52.1% over the six legs, against 52.6% on v0.37b-hearth.16 (time-weighted).
   Most of it is the real cost of player regeneration. A kill now skips its rest when the bot has what its next pull
   needs. The 80% endurance stop still starts sits that health and power wouldn't, a quarter fewer than on
@@ -400,7 +418,9 @@ Read these with their caveats:
 
 A bot walks with upstream's `PlayerTravelPath` corridor cursor (`PlayerBotPathMover`). Twenty-two marked edits there
 reach only player bots: `/travel` isn't registered, and `/grind` uses only `TryBuildCorridor`. If `/travel` is ever
-registered, test it in game. The mover:
+registered, test it in game. One of them only reads (#167 F12): `CopyCorners`, the corridor's corners still ahead of the
+walk, which the driver's route look-ahead reads through the mover (`CopyUpcoming`, nothing before the walk's first
+corridor step); it moves nothing and plans nothing. The mover:
 - starts each step from the exact spot it last put the bot on. The game stores positions in whole units, and by
   Olorustos the rounded spot lay off the navmesh, so the quest bot stood there for 14 minutes.
   `UT_PlayerBotWalkReplay` replays that walk on the installed navmesh.
@@ -577,11 +597,12 @@ All start `PLAYER_BOT_`:
   `rate=` (the health lost a second over the last 3 s; a gain is negative), `wouldBreak=` (the bot's health when a
   break-off projected from that rate would have fired, under 40% or under 6 s of the loss; logged only, -1 if never) and
   `walk=` (the walk on the think before the fight began: `none`, `hunt`, `anchor`, `roam`, `clear`, `rest`, `kite`,
-  `breakoff` or `walkout`, the walk out toward the camp planned under the release's immunity). Out of a fight `DEATH`
-  gives -1 for the fight's fields, `rate=` at the death and the walk on its last think alive; it gives `end=`
-  (endurance). Both then give `kiteNone=range:clear:mesh:fit`, the fight's steps back that found no point, by why:
-  `range` (the bot already stood at its spell's reach), `clear` (no point out of the other monsters' reach), `mesh`
-  (none on the navmesh) or `fit` (none within the stop once on the navmesh's height); -1 each out of a fight.
+  `breakoff`, `walkout`, the walk out toward the camp planned under the release's immunity, or `detour`, the walk to a
+  camp gone round a monster on its route). Out of a fight `DEATH` gives -1 for the fight's fields, `rate=` at the death
+  and the walk on its last think alive; it gives `end=` (endurance). Both then give `kiteNone=range:clear:mesh:fit`,
+  the fight's steps back that found no point, by why: `range` (the bot already stood at its spell's reach), `clear`
+  (no point out of the other monsters' reach), `mesh` (none on the navmesh) or `fit` (none within the stop once on the
+  navmesh's height); -1 each out of a fight.
   Then `dots=`, its damage-over-time casts, `qcKill=`, 1 when a cast went under Quickcast as the killing nuke, and
   `ctlMez=`, its mezzes at the target (-1 each out of a fight), then `raceLeft=`, the race's projection of the target's
   health at the bot's death (the one-monster break-off's, with 20% lost since the first hit), at the first think under
@@ -627,19 +648,21 @@ All start `PLAYER_BOT_`:
   `FIGHT result=dropped breakOff=1` line carries the 1). Both then end with `capHold=`, the seconds its capped clock had
   run when the fight began (its searches had found no pull it could take; a pull's own search stops that clock, so a
   pull reads -1), -1 with no capped clock; on `DEATH` the fatal fight's, -1 out of a fight.
-  `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `walkout`, `rest`, `kite`, `turret`
-  or `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
-  after a break-off its `reason=` is `brokeoff`. Either ends with `barred=old` when the death or the break-off came on
-  the walk to the camp it had, which the plan then leaves out. Any `RELOCATE` then ends with `capKill=`, the lowest con
-  that killed the bot in the last 5 minutes, yellow or harder (a blue or green killer logs none), while there is one.
-  Then `recent=1` on a plan made within 15 minutes of a death (a died, break-off or capped one), and `near=1` when the
-  camp came from its near pass (within 10,000 units of where the bot stood). A capped plan (`reason=capped`) then gives
-  `crowdRefused=`, the spots of a melee or archer bot's pulls refused for their crowd in the last 10 minutes, which it
-  leaves out, while there are any. `lifted=1` ends a line whose camp lies among those spots, and a line with no camp
-  after a last search that only refused crowded pulls: the bot's crowd limits are then off there for 5 minutes. Any
-  `RELOCATE` then ends with `overSkipped=`, the camps that fit but were left out for an aggressive monster over the cap
-  in reach (each once, over the plan's passes), while there are any. A break-off drops its fight (`FIGHT
-  result=dropped`);
+  `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `walkout`, `rest`, `kite`, `turret`,
+  `breakoff` or `detour` (the walk to a detour's point; each such end is also a `ROUTE bot=` line, `action=blocked`,
+  while `BLOCKED` lines are at most one a bot a minute). `RELOCATE` after a death (`reason=died`) ends with
+  `sinceRelease=`, the milliseconds since the release; after a break-off its `reason=` is `brokeoff`. Either ends with
+  `barred=old` when the death or the break-off came on the walk to the camp it had, which the plan then leaves out. Any
+  `RELOCATE` then ends with `capKill=`, the lowest con that killed the bot in the last 5 minutes, yellow or harder (a
+  blue or green killer logs none), while there is one. Then `recent=1` on a plan made within 15 minutes of a death (a
+  died, break-off or capped one), and `near=1` when the camp came from its near pass (within 10,000 units of where the
+  bot stood). A capped plan (`reason=capped`) then gives `crowdRefused=`, the spots of a melee or archer bot's pulls
+  refused for their crowd in the last 10 minutes, which it leaves out, while there are any. `lifted=1` ends a line whose
+  camp lies among those spots, and a line with no camp after a last search that only refused crowded pulls: the bot's
+  crowd limits are then off there for 5 minutes. Any `RELOCATE` then ends with `overSkipped=`, the camps that fit but
+  were left out for an aggressive monster over the cap in reach (each once, over the plan's passes), while there are
+  any. A walk to its camp that gave the camp up for a monster on its route plans with `reason=route`, and the line ends
+  with `barred=old`. A break-off drops its fight (`FIGHT result=dropped`);
 - `LIFT`: the same lift where no `RELOCATE` line is written, as the bot hunts where it is: its `reason=` and `why=`,
   `norelocate` (it may not relocate, as the lever test's bots, or stands in no zone) or `offmesh` (it stands off the
   navmesh), then `lifted=1`;
@@ -707,6 +730,16 @@ All start `PLAYER_BOT_`:
     `zone=`, `kind=` (`took`, `ground`, or `step` or `link`: refused), `at=` and `to=`, the step's ends,
     `island=from->to`, `home=`, the camp's island, `goal=` and `walk=`; for `ground`, `to=` and `island=` name the step
     refused, not the floor taken;
+- `ROUTE` (#167 F12): a walk to a camp's look-ahead, on two kinds of line:
+  - `ROUTE bot=`, one per monster that blocked such a walk: `action=` (`detour`: it went round it; `giveup`: it gave
+    the camp up; `pass`: it walked on past it; `blocked`: its walk to the detour's point ended blocked), `target=`,
+    `con=`, `cap=` (the bot's), `pack=` (it and the others whose reach covers where the bot would pass it; -1 on
+    `blocked`), `along=` (how far along the route the bot would pass nearest it; -1 on `blocked`), `from=` (where the
+    bot stands), `at=` (where the monster stands), `goal=` (the camp) and `waypoint=` (the detour's point, `-` for
+    none);
+  - `ROUTE win=`, every minute after `CROSSING`, over all bots: `bots=`, `checks=` (the looks ahead; none on a think
+    with no corridor yet), `detours=`, `giveups=`, `passes=`, `blocked=`, `ms=` (the looks' time) and `msPerBotSec=`.
+    When the server stops, one more covers the part of a minute since the last, so a leg's lines sum exactly;
 - `CUTOFF`: a blocked roam found no path from where the bot stands to its camp's centre, and the bot is teleported
   there: `at=`, where it stood, `anchor=`, the centre, `distance=` between them, and `waited=`, the seconds it was held
   for a real player in sight or a fight (0: none). `DRIVER`'s `stuck=` counts these teleports with those after 15
