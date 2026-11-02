@@ -296,10 +296,11 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   navmesh leads back to the route past it, both straight ways clear of every such monster by its aggro range and 100
   (one nearer the bot than that: approached no nearer than it stands): at most twice round one monster and four times on
   a walk, and none while it walks round one already. On the walk to the point it reads the others by their aggro range
-  and 100, the clearance its ways were checked at, and from the point on the monster it went round too. A fight or a
-  rest ends the walk round it. With no way round it gives the camp up, at most once in 10 minutes: the camp is barred
-  for 15 minutes and it plans a new one from where it stands at once, standing still until then (with no other camp, or
-  no way to one, it walks on to its own). Else it walks on past the monster.
+  and 100, the clearance its ways were checked at, and from the point on the monster it went round too, at the
+  clearance its ways kept from it. A fight or a rest ends the walk round it. With no way round it gives the camp up, at
+  most once in 10 minutes: the camp is barred for 15 minutes and it plans a new one from where it stands at once,
+  standing still until then (with no other camp, or no way to one, it walks on to its own). Else it walks on past the
+  monster.
 - It walks on the navmesh. A bot made at a level from a spots line also trains on each level-up.
 - In a run of 3 bots or fewer, `hdbot-alb-01` also does quest 20206 (Immediate Resolution) and its class promotion.
 

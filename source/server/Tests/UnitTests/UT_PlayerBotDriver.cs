@@ -10276,7 +10276,34 @@ public sealed class UT_PlayerBotDriver
             Is.EqualTo(0), "not gone round: named again");
         Assert.That(along, Is.EqualTo(479.1).Within(0.05));
         Assert.That(PlayerBotDriver.FirstBlocker(after, threats, ConColor.YELLOW, null, null, out _, out _,
-            rounded: new HashSet<string> { "B" }), Is.EqualTo(-1), "gone round");
+            rounded: new Dictionary<string, int> { ["B"] = 100 }), Is.EqualTo(-1), "gone round");
+    }
+
+    // #167 F12 (the fix's check): a blocker that stands near the bot is gone round at the clearance its legs kept, not
+    // a flat aggro + 100. The orange B at (532,-206,0), aggro 500, 570.5 from the bot; the route (0,0,0) -> (1544,0,0)
+    // passes it at 206, so it is named. Its legs are checked at min(600, 569.5); the way round, (122,614,0), rejoins at
+    // the anchor and its second leg passes B at 590.3. Read at the 69 kept (569 in all), the walk on from the point
+    // names it no more; read at 100 it would be named again at along 701.5.
+    [Test]
+    public void A_near_blocker_gone_round_is_read_at_the_clearance_its_legs_kept_in_FirstBlocker()
+    {
+        var into = new List<(Vector3 Point, Vector3 Rejoin, float Cost)>();
+        List<(string Npc, Vector3 At, int AggroRange, ConColor Con)> threats = [("B", new(532, -206, 0), 500, ConColor.ORANGE)];
+        Vector3 anchor = new(1_544, 0, 0);
+        Vector3[] route = { Vector3.Zero, anchor };
+        Assert.That(PlayerBotDriver.FirstBlocker(route, threats, ConColor.YELLOW, null, null, out _, out _), Is.EqualTo(0));
+        Assert.That(PlayerBotDriver.DetourClearance(Vector3.Zero, threats[0].At, 500), Is.EqualTo(569.5).Within(0.05));
+        PlayerBotDriver.DetourCandidates<string>(route, 0, threats, into);
+        (Vector3 point, Vector3 rejoin, _) = into[0];
+        Assert.That(point.X, Is.EqualTo(122).Within(1));
+        Assert.That(point.Y, Is.EqualTo(614).Within(1));
+        Assert.That(rejoin, Is.EqualTo(anchor));
+        Vector3[] after = { point, anchor };
+        Assert.That(PlayerBotDriver.FirstBlocker(after, threats, ConColor.YELLOW, null, null, out _, out float along,
+            rounded: new Dictionary<string, int> { ["B"] = 100 }), Is.EqualTo(0), "read at a flat 100: named again");
+        Assert.That(along, Is.EqualTo(701.5).Within(0.5));
+        Assert.That(PlayerBotDriver.FirstBlocker(after, threats, ConColor.YELLOW, null, null, out _, out _,
+            rounded: new Dictionary<string, int> { ["B"] = 69 }), Is.EqualTo(-1), "read at the 69 its legs kept");
     }
 
 
@@ -10297,10 +10324,10 @@ public sealed class UT_PlayerBotDriver
             var brain = (DOL.AI.Brain.StandardMobBrain)drake.Brain;
             (brain.AggroLevel, brain.AggroRange) = (100, 500);
             var state = new PlayerBotState(bot) { AnchorRegion = region.ID, Anchor = anchor, RoamDestination = anchor,
-                RouteGoal = anchor, RouteWaypoint = point, RouteBlocker = drake, RouteGoalDetours = 1 };
+                RouteGoal = anchor, RouteWaypoint = point, RouteBlocker = drake, RouteGoalDetours = 1, RouteBlockerMargin = 100 };
             state.RouteDetours[drake] = 1;
             roam.Invoke(null, [state, bot, 10_000L]);                                    // at the point: arrived
-            Assert.That((state.RouteWaypoint, state.RouteRounded.Contains(drake)), Is.EqualTo(((Vector3?)null, true)), "gone round");
+            Assert.That((state.RouteWaypoint, state.RouteRounded.ContainsKey(drake)), Is.EqualTo(((Vector3?)null, true)), "gone round");
             roam.Invoke(null, [state, bot, 10_250L]);                                    // the walk on's first step
             state.SearchAdds.Add(drake);
             state.SearchAddsAt = 12_000;
@@ -10323,17 +10350,17 @@ public sealed class UT_PlayerBotDriver
         var monster = (GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC));
         GamePlayer dead = Player(null);
         var state = new PlayerBotState(dead) { RouteGoal = new(1, 2, 3) };
-        state.RouteRounded.Add(monster);
+        state.RouteRounded[monster] = 100;
         handleDeath.Invoke(null, [state, dead, 54_000L]);
         Assert.That(state.RouteRounded, Is.Empty, "a death");
-        state.RouteRounded.Add(monster);
+        state.RouteRounded[monster] = 100;
         PlayerBotDriver.ResetOnRegionChange(state, 7);
         Assert.That(state.RouteRounded, Is.Empty, "a region change");
         InTheField(new OpenMesh(), OnPocket, (region, zone, bot) =>
         {
             var back = new PlayerBotState(bot) { AnchorRegion = region.ID, Anchor = OnPocket + new Vector3(500, 0, 0),
                 RouteGoal = OnPocket + new Vector3(500, 0, 0) };
-            back.RouteRounded.Add(monster);
+            back.RouteRounded[monster] = 100;
             moveBack.Invoke(null, [back, bot, 10_000L]);
             Assert.That((back.RouteGoal, back.RouteRounded.Count), Is.EqualTo(((Vector3?)null, 0)), "a move back");
         });

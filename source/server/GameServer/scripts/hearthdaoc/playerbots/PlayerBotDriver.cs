@@ -363,8 +363,10 @@ public sealed class PlayerBotState
     public readonly Dictionary<GameNPC, int> RouteDetours = new();   //   walk and round each monster, the monsters it
     public readonly HashSet<GameNPC> RoutePassed = new();        //   walks on past, and the next give-up's earliest
     public long NextRouteGiveUpTick;                             //   (GiveUpRoute)
-    public readonly HashSet<GameNPC> RouteRounded = new();       // #167 F12 (the build's review): the monsters a detour
-                                                                 //   went round on this walk (read at AddMargin / 2)
+    public readonly Dictionary<GameNPC, int> RouteRounded = new();   // #167 F12 (the build's review): the monsters a
+                                                                 //   detour went round on this walk, each read at the
+    public int RouteBlockerMargin;                               //   margin its legs kept (DetourClearance; the
+                                                                 //   detour's)
 }
 
 // HearthDAoC player bots (#137): a thin copy of the /bot pilot's think (bots/autonomous/AutonomousPlayerPilot.cs:229-374) for a
@@ -3423,7 +3425,7 @@ public static class PlayerBotDriver
     public static int FirstBlocker<T>(ReadOnlySpan<Vector3> route,
         IReadOnlyList<(T Npc, Vector3 At, int AggroRange, ConColor Con)> threats, ConColor cap, ICollection<T> passed,
         T skip, out int pack, out float along, float lookAhead = RouteLookAhead, int margin = AddMargin,
-        ICollection<T> rounded = null, Vector3? camp = null) where T : class
+        IReadOnlyDictionary<T, int> rounded = null, Vector3? camp = null) where T : class
     {
         int first = -1;
         (pack, along) = (0, float.MaxValue);
@@ -3432,7 +3434,7 @@ public static class PlayerBotDriver
             T npc = threats[i].Npc;
             if (ReferenceEquals(npc, skip) || passed != null && passed.Contains(npc) ||
                 !BlocksRoute(route, i, threats, cap, lookAhead, out int size, out float crossing,
-                    margin: rounded != null && rounded.Contains(npc) ? AddMargin / 2 : margin, camp: camp) ||
+                    margin: rounded != null && rounded.TryGetValue(npc, out int kept) ? kept : margin, camp: camp) ||
                 crossing >= along)
                 continue;
             (first, pack, along) = (i, size, crossing);
@@ -3486,12 +3488,16 @@ public static class PlayerBotDriver
         {
             (_, Vector3 at, int aggroRange, _) = threats[i];
             if (CoversPoint(at, aggroRange, end)) continue;                                 // the camp's own
-            float from = Vector2.Distance(new(here.X, here.Y), new(at.X, at.Y));           // one the bot stands near:
-            float clear = Math.Min(aggroRange + AddMargin / 2, from - 1);                   //   no nearer than it is
-            if (!AutonomousRouteThreatPolicy.LegsClear(here, point, rejoin, at, clear)) return false;
+            if (!AutonomousRouteThreatPolicy.LegsClear(here, point, rejoin, at, DetourClearance(here, at, aggroRange)))
+                return false;
         }
         return true;
     }
+
+    /// <summary>#167 F12: the clearance a detour's legs keep from a threat at `at` (DetourLegsClear, 2D): its aggro
+    /// range + AddMargin / 2, or, for one nearer here than that, no nearer than it stands.</summary>
+    public static float DetourClearance(Vector3 here, Vector3 at, int aggroRange) =>
+        Math.Min(aggroRange + AddMargin / 2, Vector2.Distance(new(here.X, here.Y), new(at.X, at.Y)) - 1);
 
     /// <summary>#167 F12: whether a walk may go round its blocker: not inside a detour (none round a second monster on
     /// the way to the first's point, as the GameBots), fewer than RouteDetoursPerMonster round it and
@@ -5377,7 +5383,7 @@ public static class PlayerBotDriver
                         waypoint));
             }
             if (detour is PlayerBotStepResult.Arrived && state.RouteBlocker is GameNPC rounded)
-                state.RouteRounded.Add(rounded);                                        // the build's review: read at
+                state.RouteRounded[rounded] = state.RouteBlockerMargin;                 // the build's review: read at
                                                                                         //   the legs' clearance after
             if (detour is PlayerBotStepResult.Blocked or PlayerBotStepResult.Arrived) state.RouteWaypoint = null;
             return;
@@ -5446,6 +5452,8 @@ public static class PlayerBotDriver
             {
                 case PlayerBotRouteAction.Detour:
                     (state.RouteWaypoint, state.RouteBlocker) = (waypoint, npc);
+                    int aggro = threats[blocker].AggroRange;                            // read at it once round it
+                    state.RouteBlockerMargin = (int)MathF.Floor(DetourClearance(route[0], at, aggro)) - aggro;
                     state.RouteDetours[npc] = state.RouteDetours.GetValueOrDefault(npc) + 1;
                     state.RouteGoalDetours++;
                     return false;
