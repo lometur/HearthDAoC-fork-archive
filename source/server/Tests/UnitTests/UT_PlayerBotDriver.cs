@@ -6495,6 +6495,81 @@ public sealed class UT_PlayerBotDriver
         }
     }
 
+    // #167 F H1 (the review of F): the death line settles the heal asked for first (ReportDeath's SettleHeal), so an
+    // instant heal that landed in the death's tick counts as healCast=.
+    [Test]
+    public void The_death_line_settles_an_instant_heal_landed_in_its_tick()
+    {
+        MethodInfo handleDeath = typeof(PlayerBotDriver).GetMethod("HandleDeath", BindingFlags.Static | BindingFlags.NonPublic)!;
+        GamePlayer bot = Player(null);
+        var state = new PlayerBotState(bot)
+            { Engaged = true, FightHeals = 1, PendingHeal = (Heal(20, 400).Item1, 54_000), HealLandedTick = 54_000 };
+        handleDeath.Invoke(null, [state, bot, 54_000L]);
+        Assert.That((state.FightHealCasts, state.PendingHeal.Spell), Is.EqualTo((1, (Spell)null)));
+    }
+
+    // #167 F H1 (the review of F): a heal the server finished marks when a heal last landed (HealBegan's landedTick);
+    // another spell doesn't.
+    [Test]
+    public void A_finished_heal_marks_the_tick_it_landed_in()
+    {
+        var states = (ConcurrentDictionary<GamePlayer, PlayerBotState>)typeof(PlayerBotDriver)
+            .GetField("_states", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        GamePlayer bot = Player(null);
+        var state = new PlayerBotState(bot) { HealLandedTick = -1 };
+        CastingEventArgs Cast(Spell spell) => new(new DOL.GS.Spells.SpellHandler(bot, spell, Mending));
+        try
+        {
+            states[bot] = state;
+            PlayerBotDriver.OnBotCastFinished(GameLivingEvent.CastFinished, bot, Cast(Damage("DirectDamage", 20, 90)));
+            Assert.That(state.HealLandedTick, Is.EqualTo(-1L));
+            PlayerBotDriver.OnBotCastFinished(GameLivingEvent.CastFinished, bot, Cast(Heal(20, 400).Item1));
+            Assert.That(state.HealLandedTick, Is.EqualTo(GameLoop.GameLoopTime));
+        }
+        finally
+        {
+            states.TryRemove(bot, out _);
+        }
+    }
+
+    // #167 F H2's wiring in SelfHeal (the review of F): a look that wants no heal ends the hold run; its own swing's
+    // interrupt (SelfInterruptTime) holds an interruptible heal (healHold=); a monster's hits (InterruptTime) block it:
+    // no hold, no cast begun.
+    [Test]
+    public void SelfHeal_holds_out_its_own_swings_interrupt_and_fights_on_through_a_monsters()
+    {
+        MethodInfo selfHeal = typeof(PlayerBotDriver).GetMethod("SelfHeal", BindingFlags.Static | BindingFlags.NonPublic)!;
+        InTheField(new SplitFloorMesh(), new(840_884, 702_153, 8_784), (region, zone, bot) =>
+        {
+            (Spell heal, SpellLine line) = Heal(20, 400);
+            typeof(GamePlayer).GetField("_usableListSpells", Hidden)!.SetValue(bot,
+                new List<(SpellLine, List<Skill>)> { (line, new List<Skill> { heal }) });
+            typeof(GamePlayer).GetField("_usableSkills", Hidden)!.SetValue(bot, new List<(Skill, Skill)> { (heal, null) });
+            typeof(GameLiving).GetField("m_disabledSkills", Hidden)!.SetValue(bot,
+                new Dictionary<(int Id, Type Type), KeyValuePair<long, Skill>>());
+            typeof(GameLiving).GetField("_disabledSkillsLock", Hidden)!.SetValue(bot, new System.Threading.Lock());
+            typeof(GameLiving).GetField("m_mana", Hidden)!.SetValue(bot, 1_000);
+            long now = GameLoop.GameLoopTime + 10_000;
+
+            var idle = new PlayerBotState(bot) { HealHoldRun = 2, NukesLevel = 39, Nukes = [] };    // full health
+            Assert.That(selfHeal.Invoke(null, [idle, bot, now]), Is.False);
+            Assert.That(idle.HealHoldRun, Is.Zero, "a look that doesn't hold ends the run");
+
+            typeof(GameObject).GetField("m_health", Hidden)!.SetValue(bot, 30);
+            typeof(GameLiving).GetField("<SelfInterruptTime>k__BackingField", Hidden)!.SetValue(bot, now + 2_000);
+            var own = new PlayerBotState(bot) { Engaged = true, Target = LiveMonster(), NukesLevel = 39, Nukes = [] };
+            Assert.That(selfHeal.Invoke(null, [own, bot, now]), Is.True, "held");
+            Assert.That((own.FightHealHolds, own.FightHeals), Is.EqualTo((1, 0)));
+
+            typeof(GameLiving).GetField("<SelfInterruptTime>k__BackingField", Hidden)!.SetValue(bot, 0L);
+            typeof(GameLiving).GetField("<InterruptTime>k__BackingField", Hidden)!.SetValue(bot, GameLoop.GameLoopTime + 2_000);
+            var hit = new PlayerBotState(bot) { Engaged = true, Target = LiveMonster(), NukesLevel = 39, Nukes = [] };
+            Assert.That(selfHeal.Invoke(null, [hit, bot, now]), Is.False, "blocked");
+            Assert.That((hit.FightHealHolds, hit.FightHeals, bot.TargetObject), Is.EqualTo((0, 0, (GameObject)null)),
+                "no hold, no cast begun");
+        });
+    }
+
     // The nominal cost, before focus and the like: a negative power is a percent of the pool (SpellHandler.cs:1207-1213).
     [TestCase(200, 50, 50, true)] [TestCase(200, 49, 50, false)] [TestCase(200, 50, -25, true)] [TestCase(200, 49, -25, false)]
     [TestCase(0, 0, 0, true)]
