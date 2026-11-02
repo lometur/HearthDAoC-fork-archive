@@ -3643,6 +3643,35 @@ public sealed class UT_PlayerBotDriver
             Is.EqualTo("PLAYER_BOT_LIFT bot=Pbotaaaad level=41 reason=capped why=offmesh lifted=1"));
     }
 
+    // #167 F P1b: an aggressive monster over the bot's cap among a candidate's crowd refuses it for a melee or archer
+    // bot at any count (defence-first deaths with an attacker over the cap: 83 of 124; grovewood, rainbow sprites,
+    // Soulfear); a healer's pick (no limit) takes it as before.
+    [Test]
+    public void An_add_over_the_cap_refuses_a_limited_pull()
+    {
+        var candidates = new List<(string, Vector3, int)> { At("boar", 0, 100) };
+        var adds = new List<(string, Vector3, int)> { Add("orange", 300) };
+        var overCap = new HashSet<string> { "orange" };
+        Assert.That(PlayerBotDriver.PickUncrowded(candidates, adds, false, Aside, int.MaxValue, out _, [3], overCap),
+            Is.Null, "GREEN, limit 3, crowd 1: its add is orange");
+        Assert.That(PlayerBotDriver.PickUncrowded(candidates, adds, false, Aside, int.MaxValue, out _, [int.MaxValue], overCap),
+            Is.EqualTo("boar"), "no limit");
+        Assert.That(PlayerBotDriver.CrowdingAlong("boar", Vector3.Zero, Aside, Aside, adds, overCap), Is.EqualTo((1, 1)));
+    }
+
+    // FIGHT and DEATH over=: of the crowd it counts, the adds over the cap (overCap), the reach's own test (an add out of
+    // reach is none, nor is the candidate itself); with no overCap, 0.
+    [Test]
+    public void The_crowd_counts_its_adds_over_the_cap()
+    {
+        var adds = new List<(string, Vector3, int)> { Add("orange", 300), Add("blue", -300), Add("far orange", 9_000),
+            Add("boar", 0) };
+        var overCap = new HashSet<string> { "orange", "far orange", "boar" };
+        Assert.That(PlayerBotDriver.CrowdingAlong("boar", Vector3.Zero, Aside, Aside, adds, overCap), Is.EqualTo((2, 1)));
+        Assert.That(PlayerBotDriver.CrowdingAlong("boar", Vector3.Zero, Aside, Aside, adds, null), Is.EqualTo((2, 0)));
+        Assert.That(PlayerBotDriver.CrowdingAlong("boar", Vector3.Zero, Aside, Aside, adds), Is.EqualTo(2));
+    }
+
     // FIGHT and DEATH addAt= and addHp= (#167, the next leg's): the first think in a fight a second monster, any but the
     // target, is on the bot's attacker list or comes at it (the add scan's): the whole seconds into the fight and the
     // bot's health then, kept after; -1 until then. Only one alive and on the bot (onBot; the review of 9aacd69: the
@@ -6547,7 +6576,8 @@ public sealed class UT_PlayerBotDriver
     // then (#167 F C2) ctlResisted= and ctlImmune=, of ctlFailed= the controls the server said were resisted or immune,
     // and qcCtl= and qcNuke=, the casts under Quickcast at a control and of its damage spell; then (#167 F-R) reserve=,
     // the highest endurance reserve the fight read for a run (0: none); then (#167 F P1) lifted=, 1 for a melee or
-    // archer bot's pull made with its crowd limits lifted.
+    // archer bot's pull made with its crowd limits lifted; then (#167 F P1b) over=, the adds over the bot's cap among
+    // the rings' pick's crowd (-1: another pick).
     [Test]
     public void FightFormat()
     {
@@ -6558,14 +6588,15 @@ public sealed class UT_PlayerBotDriver
                 Walk: PlayerBotWalk.Hunt, KiteNone: (1, 0, 2, 3), Dots: 2, KillingQuickcast: true, TargetMezzes: 1,
                 RaceLeft: 22, EndStart: 85, End: 31, StylesHeld: 3, CastsHeld: 2, Sight: 4, Blind: true, BlindSteps: 2,
                 HealCasts: 1, HealsLanded: 1, HealHolds: 6, HealHoldMax: 4, Taps: 3,
-                AddWhy: PlayerBotAddWhy.Control, CtlResisted: 1, CtlImmune: 0, QcControls: 1, QcNukes: 2, Reserve: 36, Lifted: true)),
+                AddWhy: PlayerBotAddWhy.Control, CtlResisted: 1, CtlImmune: 0, QcControls: 1, QcNukes: 2, Reserve: 36, Lifted: true,
+                Over: 1)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbotaaaac level=40 target=\"widow claw\" targetLevel=40 con=YELLOW from=pull result=kill " +
                        "startHp=100 endHp=38 startMana=100 endMana=12 sec=21 adds=1 swings=9 notVisible=2 casts=4 lifeKills=0 rests=0 " +
                        "pet=alive heals=2 qc=1 buffs=3 petCasts=2 waits=5 ctl=2 kites=1 ctlBroken=1 addCtl=1 addAt=6 addHp=71 " +
                        "breakOff=1 engageDist=1450 crowd=1 heldSec=7 ctlLanded=1 ctlFailed=1 hpAtReach=92 tHpAtReach=64 rate=4.3 " +
                        "wouldBreak=38 walk=hunt kiteNone=1:0:2:3 dots=2 qcKill=1 ctlMez=1 raceLeft=22 endStart=85 end=31 " +
                        "styleHeld=3 castHeld=2 sight=4 blind=1 blindSteps=2 healCast=1 healLanded=1 healHold=6 healHoldMax=4 " +
-                       "taps=3 addWhy=ctl ctlResisted=1 ctlImmune=0 qcCtl=1 qcNuke=2 reserve=36 lifted=1"));
+                       "taps=3 addWhy=ctl ctlResisted=1 ctlImmune=0 qcCtl=1 qcNuke=2 reserve=36 lifted=1 over=1"));
         Assert.That(PlayerBotDriverReport.FormatFight(new PlayerBotFight("Pbothaaab", 43, "empyrean guardian", 36, ConColor.BLUE, true,
                 false, 64, 51, 100, 100, 7, 2, 3, 0, 0, 3, 1, Rate: -0.04, Walk: PlayerBotWalk.BreakOff)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbothaaab level=43 target=\"empyrean guardian\" targetLevel=36 con=BLUE from=defence " +
@@ -6575,7 +6606,7 @@ public sealed class UT_PlayerBotDriver
                        "tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=breakoff kiteNone=0:0:0:0 dots=0 qcKill=0 ctlMez=0 " +
                        "raceLeft=-999 endStart=-1 end=-1 styleHeld=0 castHeld=0 sight=0 blind=0 blindSteps=0 healCast=0 " +
                        "healLanded=0 healHold=0 healHoldMax=0 taps=0 addWhy=none ctlResisted=0 ctlImmune=0 qcCtl=0 " +
-                       "qcNuke=0 reserve=0 lifted=0"),
+                       "qcNuke=0 reserve=0 lifted=0 over=-1"),
             "a gain under 0.05 a second: 0.0, not -0.0");
     }
 
@@ -7574,7 +7605,7 @@ public sealed class UT_PlayerBotDriver
     // (#167 F N1b) taps= (-1 each out of a fight), and (#167 F C1) addWhy= (-1 out of a fight); then (#167 F C2) FIGHT's
     // ctlResisted=, ctlImmune=, qcCtl= and qcNuke= (-1 each out of a fight) and qcLeft=, the seconds before Quickcast is
     // ready again, at any death (-1 without it); then (#167 F P1) crowd=, FIGHT's: the rings' pick's crowding of its
-    // target (-1: no target, or another pick).
+    // target (-1: no target, or another pick), and (#167 F P1b) over=, FIGHT's too.
     [Test]
     public void DeathDetailFormat()
     {
@@ -7585,14 +7616,14 @@ public sealed class UT_PlayerBotDriver
                 WouldBreak: 52, Walk: PlayerBotWalk.Anchor, Endurance: 64, KiteNone: (0, 2, 1, 0), Dots: 1, KillingQuickcast: 1,
                 TargetMezzes: 1, RaceLeft: 35, StylesHeld: 3, CastsHeld: 1, Heals: 2, HealCasts: 1, HealsLanded: 0,
                 HealHolds: 4, HealHoldMax: 3, Taps: 2, AddWhy: PlayerBotAddWhy.Control, CtlResisted: 0, CtlImmune: 0,
-                QcControls: 1, QcNukes: 0, QcLeft: 22, Crowd: 3)),
+                QcControls: 1, QcNukes: 0, QcLeft: 22, Crowd: 3, Over: 1)),
             Is.EqualTo("activity=Fighting startHp=62 fightSec=14 targetHp=71 from=pull adds=2 lifeKills=3 rests=0 sinceKillSec=40 " +
                        "mana=100 swings=6 notVisible=1 killer=\"widow claw\" killerLevel=40 killerIsTarget=True fromBind=748 " +
                        "avoided=2 again=True sinceRelease=42 ill=True ctl=2 kites=1 casts=4 qc=1 waits=3 ctlBroken=1 addCtl=1 " +
                        "addAt=6 addHp=71 breakOff=0 engageDist=1450 heldSec=5 ctlLanded=1 ctlFailed=0 hpAtReach=88 tHpAtReach=90 " +
                        "rate=12.5 wouldBreak=52 walk=anchor end=64 kiteNone=0:2:1:0 dots=1 qcKill=1 ctlMez=1 raceLeft=35 " +
                        "styleHeld=3 castHeld=1 heals=2 healCast=1 healLanded=0 healHold=4 healHoldMax=3 taps=2 " +
-                       "addWhy=ctl ctlResisted=0 ctlImmune=0 qcCtl=1 qcNuke=0 qcLeft=22 crowd=3"));
+                       "addWhy=ctl ctlResisted=0 ctlImmune=0 qcCtl=1 qcNuke=0 qcLeft=22 crowd=3 over=1"));
         // Out of a fight, no target, no kill this life, no killer named by the Dying event, the bind in another region.
         Assert.That(PlayerBotDriverReport.FormatDeathDetail(new PlayerBotDeathDetail(PlayerBotActivity.Hunting, -1, -1, -1, true,
                 -1, 0, 2, -1, 37, -1, -1, null, 0, false, -1, BreakOff: true, Rate: 3, Walk: PlayerBotWalk.Clear, Endurance: 100)),
@@ -7602,7 +7633,8 @@ public sealed class UT_PlayerBotDriver
                        "addAt=-1 addHp=-1 breakOff=1 engageDist=-1 heldSec=-1 ctlLanded=-1 ctlFailed=-1 hpAtReach=-1 tHpAtReach=-1 " +
                        "rate=3.0 wouldBreak=-1 walk=clear end=100 kiteNone=-1:-1:-1:-1 dots=-1 qcKill=-1 ctlMez=-1 " +
                        "raceLeft=-999 styleHeld=-1 castHeld=-1 heals=-1 healCast=-1 healLanded=-1 healHold=-1 " +
-                       "healHoldMax=-1 taps=-1 addWhy=-1 ctlResisted=-1 ctlImmune=-1 qcCtl=-1 qcNuke=-1 qcLeft=-1 crowd=-1"),
+                       "healHoldMax=-1 taps=-1 addWhy=-1 ctlResisted=-1 ctlImmune=-1 qcCtl=-1 qcNuke=-1 qcLeft=-1 crowd=-1 " +
+                       "over=-1"),
             "died on a break-off's run: out of a fight (the dropped one's FIGHT has it)");
     }
 
@@ -7640,7 +7672,7 @@ public sealed class UT_PlayerBotDriver
             "qc=-1 waits=-1 ctlBroken=-1 addCtl=-1 addAt=-1 addHp=-1 breakOff=0 engageDist=-1 heldSec=-1 ctlLanded=-1 ctlFailed=-1 " +
             "hpAtReach=-1 tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=none end=-1 kiteNone=-1:-1:-1:-1 dots=-1 qcKill=-1 " +
             "ctlMez=-1 raceLeft=-999 styleHeld=-1 castHeld=-1 heals=-1 healCast=-1 healLanded=-1 healHold=-1 healHoldMax=-1 " +
-            "taps=-1 addWhy=-1 ctlResisted=-1 ctlImmune=-1 qcCtl=-1 qcNuke=-1 qcLeft=-1 crowd=-1"));
+            "taps=-1 addWhy=-1 ctlResisted=-1 ctlImmune=-1 qcCtl=-1 qcNuke=-1 qcLeft=-1 crowd=-1 over=-1"));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, add, target),
             Does.Contain(" killer=\"a wolf\" killerLevel=38 killerIsTarget=False fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False "));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, null, null),

@@ -160,13 +160,14 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
 - It picks a monster with no aggressive neighbours, none within reach of the target, of its walk in, or of the spot
   it would fight from (its spell's range for a caster, else melee). Where none within 2,600 units is that clear, it
   takes the least crowded within 5,000, a melee or archer bot only a pull whose crowd (those potential adds round the
-  target and along the walk in) fits the target's con: 3 at a green, 1 at a blue, none at a yellow or harder. A pull
-  over that is refused, not taken, and counts as passed over, so after 30 s of searches with no pull it plans a new
-  camp, which leaves out for 10 minutes the camps within 1,400 units of the pulls it refused. With no camp to go to it
-  hunts where it is, its limits off there for 5 minutes, as they are at such a barred camp when only that is left to
-  take. It searches again every 2 s as it walks in, so a pick whose crowd rises past its limit on the walk in is
-  dropped. After deaths it moves to an easier camp. It avoids what killed it for 15 minutes. Training dummies are no
-  monsters: it neither plans camps at them nor pulls them.
+  target and along the walk in) fits the target's con: 3 at a green, 1 at a blue, none at a yellow or harder, nor one
+  with an aggressive monster over its cap among those adds. A pull over that is refused, not taken, and counts as
+  passed over, so after 30 s of searches with no pull it plans a new camp, which leaves out for 10 minutes the camps
+  within 1,400 units of the pulls it refused. With no camp to go to it hunts where it is, its limits off there for 5
+  minutes, as they are at such a barred camp when only that is left to take. It searches again every 2 s as it walks
+  in, so a pick whose crowd rises past its limit on the walk in is dropped. After deaths it moves to an easier camp.
+  It avoids what killed it for 15 minutes. Training dummies are no monsters: it neither plans camps at them nor pulls
+  them.
 - It swings and casts only at a target in sight, by the navmesh's line; a target hitting it in contact (within 250
   units) counts as in sight though that line says not, as a player sees what hits it. A target out of sight that
   fights neither it nor its pet, nor has the bot as its target (coming at it round an obstacle), is walked toward 300
@@ -577,7 +578,9 @@ All start `PLAYER_BOT_`:
   a control and of its damage spell (-1 each on `DEATH` out of a fight); `DEATH` ends with `qcLeft=`, the seconds
   before Quickcast is ready again, at any death (-1 without it), then `crowd=`, its target's `crowd=` as `FIGHT` gives
   it (-1 with no target). `FIGHT` then gives `reserve=`, the highest endurance reserve the fight held for a run (0:
-  none), and `lifted=` (1: a melee or archer bot's pick made while its crowd limits were off).
+  none), and `lifted=` (1: a melee or archer bot's pick made while its crowd limits were off). Both then give `over=`,
+  of the pick's `crowd=` the aggressive monsters over the bot's cap (-1 for a defence or a monster coming at it, and on
+  `DEATH` with no target).
   `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `walkout`, `rest`, `kite`, `turret`
   or `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
   after a break-off its `reason=` is `brokeoff`. Either ends with `barred=old` when the death or the break-off came on
