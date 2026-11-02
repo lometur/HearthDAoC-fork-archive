@@ -186,6 +186,9 @@ public sealed class PlayerBotState
     public long LastKillTick;                                    //   and the killer the Dying event names (OnBotDying)
     public GameObject Killer;
     public bool RecoverBeforePull;                               // a kill since the last rest: rest first (Recovered)
+    public bool RestSkipPending, FightRestSkip;                  // #167 F R2: the kill's rest skipped, until the first pick
+    public ConColor RestSkipCon;                                 //   decides (KeepsRestSkip), and the fight it led to (FIGHT
+    public int RestSkipPowerNeed, RestSkipEnduranceCost;         //   and DEATH restSkip=); the kill's con, what it needs
     public bool SelfCast;                                        // a heal or summon on itself is being cast (DEATHS.md
     public long NextSelfHealTick, NextSummonTick;                //   A6, A5), the next tries, and the level at which it
     public byte NoPetSpellLevel;                                 //   found no main-pet summon (not looked for again then)
@@ -454,6 +457,9 @@ public static class PlayerBotDriver
                                                              //   a style or two: +0.3% of bot time on st-deathsD2's rests,
                                                              //   e-design s7). The chant (WantedChant), the regeneration
                                                              //   buff (KeepsUpOutOfFight) and the errand rests read it too
+    public const byte HalfRatePowerPercent = 50;             // #167 F R2: a list caster's power under this comes back at
+                                                             //   half rate (PowerRegenerationAmountCalculator.cs:38-50);
+                                                             //   the after-kill rest's skip keeps the next pull over it
     public const int PowerTapPetHealthPercent = 50;          // #167 F N1b: the Vacuum while the pet has this much health
     public const int PowerTapDamagePercent = 75;             //   and does this share of the lifetap's damage (inf.)
     public const int SelfBuffScanMilliseconds = 5_000;       // #167 F8: the self-buffs' scan, out of a fight
@@ -683,6 +689,15 @@ public static class PlayerBotDriver
         if (BreaksOffNow(state, player, now)) return;                                    //     #167 C2: losing to two
         if (SelfHeal(state, player, now) || SummonPet(state, player, now) || SelfBuff(state, player, now))
             return;                                                                      // 11b. DEATHS.md A6, A5, #167 F8: before a rest
+        bool skipping = state.RestSkipPending || state.FightRestSkip && !state.Engaged;   // #167 F R2: a skip still
+        if (state.RestSkipPending && !RestSkipHolds(state, player))                     //   open; a cast since the
+            (state.RecoverBeforePull, state.RestSkipPending) = (true, false);           //   kill spent what it read,
+        else if (skipping) RefreshTarget(state, player, now);                           //   else the pick (step 14's)
+        if (skipping && state.RecoverBeforePull)                                        //   here; refused, the rest
+        {                                                                               //   from the next think, so
+            state.NextSelfBuffTick = 0;                                                 //   11b's chant reads it
+            return;                                                                     //   (WantedChant's resting)
+        }
         if (state.RecoverBeforePull && Recovered(player)) state.RecoverBeforePull = false;
         bool hit = Attacker(state, player, now, anyHitter: true) != null, liveFight = state.Engaged && state.Target?.IsAlive == true;
         bool incoming = !hit && !liveFight && Incoming(state, player, now) != null;      //    #167 F7: one coming at it too
@@ -779,6 +794,7 @@ public static class PlayerBotDriver
         (bool stepOut, bool backOff) = LifeStart(state.DeathRecorded, state.AliveSince == 0);
         if (stepOut) StartRecovery(state, now, backOff);                                // #167 F4, C6
         state.RecoverBeforePull = OpensLifeRested(role, state.DeathRecorded);           // #167 D3
+        (state.RestSkipPending, state.FightRestSkip) = (false, false);                  // #167 F R2
         state.AliveSince = now;
         state.HealthSamples.Clear();                                                     // #167 rate=: no gain from the release
         state.LifeKills = state.LifeRests = 0;
@@ -1553,7 +1569,10 @@ public static class PlayerBotDriver
         {
             state.LifeKills++;                                    // every fight won, a monster another bot counted too
             state.LastKillTick = GameLoop.GameLoopTime;
-            state.RecoverBeforePull = true;                       // rest before the next pull (WantsRest)
+            bool owed = state.RecoverBeforePull;                  // #167 F R2: a rest owed before the kill (F-C's
+            state.RecoverBeforePull = true;                       //   cantfinish, a spent caster's) stays; rest before
+            if (!owed) SkipRestAfterKill(state, player);          //   the next pull (WantsRest), unless it has what the
+                                                                  //   next one needs
             state.NextSelfBuffTick = 0;                           // #167 C9: the self-buffs first, before the rest
             CastingComponent casting = player.castingComponent;   // #167 D13 R1b: and no cast at the dead target to wait
             if (StopsCastAtKill(casting?.IsCasting == true,       //   out first (null-safe: the tests' players have no
@@ -1610,6 +1629,9 @@ public static class PlayerBotDriver
                 ? FindWithin(state, player, ImmediateSearchRadius, now, out reading) ??
                   FindWithin(state, player, SearchRadius, now, out reading)
                 : null);
+        if ((state.RestSkipPending || state.FightRestSkip && !state.Engaged) &&           // #167 F R2: the pick after a
+            (found != null || searchDue))                                                  //   skipped rest, and one made
+            found = SettleRestSkip(state, player, found, reading.Crowd);                   //   again before it engages
         if (found != state.Target) TakeTarget(state, player, found, reading);
     }
 
@@ -4124,6 +4146,97 @@ public static class PlayerBotDriver
     public static bool WantsRest(bool needsRest, bool sitting, bool recoverBeforePull, bool recovered) =>
         needsRest || (sitting || recoverBeforePull) && !recovered;
 
+    /// <summary>Whether the rest is owed after a fight ends (#167 F R2, ReportFight): one begun on a skipped rest
+    /// (restSkip) that it didn't win (dropped, blind or broken off) owes it again; otherwise as it was (a won one:
+    /// SettleTarget's gate decides next).</summary>
+    public static bool OwesRestAfterFight(bool owed, bool restSkip, bool killed) => owed || restSkip && !killed;
+
+    /// <summary>Whether a kill's rest is skipped (#167 F R2, R4): the bot has what its next pull needs, read from the kill
+    /// itself, its own last fight (the per-class pools rest's analyst used come from five legs, and a bot's own record of
+    /// a 15-minute leg holds a median 9 green kills: the skeptic's). Full health (a fight begun lower risks a death a skip
+    /// can't buy back; health is what sits mostly wait for), the power its next pull needs (PowerNeed; none for a class
+    /// with no pool), and endurance at a run's reserve and the kill's endurance cost again (EnduranceNeed): the next pull,
+    /// if it costs what this one did, ends at the floors. A rest owed sits through the server's 10 s in combat
+    /// (GameLiving.cs:31), where sitting regains no endurance (ClassicRestRegeneration.cs:14) and health and power tick
+    /// at 10-14 s: 9 s of an endurance-only sit at a kill-to-sit gap of 0-1 (rest's check).</summary>
+    public static bool SkipsRestAfterKill(byte health, int maxMana, byte power, byte endurance, int powerNeed,
+        int enduranceCost) =>
+        health >= 100 && (maxMana <= 0 || power >= powerNeed) && endurance >= EnduranceNeed(enduranceCost);
+
+    /// <summary>The power a skip needs (#167 F R2): HalfRatePowerPercent and the kill's cost again, twice for a list
+    /// caster (eClassType.ListCaster: its points under 50 come back at half rate, PowerRegenerationAmountCalculator.cs:
+    /// 38-50; a next pull no harder than the last costs a list caster more than twice the last's in 12.8% of
+    /// st-i188b1-h16b's pairs, more than once in 38.6%). The Caster and Pet roles keep their power stop (RestPowerStop:
+    /// 90, 100): their pulls begun under it broke off more (casters 13 of 126 at 70-89 against 87 of 5,244 at 90+; pets
+    /// 16 of 436 at 50-89 against 49 of 6,081; under 20 each, the adds' more than the power's), and their skips save the
+    /// least (3.8 s a caster's).</summary>
+    public static int PowerNeed(PlayerBotRole role, bool listCaster, int powerCost) =>
+        role is PlayerBotRole.Caster or PlayerBotRole.Pet ? RestPowerStop(role)
+            : HalfRatePowerPercent + (listCaster ? 2 : 1) * Math.Max(0, powerCost);
+
+    /// <summary>The endurance a skip needs (#167 F R2, R4): the most a close fight keeps for a run (MaxEscapeReserve, the
+    /// EscapeReserve cap: the breakoff group's changes to it follow) and the kill's endurance cost. A flat floor bites
+    /// more, but starts the next pull at 41-60, where the base legs hold 18 style-class pulls: no measure that it keeps
+    /// the refused sprints where they are.</summary>
+    public static int EnduranceNeed(int enduranceCost) => MaxEscapeReserve + Math.Max(0, enduranceCost);
+
+    /// <summary>Whether the next pick may take the skipped rest's place (#167 F R2): no harder than the kill whose cost
+    /// was read (a harder one costs more than it), and blue at most (yellow pulls begun at 90-94% health died 7 of 60 on
+    /// st-i188b1-f3: rest's analyst).</summary>
+    public static bool ChainsTo(ConColor pick, ConColor lastKill) => pick <= lastKill && pick <= ConColor.BLUE;
+
+    /// <summary>The first pick after a skipped rest (#167 F R2, SettleRestSkip): kept for a rings' pick that is
+    /// uncrowded (crowd= 0) and ChainsTo the kill, and for a defence or a monster coming at the bot (crowd -1: fought
+    /// either way, as a sitting bot stands to it); none found, a harder con or a crowded pick, the rest first.</summary>
+    public static bool KeepsRestSkip(bool found, int crowd, ConColor pick, ConColor lastKill) =>
+        found && (crowd < 0 || crowd == 0 && ChainsTo(pick, lastKill));
+
+    // #167 F R2, R4: at a kill (SettleTarget), the rest it owes is skipped when the bot has what its next pull needs
+    // (SkipsRestAfterKill, on this fight's own cost: its power and endurance at the first think, EngageMana and
+    // EngageEndurance, less now), until the first pick decides (RestSkipPending, SettleRestSkip), which goes at once.
+    // Before step 11b: the chant it wants then reads no rest (WantedChant's resting), so a Skald keeps its combat chant.
+    // A kill that leaves it recovered owes no rest (Think clears it after step 11b): nothing to skip, its pick as before
+    // (on the seven base legs 298 such kills a leg passed the gate, 99 of them refused at the pick and left 2 s with no
+    // target). A player with no class (the tests' fixture) owes its rest. SettleTarget calls it only for a kill that
+    // owed no rest before it (BATCH-F: a can't-finish or spent caster's break-off owes its rest at FinishBreakOff,
+    // before TurnOn's fight, and that fight's kill doesn't skip it).
+    private static void SkipRestAfterKill(PlayerBotState state, GamePlayer player)
+    {
+        if (player.CharacterClass is not { } cls || Recovered(player)) return;
+        byte power = PowerPercent(player.MaxMana, player.ManaPercent), endurance = player.EndurancePercent;
+        int powerNeed = PowerNeed(RoleOf(cls.ID), cls.ClassType is eClassType.ListCaster, state.EngageMana - power);
+        int enduranceCost = state.EngageEndurance - endurance;
+        if (!SkipsRestAfterKill(player.HealthPercent, player.MaxMana, power, endurance, powerNeed, enduranceCost)) return;
+        (state.RecoverBeforePull, state.RestSkipPending) = (false, true);
+        state.RestSkipCon = ConLevels.GetConColor(player.GetConLevel(state.Target));
+        (state.RestSkipPowerNeed, state.RestSkipEnduranceCost) = (powerNeed, enduranceCost);
+        state.NextTargetRefreshTick = 0;                                                 // the first pick at once,
+        state.NextLootTick = 0;                                                          //   the loot (step 11) before it
+    }
+
+    // #167 F R2: Think's re-check of a skip still pending: a heal, a summon or a buff since the kill (step 11b) may have
+    // spent what the skip read.
+    private static bool RestSkipHolds(PlayerBotState state, GamePlayer player) =>
+        SkipsRestAfterKill(player.HealthPercent, player.MaxMana, PowerPercent(player.MaxMana, player.ManaPercent),
+            player.EndurancePercent, state.RestSkipPowerNeed, state.RestSkipEnduranceCost);
+
+    // #167 F R2: the pick after a skipped rest (RefreshTarget, with a search due or a monster found), and each pick made
+    // again before its fight begins (the 2-s search of a bot walking in, or its pick gone): kept, the fight it begins
+    // logs restSkip=1 (FightRestSkip); else the rest owed again, and no target until it (KeepsRestSkip). crowd: the
+    // rings' pick's reading (PlayerBotPickReading.Crowd; -1 for another pick).
+    private static GameNPC SettleRestSkip(PlayerBotState state, GamePlayer player, GameNPC found, int crowd)
+    {
+        state.RestSkipPending = false;
+        ConColor con = found == null ? ConColor.UNKNOWN : ConLevels.GetConColor(player.GetConLevel(found));
+        if (KeepsRestSkip(found != null, crowd, con, state.RestSkipCon))
+        {
+            state.FightRestSkip = true;
+            return found;
+        }
+        (state.RecoverBeforePull, state.FightRestSkip) = (true, false);
+        return null;
+    }
+
     public static int TargetScore(int distance, ConColor con) => distance + Math.Abs((int)con) * ConPenalty;
     public static int MeleeStopDistance(int attackRange) => Math.Max(48, (attackRange > 0 ? attackRange : 128) - 48);
     public static int SpellStopDistance(int spellRange) => Math.Max(145, spellRange - 80);   // APP:320
@@ -6036,7 +6149,8 @@ public static class PlayerBotDriver
             target != null ? state.PickDue : -1,                                          //   over=, P2 due=, P4
             target != null ? state.PickSeen : "-", target != null ? state.PickPathCrowd : -1,   //   seen= and pathCrowd=
             target != null ? state.HuntCrowd : -1, target != null ? state.HuntTarget : null,   // #167 F F5: the hunt
-            inFight ? state.FightBlindSteps : -1);                                        //   pick, blindSteps=
+            inFight ? state.FightBlindSteps : -1,                                         //   pick, blindSteps=
+            inFight ? (state.FightRestSkip ? 1 : 0) : -1);                                // #167 F R2 restSkip=
         string head = $"PLAYER_BOT_DEATH bot={player.Name} level={player.Level} at=({player.X},{player.Y},{player.Z}) " +
                       $"zone={player.CurrentZone?.ID} {fight} attackers={state.Attackers} deathSteps={state.DeathSafetySteps} " +
                       $"aliveSec={(now - state.AliveSince) / 1000} task={state.Task != null}";
@@ -6153,6 +6267,9 @@ public static class PlayerBotDriver
     // a break-off drops it (StartsBreakOff, brokeOff).
     private static void ReportFight(PlayerBotState state, GamePlayer player, long now, bool killed, bool brokeOff)
     {
+        bool restSkip = state.FightRestSkip;                                             // #167 F R2: the skip's fight,
+        state.FightRestSkip = false;                                                     //   this one only, logged or
+        state.RecoverBeforePull = OwesRestAfterFight(state.RecoverBeforePull, restSkip, killed);   //   not; not won, owed
         if (!Log.IsInfoEnabled) return;
         GameLiving target = state.Target;
         SettleControl(state, player, now, force: false);                                // #167 ctlLanded=, when due
@@ -6179,7 +6296,7 @@ public static class PlayerBotDriver
             state.PickOver,                                                             // #167 F P1b
             state.PickDue,                                                              // #167 F P2
             state.PickSeen, state.PickPathCrowd,                                        // #167 F P4
-            state.HuntCrowd, state.HuntTarget)));                                       // #167 F F5
+            state.HuntCrowd, state.HuntTarget, restSkip)));                             // #167 F F5, R2
     }
 
     // APP:585-624, changed: every 10 s, no inventory count, no saves; after 15 minutes with no progress, back to the
@@ -6965,6 +7082,7 @@ public static class PlayerBotDriver
         {
             player.Sit(true);
             state.LifeRests++;                                                             // FIGHT and DEATH rests=
+            (state.RestSkipPending, state.FightRestSkip) = (false, false);                 // #167 F R2: rested after all
             if (player.IsSitting)                                                          // REST sec= (#167), if it sat,
             {                                                                              //   and hp= and mp=; #167 D10:
                 (state.SitSince, state.SitHealth, state.SitMana, state.SitEndurance) =     //   blocked= and inReach=, by the

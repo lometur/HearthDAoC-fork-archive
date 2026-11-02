@@ -3524,6 +3524,165 @@ public sealed class UT_PlayerBotDriver
         Assert.That((won.RecoverBeforePull, late.RecoverBeforePull), Is.EqualTo((true, false)), "the late bot never fought it");
     }
 
+    private sealed class FixedCalculator(int value) : DOL.GS.PropertyCalc.PropertyCalculator
+    {
+        public override int CalcValue(GameLiving living, eProperty property) => value;
+    }
+
+    // #167 F R2's wiring fixture: a level 20 Warrior (the calculators swapped: 100 health, no pool, 100 endurance, both
+    // level 20, so its kill is yellow) with full health and the endurance given kills its target in a fight opened at
+    // 100 power and 80 endurance, through SettleTarget by reflection; before readies the state first. The pick and loot
+    // timers start at 5,000.
+    private static PlayerBotState KillAsWarrior(int endurance, Action<PlayerBotState> before = null)
+    {
+        var calculators = (DOL.GS.PropertyCalc.IPropertyCalculator[])typeof(GameLiving)
+            .GetField("m_propertyCalc", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        eProperty[] fixedOnes = [eProperty.MaxHealth, eProperty.MaxMana, eProperty.Fatigue, eProperty.LivingEffectiveLevel];
+        DOL.GS.PropertyCalc.IPropertyCalculator[] saved = fixedOnes.Select(p => calculators[(int)p]).ToArray();
+        int[] values = [100, 0, 100, 20];
+        for (int i = 0; i < fixedOnes.Length; i++) calculators[(int)fixedOnes[i]] = new FixedCalculator(values[i]);
+        try
+        {
+            MethodInfo settle = typeof(PlayerBotDriver).GetMethod("SettleTarget", BindingFlags.Static | BindingFlags.NonPublic)!;
+            GamePlayer bot = Player(null);
+            typeof(GamePlayer).GetField("m_characterClass", Hidden)!.SetValue(bot, new DOL.GS.PlayerClass.ClassWarrior());
+            typeof(GameObject).GetField("m_health", Hidden)!.SetValue(bot, 100);
+            typeof(GameLiving).GetField("m_endurance", Hidden)!.SetValue(bot, endurance);
+            var dead = (GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC));
+            var state = new PlayerBotState(bot) { Target = dead, Engaged = true, EngageMana = 100, EngageEndurance = 80,
+                NextTargetRefreshTick = 5_000, NextLootTick = 5_000 };
+            before?.Invoke(state);
+            settle.Invoke(null, [state, bot]);
+            return state;
+        }
+        finally
+        {
+            for (int i = 0; i < fixedOnes.Length; i++) calculators[(int)fixedOnes[i]] = saved[i];
+        }
+    }
+
+    // #167 F R2, R4, the wiring: SettleTarget at a kill skips the rest it owes when the bot has what its next pull needs
+    // (SkipsRestAfterKill: full health, the kill's own endurance cost over a run's 41 here, a Warrior with no pool), and
+    // the first pick and the loot go at once (NextTargetRefreshTick and NextLootTick 0: the kill's think loots at step
+    // 11, before the pick walks off). Before R2 every kill owed its rest (SettleTarget). Short of it (45 against 41 + 35),
+    // the rest is owed as before. A kill that leaves it recovered (85: 80+ endurance) owes no rest (Think clears it):
+    // nothing to skip, its pick as before.
+    [TestCase(70, false, true)]
+    [TestCase(45, true, false)]
+    [TestCase(85, true, false)]                           // recovered already (80+): no rest owed, nothing to skip
+    public void A_kill_skips_its_rest_when_the_bot_has_what_its_next_pull_needs(int endurance, bool owed, bool pending)
+    {
+        PlayerBotState state = KillAsWarrior(endurance);
+        Assert.That((state.RecoverBeforePull, state.NextTargetRefreshTick == 0, state.NextLootTick == 0),
+            Is.EqualTo((owed, pending, pending)));
+    }
+
+    // #167 F R2 (BATCH-F: F-C's rest is never skipped): a kill skips only the rest it owes itself; one owed before it
+    // stays owed. A caster's can't-finish or spent break-off owes a rest (FinishBreakOff, RestsAfterBreakOff: Quickcast's
+    // timer or its power was the problem, not the kill's cost) before it turns on a chaser (TurnOn), and that turn's
+    // kill must not skip it. A break-off that owes no rest (adds: a relocation instead) leaves the turn's kill to the
+    // gate as any kill.
+    [TestCase(PlayerBotDriver.CantFinish, true, false)]
+    [TestCase(PlayerBotDriver.Spent, true, false)]
+    [TestCase(PlayerBotDriver.ByAdds, false, true)]
+    public void A_rest_a_break_off_owes_is_not_skipped_by_the_turns_kill(string why, bool owed, bool pending)
+    {
+        PlayerBotState state = KillAsWarrior(70, before: s =>
+        {
+            s.BreakOffWhy = why;
+            PlayerBotDriver.FinishBreakOff(s, PlayerBotDriver.Fought, owesReplan: false, 1_000);
+        });
+        Assert.That((state.RecoverBeforePull, state.RestSkipPending, state.NextTargetRefreshTick == 0),
+            Is.EqualTo((owed, pending, pending)));
+    }
+
+    // #167 F R2, R4: a kill's rest is skipped only with full health, the power its next pull needs (PowerNeed; a class
+    // with no pool reads none), and endurance at a run's reserve (MaxEscapeReserve, 41) plus the kill's endurance cost
+    // again (a cost under 0, a fight that gained, is 0).
+    [TestCase((byte)100, 0, (byte)0, (byte)70, 100, 10, true)]                        // a Warrior: 70 >= 41 + 10
+    [TestCase((byte)100, 0, (byte)0, (byte)51, 100, 10, true)]                        //   just
+    [TestCase((byte)100, 0, (byte)0, (byte)50, 100, 10, false)]                       //   one short
+    [TestCase((byte)99, 0, (byte)0, (byte)100, 0, 0, false)]                          // health not full
+    [TestCase((byte)100, 300, (byte)63, (byte)90, 63, 0, true)]                       // a Friar, 50 + its 13
+    [TestCase((byte)100, 300, (byte)62, (byte)90, 63, 0, false)]
+    [TestCase((byte)100, 300, (byte)91, (byte)70, 50, 29, true)]                      // a Skald: 70 >= 41 + 29
+    [TestCase((byte)100, 300, (byte)91, (byte)69, 50, 29, false)]
+    [TestCase((byte)100, 300, (byte)100, (byte)100, 50, -3, true)]                    // a fight that gained
+    public void A_kill_skips_its_rest_with_full_health_its_power_need_and_its_endurance_cost_over_a_run(byte health,
+        int maxMana, byte power, byte endurance, int powerNeed, int enduranceCost, bool skips) =>
+        Assert.That(PlayerBotDriver.SkipsRestAfterKill(health, maxMana, power, endurance, powerNeed, enduranceCost),
+            Is.EqualTo(skips));
+
+    // #167 F R2: the power a skip needs: the half-rate band's 50 and the kill's power cost again (twice for a list caster,
+    // whose points under 50 come back at half rate: a Valewalker); the Caster and Pet roles' power stop as before (90,
+    // 100): their pulls begun under it broke off more on st-i188b1-h16b (13 of 126, 16 of 436; under 20 each).
+    [TestCase(PlayerBotRole.Melee, false, 13, 63)]                                    // a Paladin
+    [TestCase(PlayerBotRole.Healer, false, 13, 63)]                                   // a Friar
+    [TestCase(PlayerBotRole.Melee, true, 13, 76)]                                     // a Valewalker: twice
+    [TestCase(PlayerBotRole.Archer, false, 0, 50)]
+    [TestCase(PlayerBotRole.Healer, false, -5, 50)]                                   // a fight that gained
+    [TestCase(PlayerBotRole.Caster, true, 13, 90)]                                    // a Wizard: its stop
+    [TestCase(PlayerBotRole.Pet, true, 13, 100)]                                      // a Spiritmaster: its stop
+    [TestCase(PlayerBotRole.Pet, false, 0, 100)]                                      // a Hunter
+    public void A_skip_needs_half_rate_power_and_the_kills_cost_again_and_a_caster_or_pet_its_stop(PlayerBotRole role,
+        bool listCaster, int powerCost, int need) =>
+        Assert.That(PlayerBotDriver.PowerNeed(role, listCaster, powerCost), Is.EqualTo(need));
+
+    // #167 F R2: the skip holds into a pick no harder than the kill it was read from, blue at most (the kill's cost is
+    // the estimate; a green kill's next pull is green 84% and blue 13% of the time on st-i188b1-h16b), and uncrowded
+    // (crowd= 0); a defence or a monster coming at the bot (crowd -1) is fought either way. None found: the rest.
+    [TestCase(true, 0, ConColor.GREEN, ConColor.GREEN, true)]
+    [TestCase(true, 0, ConColor.GREEN, ConColor.BLUE, true)]
+    [TestCase(true, 0, ConColor.BLUE, ConColor.BLUE, true)]
+    [TestCase(true, 0, ConColor.GREEN, ConColor.YELLOW, true)]
+    [TestCase(true, 0, ConColor.BLUE, ConColor.GREEN, false)]                         // harder than the kill
+    [TestCase(true, 0, ConColor.YELLOW, ConColor.YELLOW, false)]                      // yellow: never
+    [TestCase(true, 1, ConColor.GREEN, ConColor.GREEN, false)]                        // crowded
+    [TestCase(true, -1, ConColor.ORANGE, ConColor.GREEN, true)]                       // a defence
+    [TestCase(false, -1, ConColor.UNKNOWN, ConColor.GREEN, false)]                    // none: rest
+    public void A_skipped_rest_holds_into_an_uncrowded_pick_no_harder_than_the_kill(bool found, int crowd, ConColor pick,
+        ConColor lastKill, bool keeps) =>
+        Assert.That(PlayerBotDriver.KeepsRestSkip(found, crowd, pick, lastKill), Is.EqualTo(keeps));
+
+    // #167 F R2: a fight begun on a skipped rest that isn't won owes the rest again; a won one, or one begun on a full
+    // rest, leaves it as it was.
+    [TestCase(false, true, false, true)]                                               // dropped, blind or broken off
+    [TestCase(false, true, true, false)]                                               // won: the kill's gate next
+    [TestCase(false, false, false, false)]                                             // begun on a full rest
+    [TestCase(true, false, true, true)]                                                // owed already
+    public void A_fight_begun_on_a_skipped_rest_and_not_won_owes_the_rest(bool owed, bool restSkip, bool killed,
+        bool owes) =>
+        Assert.That(PlayerBotDriver.OwesRestAfterFight(owed, restSkip, killed), Is.EqualTo(owes));
+
+    // #167 F R2, the wiring: the pick after a skipped rest (SettleRestSkip). A monster coming at the bot (crowd -1) is
+    // kept and its fight logs restSkip=1; a crowded pick isn't taken and the rest is owed again, so the bot sits.
+    [TestCase(-1, true)]
+    [TestCase(1, false)]
+    public void A_pick_after_a_skipped_rest_is_kept_or_the_rest_is_owed_again(int crowd, bool kept)
+    {
+        MethodInfo settle = typeof(PlayerBotDriver).GetMethod("SettleRestSkip", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var calculators = (DOL.GS.PropertyCalc.IPropertyCalculator[])typeof(GameLiving)
+            .GetField("m_propertyCalc", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        DOL.GS.PropertyCalc.IPropertyCalculator previous = calculators[(int)eProperty.LivingEffectiveLevel];
+        calculators[(int)eProperty.LivingEffectiveLevel] = new LevelOnly();
+        try
+        {
+            FieldInfo level = typeof(GameObject).GetField("m_level", Hidden)!;
+            GamePlayer bot = Player(null);
+            level.SetValue(bot, (byte)20);
+            var pick = (GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC));
+            level.SetValue(pick, (byte)20);
+            var state = new PlayerBotState(bot) { RestSkipPending = true, RestSkipCon = ConColor.GREEN };
+            var taken = (GameNPC)settle.Invoke(null, [state, bot, pick, crowd]);
+            Assert.That((taken == pick, state.FightRestSkip, state.RecoverBeforePull, state.RestSkipPending),
+                Is.EqualTo((kept, kept, !kept, false)));
+        }
+        finally
+        {
+            calculators[(int)eProperty.LivingEffectiveLevel] = previous;
+        }
+    }
+
     // #167 F3, C10: a caster's rest stops at full health, its power stop (90) and (#167 E-R) 80% endurance; power counts
     // only with a pool.
     [TestCase((byte)100, 300, (byte)90, (byte)81, true)] [TestCase((byte)99, 300, (byte)100, (byte)100, false)]
@@ -6851,7 +7010,8 @@ public sealed class UT_PlayerBotDriver
     // for a target not the rings' pick, whether that pick counted it, its search scanned it, or never saw it (-: a rings'
     // pick), and pathCrowd=, the potential adds along the corridor of the pick's walk in (-1: unchecked); then (#167 F
     // F5) huntCrowd= and huntTarget=, the rings' pick a defence or a monster coming at the bot replaced on the walk in,
-    // its crowd= and name (-1 and "": none replaced).
+    // its crowd= and name (-1 and "": none replaced); then (#167 F R2) restSkip=, 1 when the fight began on the rest its
+    // kill skipped.
     [Test]
     public void FightFormat()
     {
@@ -6863,7 +7023,7 @@ public sealed class UT_PlayerBotDriver
                 RaceLeft: 22, EndStart: 85, End: 31, StylesHeld: 3, CastsHeld: 2, Sight: 4, Blind: true, BlindSteps: 2,
                 HealCasts: 1, HealsLanded: 1, HealHolds: 6, HealHoldMax: 4, Taps: 3,
                 AddWhy: PlayerBotAddWhy.Control, CtlResisted: 1, CtlImmune: 0, QcControls: 1, QcNukes: 2, Reserve: 36, Lifted: true,
-                Over: 1, Due: 1, Seen: "scanned", PathCrowd: 2, HuntCrowd: 1, HuntTarget: "forest giant")),
+                Over: 1, Due: 1, Seen: "scanned", PathCrowd: 2, HuntCrowd: 1, HuntTarget: "forest giant", RestSkip: true)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbotaaaac level=40 target=\"widow claw\" targetLevel=40 con=YELLOW from=pull result=kill " +
                        "startHp=100 endHp=38 startMana=100 endMana=12 sec=21 adds=1 swings=9 notVisible=2 casts=4 lifeKills=0 rests=0 " +
                        "pet=alive heals=2 qc=1 buffs=3 petCasts=2 waits=5 ctl=2 kites=1 ctlBroken=1 addCtl=1 addAt=6 addHp=71 " +
@@ -6871,7 +7031,7 @@ public sealed class UT_PlayerBotDriver
                        "wouldBreak=38 walk=hunt kiteNone=1:0:2:3 dots=2 qcKill=1 ctlMez=1 raceLeft=22 endStart=85 end=31 " +
                        "styleHeld=3 castHeld=2 sight=4 blind=1 blindSteps=2 healCast=1 healLanded=1 healHold=6 healHoldMax=4 " +
                        "taps=3 addWhy=ctl ctlResisted=1 ctlImmune=0 qcCtl=1 qcNuke=2 reserve=36 lifted=1 over=1 due=1 seen=scanned " +
-                       "pathCrowd=2 huntCrowd=1 huntTarget=\"forest giant\""));
+                       "pathCrowd=2 huntCrowd=1 huntTarget=\"forest giant\" restSkip=1"));
         Assert.That(PlayerBotDriverReport.FormatFight(new PlayerBotFight("Pbothaaab", 43, "empyrean guardian", 36, ConColor.BLUE, true,
                 false, 64, 51, 100, 100, 7, 2, 3, 0, 0, 3, 1, Rate: -0.04, Walk: PlayerBotWalk.BreakOff)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbothaaab level=43 target=\"empyrean guardian\" targetLevel=36 con=BLUE from=defence " +
@@ -6881,7 +7041,8 @@ public sealed class UT_PlayerBotDriver
                        "tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=breakoff kiteNone=0:0:0:0 dots=0 qcKill=0 ctlMez=0 " +
                        "raceLeft=-999 endStart=-1 end=-1 styleHeld=0 castHeld=0 sight=0 blind=0 blindSteps=0 healCast=0 " +
                        "healLanded=0 healHold=0 healHoldMax=0 taps=0 addWhy=none ctlResisted=0 ctlImmune=0 qcCtl=0 " +
-                       "qcNuke=0 reserve=0 lifted=0 over=-1 due=-1 seen=- pathCrowd=-1 huntCrowd=-1 huntTarget=\"\""),
+                       "qcNuke=0 reserve=0 lifted=0 over=-1 due=-1 seen=- pathCrowd=-1 huntCrowd=-1 huntTarget=\"\" " +
+                       "restSkip=0"),
             "a gain under 0.05 a second: 0.0, not -0.0");
     }
 
@@ -7921,7 +8082,7 @@ public sealed class UT_PlayerBotDriver
     // ready again, at any death (-1 without it); then (#167 F P1) crowd=, FIGHT's: the rings' pick's crowding of its
     // target (-1: no target, or another pick), and (#167 F P1b) over=, (#167 F P2) due= and (#167 F P4) seen= and
     // pathCrowd=, FIGHT's too; then (#167 F F5) FIGHT's huntCrowd= and huntTarget= (-1 and "" with no target) and the
-    // fatal fight's blindSteps= (-1 out of a fight).
+    // fatal fight's blindSteps= (-1 out of a fight); then (#167 F R2) FIGHT's restSkip= (-1 out of a fight).
     [Test]
     public void DeathDetailFormat()
     {
@@ -7933,7 +8094,7 @@ public sealed class UT_PlayerBotDriver
                 TargetMezzes: 1, RaceLeft: 35, StylesHeld: 3, CastsHeld: 1, Heals: 2, HealCasts: 1, HealsLanded: 0,
                 HealHolds: 4, HealHoldMax: 3, Taps: 2, AddWhy: PlayerBotAddWhy.Control, CtlResisted: 0, CtlImmune: 0,
                 QcControls: 1, QcNukes: 0, QcLeft: 22, Crowd: 3, Over: 1, Due: 1,
-                Seen: "scanned", PathCrowd: 2, HuntCrowd: 1, HuntTarget: "forest giant", BlindSteps: 1)),
+                Seen: "scanned", PathCrowd: 2, HuntCrowd: 1, HuntTarget: "forest giant", BlindSteps: 1, RestSkip: 1)),
             Is.EqualTo("activity=Fighting startHp=62 fightSec=14 targetHp=71 from=pull adds=2 lifeKills=3 rests=0 sinceKillSec=40 " +
                        "mana=100 swings=6 notVisible=1 killer=\"widow claw\" killerLevel=40 killerIsTarget=True fromBind=748 " +
                        "avoided=2 again=True sinceRelease=42 ill=True ctl=2 kites=1 casts=4 qc=1 waits=3 ctlBroken=1 addCtl=1 " +
@@ -7941,7 +8102,7 @@ public sealed class UT_PlayerBotDriver
                        "rate=12.5 wouldBreak=52 walk=anchor end=64 kiteNone=0:2:1:0 dots=1 qcKill=1 ctlMez=1 raceLeft=35 " +
                        "styleHeld=3 castHeld=1 heals=2 healCast=1 healLanded=0 healHold=4 healHoldMax=3 taps=2 " +
                        "addWhy=ctl ctlResisted=0 ctlImmune=0 qcCtl=1 qcNuke=0 qcLeft=22 crowd=3 over=1 due=1 seen=scanned " +
-                       "pathCrowd=2 huntCrowd=1 huntTarget=\"forest giant\" blindSteps=1"));
+                       "pathCrowd=2 huntCrowd=1 huntTarget=\"forest giant\" blindSteps=1 restSkip=1"));
         // Out of a fight, no target, no kill this life, no killer named by the Dying event, the bind in another region.
         Assert.That(PlayerBotDriverReport.FormatDeathDetail(new PlayerBotDeathDetail(PlayerBotActivity.Hunting, -1, -1, -1, true,
                 -1, 0, 2, -1, 37, -1, -1, null, 0, false, -1, BreakOff: true, Rate: 3, Walk: PlayerBotWalk.Clear, Endurance: 100)),
@@ -7952,19 +8113,19 @@ public sealed class UT_PlayerBotDriver
                        "rate=3.0 wouldBreak=-1 walk=clear end=100 kiteNone=-1:-1:-1:-1 dots=-1 qcKill=-1 ctlMez=-1 " +
                        "raceLeft=-999 styleHeld=-1 castHeld=-1 heals=-1 healCast=-1 healLanded=-1 healHold=-1 " +
                        "healHoldMax=-1 taps=-1 addWhy=-1 ctlResisted=-1 ctlImmune=-1 qcCtl=-1 qcNuke=-1 qcLeft=-1 crowd=-1 " +
-                       "over=-1 due=-1 seen=- pathCrowd=-1 huntCrowd=-1 huntTarget=\"\" blindSteps=-1"),
+                       "over=-1 due=-1 seen=- pathCrowd=-1 huntCrowd=-1 huntTarget=\"\" blindSteps=-1 restSkip=-1"),
             "died on a break-off's run: out of a fight (the dropped one's FIGHT has it)");
     }
 
     // #167 F F5: DEATH's hunt fields come last with their defaults, so a line from a record that sets none of them still
     // ends in the same order (deathdiag.py and the measure scripts read key=value; the fields before stay). Before F5
-    // the line ended at pathCrowd=.
+    // the line ended at pathCrowd=; (#167 F R2) restSkip= then ends it.
     [Test]
     public void A_death_line_ends_with_the_hunt_pick_and_the_blind_steps()
     {
         string line = PlayerBotDriverReport.FormatDeathDetail(new PlayerBotDeathDetail(PlayerBotActivity.Fighting, 62, 14, 71,
             true, 2, 3, 0, 40, 100, 6, 1, "widow claw", 40, true, 748));
-        Assert.That(line, Does.EndWith(" pathCrowd=-1 huntCrowd=-1 huntTarget=\"\" blindSteps=-1"));
+        Assert.That(line, Does.EndWith(" pathCrowd=-1 huntCrowd=-1 huntTarget=\"\" blindSteps=-1 restSkip=-1"));
     }
 
     // #167 F F5 (remainder F5's check): a target that is no ring pick keeps the ring pick it replaced on the walk in, its
@@ -8017,7 +8178,7 @@ public sealed class UT_PlayerBotDriver
             "hpAtReach=-1 tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=none end=-1 kiteNone=-1:-1:-1:-1 dots=-1 qcKill=-1 " +
             "ctlMez=-1 raceLeft=-999 styleHeld=-1 castHeld=-1 heals=-1 healCast=-1 healLanded=-1 healHold=-1 healHoldMax=-1 " +
             "taps=-1 addWhy=-1 ctlResisted=-1 ctlImmune=-1 qcCtl=-1 qcNuke=-1 qcLeft=-1 crowd=-1 over=-1 due=-1 " +
-            "seen=- pathCrowd=-1 huntCrowd=-1 huntTarget=\"\" blindSteps=-1"));
+            "seen=- pathCrowd=-1 huntCrowd=-1 huntTarget=\"\" blindSteps=-1 restSkip=-1"));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, add, target),
             Does.Contain(" killer=\"a wolf\" killerLevel=38 killerIsTarget=False fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False "));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, null, null),

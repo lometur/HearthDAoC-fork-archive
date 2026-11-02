@@ -64,7 +64,15 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   less), and full power, or 90% power for a caster (Wizard, Sorcerer, Runemaster, Eldritch, Mentalist: under 50% power
   it regains power at half the rate, so a pull that ends below half costs more rest than the last 10%); the quest bot's
   rests before an errand's walk stop there too, and a Skald's Song of Rest and an endurance regeneration buff run to the
-  same 80%.
+  same 80%. A kill's rest is skipped (#167 F) when the bot ends the kill at full health with what its next pull needs if
+  that costs what the kill did: endurance at a run's reserve (41%) plus the kill's endurance cost, and power at 50% plus
+  the kill's power cost (twice that for a Valewalker, which regains power at half rate under 50%); a caster or a pet
+  class skips it only with its power at its stop. The bot then picks at once, and goes on only to a pick that cons no
+  harder than the kill, blue at most, with no other monster round it, or to a monster that comes at it; otherwise it
+  rests, from its next think (so a Skald still sings its Song of Rest as it sits). A fight begun on a skipped rest that
+  it doesn't win owes the rest again. A kill that leaves it recovered goes on as before, and a rest owed before the kill
+  (a caster's after a break-off, or an earlier kill's not yet taken) is never skipped. (A sit in the 10 s after a fight
+  is in the server's combat window: no endurance comes back, and health and power tick every 10 s, not every 3.)
 - A bot with a heal heals itself below 60% health, whatever its power. As a player must, it heals only when no
   interrupt stops the cast: right after its own swing (3 s) it casts an instant heal if it has one, else it stops
   swinging and heals as that interrupt ends; while a monster's hits interrupt it, it fights on and looks again every
@@ -149,7 +157,8 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
 - Out of a fight it keeps its class's own self-buffs up: armour factor, absorb, bladeturn, ablative, damage shield,
   damage add, stat buffs and regeneration buffs, and one chant that costs no power each pulse (so no resist chant: the
   Paladin's cost power each pulse): the first of those kinds, but from a kill to the end of its rest a regeneration
-  chant for what it is short of, so a Skald sings its Song of Rest as it sits and its combat chant again once rested.
+  chant for what it is short of, so a Skald sings its Song of Rest as it sits and its combat chant again once rested
+  (a kill whose rest it skips keeps the combat chant).
   It looks every 5 s, and at once after a kill, before it sits, casting the missing ones back to back (a cast still
   under way at the monster it killed stops at the kill); never while it sits, until its rest is done, and a buff it
   casts as it gets up rested doesn't sit it down again. It uses the buffs' real power, concentration and recast; the
@@ -600,8 +609,10 @@ All start `PLAYER_BOT_`:
   defence or a monster coming at the bot replaced the rings' pick it was walking to, that pick's `crowd=` and name (a
   defence after a defence keeps the first one's; -1 and "" otherwise, and on `DEATH` with no target). A turn on a
   chaser after a break-off replaced none, so it reads -1: its pick's `crowd=` is on the break-off's `FIGHT
-  result=dropped breakOff=1` line. `DEATH` then ends with the fatal fight's `blindSteps=` as `FIGHT` gives it (-1 out
-  of a fight).
+  result=dropped breakOff=1` line. `DEATH` then gives the fatal fight's `blindSteps=` as `FIGHT` gives it (-1 out of
+  a fight). Both end with `restSkip=`: 1 when the fight began on the rest its kill skipped (the first fight after the
+  skip, with no sit between), else 0; -1 on `DEATH` out of a fight (a death on a break-off's run reads -1: its fight's
+  `FIGHT result=dropped breakOff=1` line carries the 1).
   `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `walkout`, `rest`, `kite`, `turret`
   or `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
   after a break-off its `reason=` is `brokeoff`. Either ends with `barred=old` when the death or the break-off came on
