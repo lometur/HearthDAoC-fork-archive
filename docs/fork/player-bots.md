@@ -158,8 +158,15 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   second monster comes on it; one with a cast time (a Spiritmaster's Benison) not at all yet, and a regeneration one
   (a Shaman's Frigg's Cure) only while what it regenerates is short of where the rest stops.
 - It picks a monster with no aggressive neighbours, none within reach of the target, of its walk in, or of the spot
-  it would fight from (its spell's range for a caster, else melee). After deaths it moves to an easier camp. It avoids
-  what killed it for 15 minutes. Training dummies are no monsters: it neither plans camps at them nor pulls them.
+  it would fight from (its spell's range for a caster, else melee). Where none within 2,600 units is that clear, it
+  takes the least crowded within 5,000, a melee or archer bot only a pull whose crowd (those potential adds round the
+  target and along the walk in) fits the target's con: 3 at a green, 1 at a blue, none at a yellow or harder. A pull
+  over that is refused, not taken, and counts as passed over, so after 30 s of searches with no pull it plans a new
+  camp, which leaves out for 10 minutes the camps within 1,400 units of the pulls it refused. With no camp to go to it
+  hunts where it is, its limits off there for 5 minutes, as they are at such a barred camp when only that is left to
+  take. It searches again every 2 s as it walks in, so a pick whose crowd rises past its limit on the walk in is
+  dropped. After deaths it moves to an easier camp. It avoids what killed it for 15 minutes. Training dummies are no
+  monsters: it neither plans camps at them nor pulls them.
 - It swings and casts only at a target in sight, by the navmesh's line; a target hitting it in contact (within 250
   units) counts as in sight though that line says not, as a player sees what hits it. A target out of sight that
   fights neither it nor its pet, nor has the bot as its target (coming at it round an obstacle), is walked toward 300
@@ -568,16 +575,23 @@ All start `PLAYER_BOT_`:
   counts as immune; read from the control's own message only: as its cast finishes, or for an instant control in the
   tick it was cast), the rest refused, interrupted or unsaid, then `qcCtl=` and `qcNuke=`, its casts under Quickcast at
   a control and of its damage spell (-1 each on `DEATH` out of a fight); `DEATH` ends with `qcLeft=`, the seconds
-  before Quickcast is ready again, at any death (-1 without it). `FIGHT` then gives `reserve=`, the highest endurance
-  reserve the fight held for a run (0: none).
+  before Quickcast is ready again, at any death (-1 without it), then `crowd=`, its target's `crowd=` as `FIGHT` gives
+  it (-1 with no target). `FIGHT` then gives `reserve=`, the highest endurance reserve the fight held for a run (0:
+  none), and `lifted=` (1: a melee or archer bot's pick made while its crowd limits were off).
   `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `walkout`, `rest`, `kite`, `turret`
   or `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
   after a break-off its `reason=` is `brokeoff`. Either ends with `barred=old` when the death or the break-off came on
   the walk to the camp it had, which the plan then leaves out. Any `RELOCATE` then ends with `capKill=`, the lowest con
   that killed the bot in the last 5 minutes, yellow or harder (a blue or green killer logs none), while there is one.
   Then `recent=1` on a plan made within 15 minutes of a death (a died, break-off or capped one), and `near=1` when the
-  camp came from its near pass (within 10,000 units of where the bot stood). A break-off drops its fight (`FIGHT
-  result=dropped`);
+  camp came from its near pass (within 10,000 units of where the bot stood). A capped plan (`reason=capped`) then gives
+  `crowdRefused=`, the spots of a melee or archer bot's pulls refused for their crowd in the last 10 minutes, which it
+  leaves out, while there are any. `lifted=1` ends a line whose camp lies among those spots, and a line with no camp
+  after a last search that only refused crowded pulls: the bot's crowd limits are then off there for 5 minutes. A
+  break-off drops its fight (`FIGHT result=dropped`);
+- `LIFT`: the same lift where no `RELOCATE` line is written, as the bot hunts where it is: its `reason=` and `why=`,
+  `norelocate` (it may not relocate, as the lever test's bots, or stands in no zone) or `offmesh` (it stands off the
+  navmesh), then `lifted=1`;
 - `BREAKOFF`: one per break-off, when it ends: the bot's `hp=`, `end=` (endurance) and `attackers=` when it broke off,
   `sec=`, the seconds it ran (a run on to its point, done in another monster's reach, counts in it), and `outcome=`:
   `shook` (none still after it, or from 30 s none within 1,500 units), `fought` (still chased after 45 s, caught with

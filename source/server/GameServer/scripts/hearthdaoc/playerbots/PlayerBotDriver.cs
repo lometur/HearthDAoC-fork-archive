@@ -131,6 +131,13 @@ public sealed class PlayerBotState
                                                                  //   test only from a new spot), and the hold's next
                                                                  //   check (HoldsCutOff, TeleportsNow)
     public readonly HashSet<GameNPC> RelocateRejected = new(); // no corridor to them: not checked again
+    public readonly HashSet<GameNPC> CrowdRefused = new();       // #167 F P1: the monsters the wider ring refused for their
+    public bool CrowdPassedOver;                                 //   crowd since its last target (a capped plan bars
+    public long CrowdLiftedUntil;                                //   where they stand, CrowdBars), whether its last search
+    public readonly List<(ushort Region, Vector3 At, long Until)> CrowdBars = new();   //   refused only those
+                                                                 //   (FallBackInPlace), the limits off here until then
+                                                                 //   (LimitsCrowd), and the capped plans' bars, 10
+                                                                 //   minutes each (RememberCrowdBars)
     public long CappedSince;                                     // DEATHS.md A4: the first search that passed monsters over
     public ConColor? SafestPassedOver;                           //   for the cap and found none (CappedClock), and the
     public ConColor? FallbackCap;                                //   safest con it passed over; a GameBot's fallback camp's
@@ -294,6 +301,7 @@ public sealed class PlayerBotState
     public (int At, int Hp) FightAdd = (-1, -1);                 // #167 FIGHT and DEATH addAt= and addHp= (FirstAdd), the
     public int EngageDistance = -1, PickCrowd = -1;              //   distance at the first think in reach, the pick's
                                                                  //   crowding (crowd=, FindWithin's; -1 for another pick);
+    public bool PickLifted;                                      //   #167 F P1: FIGHT lifted=, a pick under a crowd lift
     public byte SitHealth, SitMana;                              //   REST hp= and mp= when it sat, and respawn=: the spawn
     public int RestRespawns;                                     //   spots the rest spot was read against (WalksToRestSpot)
     public int SitBlocked;                                       // #167 D10: REST blocked= and inReach= as it sat (Rest)
@@ -399,6 +407,10 @@ public static class PlayerBotDriver
     public const int RestSpotTries = 3;                       // #167 D10: rest walks per rest, each blocked one the next (inf.)
     public const int RespawnWatchMilliseconds = 150_000;      // #167 C7: a kill's spawn spot counts this long (inf.: the
     public const int RecentKillCount = 3;                     //   usual respawn is 80 s), the last 3 kills'
+    public const int CrowdLiftMilliseconds = 300_000;         // #167 F P1: the crowd limits off this long where no clean
+                                                              //   camp is left (TakeCamp, FallBackInPlace)
+    public const int CrowdBarMilliseconds = 600_000;          //   a capped plan's crowd bar kept this long (the review:
+                                                              //   FailedCamps keeps 15 minutes; RememberCrowdBars)
     public static readonly long StuckMilliseconds = (long)AutonomousStuckWatchdog.StuckThreshold.TotalMilliseconds; // 15 min
     public const int MaxFruitlessCasts = 3;                  // the cast watch (levelmatch/DESIGN.md 2.7)
     public const int SpellBlockMilliseconds = 10_000;        // (inf.) a few swings, then the spell again
@@ -506,6 +518,8 @@ public static class PlayerBotDriver
     [ThreadStatic] private static List<(GameNPC Npc, Vector3 At, int AggroRange)> _reach;      // ClearSpotNear's
     [ThreadStatic] private static List<(GameNPC Npc, int Distance, bool TargetsBot, bool Held)> _addCandidates;   // Add's
     [ThreadStatic] private static List<(byte Health, int Distance, bool Avoided)> _hitters;    // StartsBreakOff's
+    [ThreadStatic] private static List<int> _limits;                                           // #167 F P1: FindWithin's
+    [ThreadStatic] private static List<GameNPC> _refused;                                      //   limits and refusals
 
     public static IEnumerable<PlayerBotState> States => _states.Values;
     public static bool IsDriven(GamePlayer player) => player != null && _states.ContainsKey(player);
@@ -767,7 +781,8 @@ public static class PlayerBotDriver
 
     /// <summary>Step 4: a bot in another region (a release to a bind there, a re-entry) starts its hunt afresh: no walk,
     /// target, idle or capped clock, fallback cap or stale camp's names. Its failed camps stay (#167 F4): each has its
-    /// region (FailedCamps); cleared, a bot that came back planned into the camp it died at.</summary>
+    /// region (FailedCamps); cleared, a bot that came back planned into the camp it died at. #167 F P1: no crowd
+    /// refusals, lift or crowd bars (the review: cleared on a region change).</summary>
     public static void ResetOnRegionChange(PlayerBotState state, ushort region)
     {
         state.LastRegion = region;
@@ -778,6 +793,10 @@ public static class PlayerBotDriver
         state.CappedSince = 0;
         state.FallbackCap = null;
         state.HuntAvoided = false;
+        state.CrowdRefused.Clear();                                                      // #167 F P1
+        state.CrowdPassedOver = false;
+        state.CrowdLiftedUntil = 0;
+        state.CrowdBars.Clear();
     }
 
     // A task owns the bot's position while it runs: no leash then.
@@ -1551,22 +1570,22 @@ public static class PlayerBotDriver
         // Self-defence every think, then a monster coming at it (#167 F7: its scan every 2 s); the rings only every 2 s,
         // so an idle bot doesn't scan 5,000 units 4 times a second; none during the recovery after a release (#167 F4) or
         // a login's step out (C6), nor while a relocation is owed (SearchesRings): it pulls nothing until that is over
-        int crowd = -1;                                                                    // FIGHT crowd=: FindWithin's
+        PlayerBotPickReading reading = PlayerBotPickReading.None;                         // FIGHT crowd= and on: FindWithin's
         GameNPC found = Attacker(state, player, now) ?? Incoming(state, player, now) ??     // self-defence first
             (SearchesRings(searchDue, state.AfterRelease, state.ReplanOwed)                // AWBC:3148
-                ? FindWithin(state, player, ImmediateSearchRadius, now, out crowd) ??
-                  FindWithin(state, player, SearchRadius, now, out crowd)
+                ? FindWithin(state, player, ImmediateSearchRadius, now, out reading) ??
+                  FindWithin(state, player, SearchRadius, now, out reading)
                 : null);
-        if (found != state.Target) TakeTarget(state, player, found, crowd);
+        if (found != state.Target) TakeTarget(state, player, found, reading);
     }
 
     // A new target (RefreshTarget's pick; #167 D2: a caught bot's, TurnOn): the fight's marks and the cast watch afresh,
-    // and its damage spell.
-    private static void TakeTarget(PlayerBotState state, GamePlayer player, GameNPC found, int crowd)
+    // and its damage spell. #167 F: the rings' pick's reading (PlayerBotPickReading; None for another pick).
+    private static void TakeTarget(PlayerBotState state, GamePlayer player, GameNPC found, PlayerBotPickReading reading)
     {
         state.Target = found;
         state.FromDefence = found != null && IsAttacking(player, found);                  // FIGHT and DEATH from=
-        state.PickCrowd = crowd;                                                           //   and crowd= (#167)
+        (state.PickCrowd, state.PickLifted) = (reading.Crowd, reading.Lifted);            //   crowd= (#167), lifted= (F P1)
         (state.TargetSpawn, state.TargetRespawnReach) = found?.Brain is StandardMobBrain brain   // #167 C7: its respawn
             ? RespawnOf(found, brain.AggroLevel, brain.AggroRange, player.IsObjectGreyCon(found)) : default;
         state.Engaged = false;
@@ -1587,15 +1606,23 @@ public static class PlayerBotDriver
     // the ring for the adds by a candidate at its edge; those along a walk in lie within it. One over the cap is passed over, never taken (DEATHS.md A4: the old rollback
     // reset the death steps to fit it), and the capped clock runs while the wider ring finds nothing else. An avoided
     // name is passed over too, unless the bot was sent to a camp of them (HuntAvoided). A keep guard of another realm or
-    // of none counts as an add, never as a candidate (#167 D7, CountsAsThreat).
-    private static GameNPC FindWithin(PlayerBotState state, GamePlayer player, ushort radius, long now, out int crowd)
+    // of none counts as an add, never as a candidate (#167 D7, CountsAsThreat). #167 F P1: the wider ring holds a melee
+    // or archer bot to MaxPullCrowd (unless lifted where it is, LimitsCrowd); a refused candidate counts as passed over,
+    // and those refused since the last target go to CrowdRefused for the capped plan's bar. A target the bot walks to
+    // is searched again every 2 s until it fights, so one whose crowd rises past its limit on the walk in is dropped.
+    private static GameNPC FindWithin(PlayerBotState state, GamePlayer player, ushort radius, long now,
+        out PlayerBotPickReading reading)
     {
         bool passedOver = false;
         ConColor? safestOver = null;
         ConColor cap = Cap(state, now), natural = MaximumTargetCon(1, 0);
         bool leashed = Leashed(state, player);
-        List<(GameNPC Npc, Vector3 At, int Score)> candidates = _candidates ??= new();
+        PlayerBotRole role = RoleOf(player.CharacterClass.ID);
+        bool limited = radius >= SearchRadius && LimitsCrowd(role, state.CrowdLiftedUntil, now);   // #167 F P1: the wider
+        List<(GameNPC Npc, Vector3 At, int Score)> candidates = _candidates ??= new();                //   ring only
         List<(GameNPC Npc, Vector3 At, int AggroRange)> adds = _adds ??= new();
+        List<int> limits = _limits ??= new();
+        List<GameNPC> refused = _refused ??= new();
         foreach (GameNPC npc in player.GetNPCsInRadius((ushort)(radius + AddScanMargin)))
         {
             bool experience = IsExperienceTarget(npc);                                  // monsters only, adds too, and
@@ -1611,7 +1638,10 @@ public static class PlayerBotDriver
                 continue;
             int score = TargetScore(player.GetDistanceTo(npc), con);                    // AWBC:3100
             if (con <= cap && (state.HuntAvoided || !IsAvoided(state.AvoidUntil, npc.Name, now)))
+            {
                 candidates.Add((npc, at, score));
+                limits.Add(limited ? MaxPullCrowd(role, con) : int.MaxValue);           // #167 F P1
+            }
             else
             {
                 passedOver = true;                                                      // over the cap, or a death's name
@@ -1619,16 +1649,25 @@ public static class PlayerBotDriver
             }
         }
         GameNPC best = PickUncrowded(candidates, adds, uncrowdedOnly: radius < SearchRadius,   // #167 C5: the walk in
-            new Vector3(player.X, player.Y, player.Z), PullStop(state, player), out crowd);      //   too; crowd= its count
+            new Vector3(player.X, player.Y, player.Z), PullStop(state, player), out int crowd,  //   too; crowd= its count;
+            limited ? limits : null, refused: refused);                                          //   #167 F P1: the limits
+        reading = best == null ? PlayerBotPickReading.None                              // #167 F P1 lifted=
+            : new(crowd, -1, -1, -1, CrowdLifted(role, state.CrowdLiftedUntil, now));
         state.SearchAdds.Clear();                                                       // #167 F7: the rest spot's, read
         foreach ((GameNPC add, _, _) in adds) state.SearchAdds.Add(add);                //   live (WalksToRestSpot)
         candidates.Clear();                                                             // no other monster held past the
         adds.Clear();                                                                   //   search
+        limits.Clear();
         if (best != null || radius >= SearchRadius)
         {
-            state.CappedSince = CappedClock(state.CappedSince, best != null, passedOver, now);
+            (bool passed, bool crowdPassedOver, bool clearRefused) = CrowdSearchEnd(best != null, refused.Count, passedOver);
+            state.CappedSince = CappedClock(state.CappedSince, best != null, passed, now);   // #167 F P1: a refusal too
             state.SafestPassedOver = best == null ? safestOver : null;                  // FallbackInPlace's
+            state.CrowdPassedOver = crowdPassedOver;                                    // #167 F P1: FallBackInPlace's,
+            if (clearRefused) state.CrowdRefused.Clear();                               //   and the capped plan's bar
+            else state.CrowdRefused.UnionWith(refused);                                 //   (CrowdBars)
         }
+        refused.Clear();
         return best;
     }
 
@@ -1924,25 +1963,37 @@ public static class PlayerBotDriver
     /// pass took (RelocateSuffix).</summary>
     public static string RelocateLine(string bot, int level, Vector3 from, Vector3 to, int distance, string monster,
         int monsterLevel, ushort zone, string reason, ConColor? fallback, long sinceReleaseMs, bool barredOld,
-        ConColor? capKill, bool recent = false, bool near = false) =>
+        ConColor? capKill, bool recent = false, bool near = false, int crowdRefused = 0, bool lifted = false) =>
         $"PLAYER_BOT_RELOCATE bot={bot} level={level} from=({from.X:0},{from.Y:0}) to=({to.X:0},{to.Y:0},{to.Z:0}) " +
         $"distance={distance} monster=\"{monster}\" monsterLevel={monsterLevel} zone={zone} reason={reason} " +
-        $"fallback={fallback?.ToString() ?? "-"}" + RelocateSuffix(reason, sinceReleaseMs, barredOld, capKill, recent, near);
+        $"fallback={fallback?.ToString() ?? "-"}" +
+        RelocateSuffix(reason, sinceReleaseMs, barredOld, capKill, recent, near, crowdRefused, lifted);
 
-    /// <summary>PLAYER_BOT_RELOCATE when no camp checked had a corridor (or none was found): checked= of them.</summary>
+    /// <summary>PLAYER_BOT_RELOCATE when no camp checked had a corridor (or none was found): checked= of them. #167 F
+    /// P1: lifted=1 when the fallback in place that follows lifted the crowd limits (FallBackInPlace).</summary>
     public static string RelocateNoneLine(string bot, int level, int candidates, ushort zone, string reason,
-        long sinceReleaseMs, bool barredOld, ConColor? capKill, bool recent = false) =>
+        long sinceReleaseMs, bool barredOld, ConColor? capKill, bool recent = false, int crowdRefused = 0,
+        bool lifted = false) =>
         $"PLAYER_BOT_RELOCATE bot={bot} level={level} none checked={candidates} zone={zone} reason={reason}" +
-        RelocateSuffix(reason, sinceReleaseMs, barredOld, capKill, recent, false);
+        RelocateSuffix(reason, sinceReleaseMs, barredOld, capKill, recent, false, crowdRefused, lifted);
+
+    /// <summary>#167 F P1 (the review: every lift logged): PLAYER_BOT_LIFT, a fallback in place that lifted the crowd
+    /// limits where RelocateIfOutgrown writes no RELOCATE line (why=norelocate: it can't move its leash, or no zone to
+    /// plan in; offmesh: it stands off the navmesh). Not a RELOCATE line: legcheck.py counts any of those from a spot
+    /// bot as a relocation.</summary>
+    public static string LiftLine(string bot, int level, string reason, string why) =>
+        $"PLAYER_BOT_LIFT bot={bot} level={level} reason={reason} why={why} lifted=1";
 
     // #167 C1: RELOCATE sinceRelease= on a death's replan, last (the fields before it stay as they were); D9: then
     // barred=old when the plan bars the anchor the bot had (BarOldAnchor); D6: then capKill=, the lowest con that killed
     // the bot in the last 5 minutes, YELLOW or harder (RememberKillerCon), while it keeps one (PlanCaps). #167 E W1: then
-    // recent=1 and near=1.
+    // recent=1 and near=1. #167 F P1: then crowdRefused=, the crowd bars' spots a capped plan barred, and lifted=1 on a
+    // camp it took anyway (InCrowdBarred) or a fallback in place that lifted the limits.
     private static string RelocateSuffix(string reason, long sinceReleaseMs, bool barredOld, ConColor? capKill,
-        bool recent, bool near) =>
+        bool recent, bool near, int crowdRefused = 0, bool lifted = false) =>
         (reason == Died ? $" sinceRelease={sinceReleaseMs}" : "") + (barredOld ? " barred=old" : "") +
-        (capKill is ConColor kill ? $" capKill={kill}" : "") + (recent ? " recent=1" : "") + (near ? " near=1" : "");
+        (capKill is ConColor kill ? $" capKill={kill}" : "") + (recent ? " recent=1" : "") + (near ? " near=1" : "") +
+        (crowdRefused > 0 ? $" crowdRefused={crowdRefused}" : "") + (lifted ? " lifted=1" : "");
 
     /// <summary>The capped clock after a search of the wider ring (or one that found a target): set at the first that
     /// passed a monster over for the cap and found none, kept while that lasts, 0 once a search finds a target or
@@ -1986,8 +2037,10 @@ public static class PlayerBotDriver
     /// (fallback; none: the death cap, Cap) and at a camp of avoided names (stale) those too (FindWithin), the capped
     /// clock afresh (the next search starts it, on the way there too), BACK replan=moved after a death (#167 C1; same at
     /// the anchor it had, D4), and the relocation owed planned (#167 F4, C2). The review of 9aacd69: with BackMoved's line
-    /// dropped no test failed.</summary>
-    public static void PlanCamp(PlayerBotState state, Vector3 spot, ConColor? fallback, bool stale, string reason)
+    /// dropped no test failed. #167 F P1: the crowd refusals afresh, the limits lifted until crowdLiftedUntil (0: on); the
+    /// crowd bars stay (CrowdBars, 10 minutes each).</summary>
+    public static void PlanCamp(PlayerBotState state, Vector3 spot, ConColor? fallback, bool stale, string reason,
+        long crowdLiftedUntil = 0)
     {
         if (reason == Died) state.BackSame = SameCamp(spot, state.Anchor);
         state.Anchor = spot;
@@ -1999,6 +2052,9 @@ public static class PlayerBotDriver
         state.BackMoved |= reason == Died;
         state.ReplanOwed = null;
         state.ReplanSince = 0;
+        state.CrowdRefused.Clear();                                                      // #167 F P1
+        state.CrowdPassedOver = false;
+        state.CrowdLiftedUntil = crowdLiftedUntil;
     }
 
     /// <summary>The fight's first think in reach (Engage's opening; PLAYER_BOT_FIGHT's start): its counts afresh, the bot's
@@ -3522,6 +3578,52 @@ public static class PlayerBotDriver
     public static Vector3[] FailedCamps(IReadOnlyList<(ushort Region, Vector3 At, long Until)> failed, ushort region, long now) =>
         failed.Where(camp => camp.Region == region && now < camp.Until).Select(camp => camp.At).ToArray();
 
+    // #167 F P1: where the wider ring refused crowded monsters (CrowdRefused), the alive ones where they stand.
+    private static IEnumerable<Vector3> CrowdRefusedSpots(HashSet<GameNPC> refused) =>
+        refused.Where(npc => npc.IsAlive).Select(npc => new Vector3(npc.X, npc.Y, npc.Z));
+
+    /// <summary>#167 F P1: a capped plan's crowd bar (RelocateIfOutgrown): the spots its refusals stood at (CrowdRefused),
+    /// each kept CrowdBarMilliseconds in its region; one at a spot barred already is that bar again, from now. Those whose
+    /// time is up go. The review: cleared at every planned camp, the bar lasted one hop, so a bot could go A, B, A in a
+    /// zone of packs, a 30-s hold and a walk each time, A more than 5,000 from B and so out of B's searches.</summary>
+    public static void RememberCrowdBars(List<(ushort Region, Vector3 At, long Until)> bars, ushort region,
+        IEnumerable<Vector3> spots, long now)
+    {
+        foreach (Vector3 spot in spots)
+        {
+            bars.RemoveAll(bar => bar.Until <= now || bar.Region == region && bar.At == spot);
+            bars.Add((region, spot, now + CrowdBarMilliseconds));
+        }
+    }
+
+    /// <summary>#167 F P1: the crowd bars in a region a capped plan still bars (PlanBars, InCrowdBarred), as FailedCamps
+    /// reads the failed camps.</summary>
+    public static Vector3[] CrowdBarSpots(IReadOnlyList<(ushort Region, Vector3 At, long Until)> bars, ushort region,
+        long now) =>
+        bars.Where(bar => bar.Region == region && now < bar.Until).Select(bar => bar.At).ToArray();
+
+    /// <summary>#167 F P1: a plan's bars: its failed camps, and for a capped plan the crowd bars' spots too (barred as a
+    /// failed camp is, PlanRelocation's Failed: within RoamRadius), so the bot leaves the camp it could not pull one at a
+    /// time (17 capped RELOCATEs in batch F's base legs landed within 1,500 of the anchor they left).</summary>
+    public static Vector3[] PlanBars(Vector3[] failed, IReadOnlyList<Vector3> crowdBarred, string reason) =>
+        reason == Capped && crowdBarred.Count > 0 ? [.. failed, .. crowdBarred] : failed;
+
+    /// <summary>#167 F P1: a planned spot within RoamRadius of a crowd bar's spot: the plan had no clean camp left (the
+    /// fit pass bars it; only the fallback takes one), so the bot hunts it with the limits lifted (TakeCamp), as before,
+    /// and is not refused and replanned every 30 s.</summary>
+    public static bool InCrowdBarred(Vector3 spot, IReadOnlyList<Vector3> crowdBarred)
+    {
+        for (int i = 0; i < crowdBarred.Count; i++)
+            if (Vector3.DistanceSquared(crowdBarred[i], spot) <= RoamRadius * RoamRadius) return true;
+        return false;
+    }
+
+    /// <summary>#167 F P1: a capped bot with no camp to leave for (FallBackInPlace) whose last wider search refused
+    /// crowded monsters and took none (crowdPassedOver) hunts them where it is, as before, for CrowdLiftMilliseconds;
+    /// else the lift stays as it was.</summary>
+    public static long CrowdLiftAfterFallback(bool crowdPassedOver, long liftedUntil, long now) =>
+        crowdPassedOver ? now + CrowdLiftMilliseconds : liftedUntil;
+
     // The GameBot's recovery thresholds (AutonomousRestPolicy.NeedsRecovery, AutonomousBotDecisionEngine.cs:384-394: 70%
     // health, 45% power, 35% endurance; the pilot's 50/22/20 at APP:186-187 left the bots pulling at half health,
     // levelmatch/DEATHS.md A1). Power counts only for a class with a pool: one with none (ManaStat UNDEFINED,
@@ -3824,10 +3926,14 @@ public static class PlayerBotDriver
         IReadOnlyList<(T Npc, Vector3 At, int AggroRange)> adds, bool uncrowdedOnly, Vector3 from, int stop) where T : class =>
         PickUncrowded(candidates, adds, uncrowdedOnly, from, stop, out _);
 
-    /// <summary>PickUncrowded, and the pick's crowding as it read it (FIGHT crowd=, #167): -1 when it took none.</summary>
+    /// <summary>PickUncrowded, and the pick's crowding as it read it (FIGHT crowd=, #167): -1 when it took none. #167 F
+    /// P1: with maxCrowd (one limit per candidate, MaxPullCrowd's; null: none), a candidate over its limit is refused:
+    /// never taken, and added to refused (FindWithin counts it passed over: the capped clock runs, and a capped plan bars
+    /// its camp). One the "nothing beats a clear better one" line skips is never refused: that happens only once a clear
+    /// target is in hand, and refused is read only when the pick takes none.</summary>
     public static T PickUncrowded<T>(IReadOnlyList<(T Npc, Vector3 At, int Score)> candidates,
-        IReadOnlyList<(T Npc, Vector3 At, int AggroRange)> adds, bool uncrowdedOnly, Vector3 from, int stop, out int crowd)
-        where T : class
+        IReadOnlyList<(T Npc, Vector3 At, int AggroRange)> adds, bool uncrowdedOnly, Vector3 from, int stop, out int crowd,
+        IReadOnlyList<int> maxCrowd = null, ICollection<T> refused = null) where T : class
     {
         T best = null;
         int bestCrowd = int.MaxValue, bestScore = int.MaxValue;
@@ -3836,12 +3942,47 @@ public static class PlayerBotDriver
             (T npc, Vector3 at, int score) = candidates[i];
             if (bestCrowd == 0 && score >= bestScore) continue;                         // nothing beats a clear better one
             int count = CrowdingAlong(npc, at, from, StandPoint(from, at, stop), adds);
+            if (maxCrowd != null && maxCrowd[i] != int.MaxValue && count > maxCrowd[i])
+            {
+                refused?.Add(npc);                                                      // #167 F P1
+                continue;
+            }
             if (uncrowdedOnly && count > 0) continue;
             if (count < bestCrowd || count == bestCrowd && score < bestScore) (best, bestCrowd, bestScore) = (npc, count, score);
         }
         crowd = best == null ? -1 : bestCrowd;
         return best;
     }
+
+    /// <summary>#167 F P1: the most potential adds (CrowdingAlong's live count) a pull of this con may have, by role.
+    /// Melee and archers: GREEN 3, BLUE 1, YELLOW or harder 0. In batch F's seven base legs (contact pulls, pulls/fatal):
+    /// GREEN 0-3 13,271/26, 4+ 90/9; BLUE 0-1 4,975/41, 2+ 284/35 (12.3%); YELLOW 0 1,676/29, 1+ 254/28. Refused for
+    /// melee and archers: 390 pulls, 248 kills, 64 fatal (melee 53 of its 206 deaths, archers 11 of 52). Healers, casters
+    /// and pets: none (int.MaxValue): a healer under it gave 53 kills for 6 deaths (-1.45% kills for -7% deaths), and
+    /// casters and pets fight a crowd from range or behind a pet (crowd 2+: 2.27% and 0% fatal).</summary>
+    public static int MaxPullCrowd(PlayerBotRole role, ConColor con) =>
+        role is PlayerBotRole.Melee or PlayerBotRole.Archer
+            ? con switch { <= ConColor.GREEN => 3, ConColor.BLUE => 1, _ => 0 }
+            : int.MaxValue;
+
+    /// <summary>#167 F P1: whether the pick holds a bot to MaxPullCrowd now: a role it limits, unless the limits are
+    /// lifted where it is (liftedUntil: a plan took a camp the crowd bar barred, TakeCamp, or none was left to leave
+    /// for, FallBackInPlace).</summary>
+    public static bool LimitsCrowd(PlayerBotRole role, long liftedUntil, long now) =>
+        MaxPullCrowd(role, ConColor.YELLOW) != int.MaxValue && now >= liftedUntil;
+
+    /// <summary>#167 F P1 FIGHT lifted=: a pick by a role the limits hold, made while they are lifted where it is (the
+    /// review: the accept line's over-limit pulls are read outside the lifts).</summary>
+    public static bool CrowdLifted(PlayerBotRole role, long liftedUntil, long now) =>
+        MaxPullCrowd(role, ConColor.YELLOW) != int.MaxValue && now < liftedUntil;
+
+    /// <summary>#167 F P1: a search's end (FindWithin, the wider ring or one that found a target; the review's wiring seam):
+    /// (passedOver: a candidate refused for its crowd counts as passed over, so the capped clock runs; crowdPassedOver:
+    /// it took none and refused some, FallBackInPlace's lift; clearRefused: a target found starts CrowdRefused afresh,
+    /// else the refused join it for the capped plan's bar).</summary>
+    public static (bool PassedOver, bool CrowdPassedOver, bool ClearRefused) CrowdSearchEnd(bool found, int refused,
+        bool passedOver) =>
+        (passedOver || refused > 0, !found && refused > 0, found);
 
     /// <summary>FIGHT and DEATH addAt= and addHp= (#167, the next leg's: when the second-monster case starts): the first
     /// think in a fight a second monster, any but the target, alive and on the bot (onBot: IsAttacking), is on the bot's
@@ -4592,7 +4733,8 @@ public static class PlayerBotDriver
             (died ? WorldMgr.GetRegion(state.AnchorRegion)?.GetZone((int)state.DeathSpot.X, (int)state.DeathSpot.Y)
                 : player.CurrentZone) is not Zone zone)                            //   their spots
         {
-            FallBack(state, player, reason, now);
+            if (FallBack(state, player, reason, now) && Log.IsInfoEnabled)          // #167 F P1: a lift, no RELOCATE line
+                Log.Info(LiftLine(player.Name, player.Level, reason, "norelocate"));
             return;
         }
         state.NextRelocateTick = now + (reason == Outgrown ? RelocateAfterMilliseconds : CappedRelocateMilliseconds);
@@ -4600,8 +4742,9 @@ public static class PlayerBotDriver
         IPathfindingMgr nav = PathfindingProvider.Instance;
         if (nav.HasNavmesh(player.CurrentZone) && nav.GetClosestPoint(player.CurrentZone, here, 64, 64, 128, nav.DefaultFilters) == null)
         {
-            FallBack(state, player, reason, now);  // off the mesh here, every corridor fails (PlayerTravelPath.cs:48-50): blame
-            return;                                //   no monster for it
+            if (FallBack(state, player, reason, now) && Log.IsInfoEnabled)   // off the mesh here, every corridor fails
+                Log.Info(LiftLine(player.Name, player.Level, reason, "offmesh"));   //   (PlayerTravelPath.cs:48-50): blame
+            return;                                                          //   no monster for it
         }
         Vector3? corridorFrom = CorridorOrigin(reason, nav.HasNavmesh(zone), player.CurrentZone == zone, state.DeathSpot, here);
         if (corridorFrom is Vector3 deathStart && player.CurrentZone != zone &&  // a death spot off the mesh fails every
@@ -4613,6 +4756,14 @@ public static class PlayerBotDriver
             zone, natural, state.AvoidUntil, now);
         Vector3[] failed = FailedCamps(state.FailedCamps, state.AnchorRegion, now);
         bool barredOld = Array.IndexOf(failed, state.Anchor) >= 0;                 // #167 D9: RELOCATE barred=old
+        if (reason == Capped)                                                      // #167 F P1: a capped plan bars the
+        {                                                                          //   camps it refused for their crowd,
+            RememberCrowdBars(state.CrowdBars, state.AnchorRegion, CrowdRefusedSpots(state.CrowdRefused), now);   //   for
+            state.CrowdRefused.Clear();                                            //   10 minutes (the review), and leaves
+        }                                                                          //   them
+        Vector3[] crowdBarred = reason == Capped ? CrowdBarSpots(state.CrowdBars, state.AnchorRegion, now) : [];
+        failed = PlanBars(failed, crowdBarred, reason);
+        int crowdRefused = crowdBarred.Length;
         (ConColor fit, ConColor? killerCon) = PlanCaps(state, now);                 // #167 D6
         bool afterDeath = AfterDeathPlan(reason, state.LastDeathTick == 0 ? -1 : now - state.LastDeathTick);   // #167 E W1
         Zone nearZone = player.CurrentZone;                                        // the zone it stands in: after a
@@ -4629,12 +4780,13 @@ public static class PlayerBotDriver
                 state.RelocateRejected, RelocateCandidates, killerCon, afterDeath, tryNear: false);
             if (TakeCamp(spots, fallback, stale, near)) return;
         }
-        if (Log.IsInfoEnabled)
+        bool lifted = spots.Length == 0 && FallBack(state, player, reason, now);   // no camp in the zone: none to try next
+        if (Log.IsInfoEnabled)                                                     //   time either; #167 F P1: a lift
             Log.Info(RelocateNoneLine(player.Name, player.Level, spots.Length, zone.ID, reason, now - state.ReleasedAt,
-                barredOld, killerCon, afterDeath));
-        if (spots.Length == 0) FallBack(state, player, reason, now);   // no camp in the zone: none to try next time either
+                barredOld, killerCon, afterDeath, crowdRefused, lifted));
 
         // The first of a camp's spots it has a corridor to (one without is rejected, RelocateRejected): RELOCATE, PlanCamp.
+        // #167 F P1: a spot the crowd bar barred (only the fallback takes one) lifts the limits there (InCrowdBarred).
         bool TakeCamp(GameNPC[] camp, ConColor? campFallback, bool campStale, bool nearCamp)
         {
             Zone campZone = nearCamp ? nearZone : zone;
@@ -4647,22 +4799,26 @@ public static class PlayerBotDriver
                     state.RelocateRejected.Add(npc);
                     continue;
                 }
+                bool liftedCamp = crowdRefused > 0 && InCrowdBarred(spot, crowdBarred);
                 if (Log.IsInfoEnabled)
                     Log.Info(RelocateLine(player.Name, player.Level, state.Anchor, spot, (int)Vector3.Distance(here, spot),
                         npc.Name, npc.EffectiveLevel, campZone.ID, reason, campFallback, now - state.ReleasedAt, barredOld,
-                        killerCon, afterDeath, nearCamp));
-                PlanCamp(state, spot, campFallback, campStale, reason);           // and BACK replan=moved (#167 C1)
+                        killerCon, afterDeath, nearCamp, crowdRefused, liftedCamp));
+                PlanCamp(state, spot, campFallback, campStale, reason,            // and BACK replan=moved (#167 C1)
+                    liftedCamp ? now + CrowdLiftMilliseconds : 0);
                 return true;
             }
             return false;
         }
     }
 
-    // A capped bot's FallBackInPlace; after a death (#167 F4) or a break-off (C2), the end of the relocation owed.
-    private static void FallBack(PlayerBotState state, GamePlayer player, string reason, long now)
+    // A capped bot's FallBackInPlace; after a death (#167 F4) or a break-off (C2), the end of the relocation owed. #167 F
+    // P1: true when it lifted the crowd limits (the caller logs it).
+    private static bool FallBack(PlayerBotState state, GamePlayer player, string reason, long now)
     {
-        if (reason is Died or BrokeOff) EndReplan(state, player);
-        else FallBackInPlace(state, reason, now);
+        if (reason is not (Died or BrokeOff)) return FallBackInPlace(state, reason, now);
+        EndReplan(state, player);
+        return false;
     }
 
     // #167 F4: no camp planned after a death, at once or within MaxHoldMilliseconds: the bot hunts where it is, under its
@@ -4677,13 +4833,19 @@ public static class PlayerBotDriver
         state.RoamDestination = null;
     }
 
-    // FallbackInPlace's cap where the bot is; its next search finds the monster it passed over, and the hold ends.
-    private static void FallBackInPlace(PlayerBotState state, string reason, long now)
+    // FallbackInPlace's cap where the bot is; its next search finds the monster it passed over, and the hold ends. #167 F
+    // P1: with only crowded monsters refused, the crowd limits lift here (CrowdLiftAfterFallback) and the hold ends too;
+    // true then (logged: the none line's lifted=1, else a LIFT line).
+    private static bool FallBackInPlace(PlayerBotState state, string reason, long now)
     {
+        bool lifts = state.CrowdPassedOver;
+        state.CrowdLiftedUntil = CrowdLiftAfterFallback(lifts, state.CrowdLiftedUntil, now);
+        if (lifts) (state.CappedSince, state.CrowdPassedOver) = (0, false);
         if (FallbackInPlace(reason, state.SafestPassedOver, LowestKillerCon(state.KillerCons, now)) is not ConColor cap)
-            return;
+            return lifts;
         state.FallbackCap = cap;
         state.CappedSince = 0;
+        return lifts;
     }
 
     private static Vector3 PickRoamPoint(GamePlayer player, Vector3 centre)
@@ -5380,7 +5542,7 @@ public static class PlayerBotDriver
     // search (RefreshTarget keeps a target until then): else its self-defence took the nearest hitter.
     private static void TurnOn(PlayerBotState state, GamePlayer player, GameNPC npc, long now)
     {
-        TakeTarget(state, player, npc, -1);
+        TakeTarget(state, player, npc, PlayerBotPickReading.None);
         state.NextTargetRefreshTick = now + TargetRefreshMilliseconds;
     }
 
@@ -5554,7 +5716,8 @@ public static class PlayerBotDriver
             inFight ? state.FightCtlResisted : -1, inFight ? state.FightCtlImmune : -1,  // #167 F C2 ctlResisted=,
             inFight ? state.FightQcControls : -1, inFight ? state.FightQcNukes : -1,     //   ctlImmune=, qcCtl=, qcNuke=,
             QuickcastLeftSeconds(quickcast != null,                                       //   qcLeft= at any death
-                quickcast == null ? 0 : player.GetSkillDisabledDuration(quickcast)));
+                quickcast == null ? 0 : player.GetSkillDisabledDuration(quickcast)),
+            target != null ? state.PickCrowd : -1);                                       // #167 F P1 crowd=, the pick's
         string head = $"PLAYER_BOT_DEATH bot={player.Name} level={player.Level} at=({player.X},{player.Y},{player.Z}) " +
                       $"zone={player.CurrentZone?.ID} {fight} attackers={state.Attackers} deathSteps={state.DeathSafetySteps} " +
                       $"aliveSec={(now - state.AliveSince) / 1000} task={state.Task != null}";
@@ -5692,7 +5855,8 @@ public static class PlayerBotDriver
             state.FightTaps,                                                            // #167 F N1b
             FightAddWhy(state.FightAdd.At, state.FightAddControls, state.FightAddWhy),   // #167 F C1
             state.FightCtlResisted, state.FightCtlImmune, state.FightQcControls, state.FightQcNukes,   // #167 F C2
-            state.FightReserve)));                                                      // #167 F-R
+            state.FightReserve,                                                         // #167 F-R
+            state.PickLifted)));                                                        // #167 F P1
     }
 
     // APP:585-624, changed: every 10 s, no inventory count, no saves; after 15 minutes with no progress, back to the

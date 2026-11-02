@@ -3477,6 +3477,172 @@ public sealed class UT_PlayerBotDriver
             Is.EqualTo(("behind", 0)));
     }
 
+    // --- #167 F P1: a melee or archer pull takes at most its con's crowd, and a capped plan leaves that camp ---
+
+    // The most potential adds a pull may have, by role and con (the wider ring; batch F's seven base legs: BLUE at crowd
+    // 2+ was fatal in 35 of 284 contact pulls, YELLOW at 1+ in 28 of 254, GREEN at 4+ in 9 of 90). Healers, casters and
+    // pets keep today's rule.
+    [TestCase(PlayerBotRole.Melee, ConColor.GREEN, 3)] [TestCase(PlayerBotRole.Melee, ConColor.BLUE, 1)]
+    [TestCase(PlayerBotRole.Melee, ConColor.YELLOW, 0)] [TestCase(PlayerBotRole.Archer, ConColor.ORANGE, 0)]
+    [TestCase(PlayerBotRole.Archer, ConColor.BLUE, 1)] [TestCase(PlayerBotRole.Healer, ConColor.BLUE, int.MaxValue)]
+    [TestCase(PlayerBotRole.Caster, ConColor.YELLOW, int.MaxValue)] [TestCase(PlayerBotRole.Pet, ConColor.GREEN, int.MaxValue)]
+    public void A_pull_takes_at_most_its_roles_crowd_for_its_con(PlayerBotRole role, ConColor con, int most) =>
+        Assert.That(PlayerBotDriver.MaxPullCrowd(role, con), Is.EqualTo(most));
+
+    // The wider ring refuses a candidate over its limit instead of taking the least crowded (st-i188b1: a Scout's death
+    // stalker at crowd=7, 6 adds, dead in 13 s, the same camp on every leg): with none under its limit it takes none,
+    // and the refused one goes to refused (FindWithin: passed over, the capped clock runs).
+    [Test]
+    public void A_pull_over_its_crowd_limit_is_refused_not_taken()
+    {
+        var candidates = new List<(string, Vector3, int)> { At("pack", 0, 100) };
+        var adds = new List<(string, Vector3, int)> { Add("a", 300), Add("b", -300) };     // crowd 2
+        var refused = new List<string>();
+        Assert.That((PlayerBotDriver.PickUncrowded(candidates, adds, false, Aside, int.MaxValue, out int crowd, [1],
+            refused: refused), crowd), Is.EqualTo(((string)null, -1)), "BLUE, limit 1");
+        Assert.That(refused, Is.EqualTo(new[] { "pack" }));
+        Assert.That(PlayerBotDriver.PickUncrowded(candidates, adds, false, Aside, int.MaxValue, out crowd, [3]),
+            Is.EqualTo("pack"), "GREEN, limit 3");
+        Assert.That(PlayerBotDriver.PickUncrowded(candidates, adds, false, Aside, int.MaxValue, out crowd), Is.EqualTo("pack"),
+            "no limits: the least crowded, as before");
+    }
+
+    // Under the limits the least crowded still wins, but only among those within theirs: a YELLOW one at crowd 1 gives
+    // way to a GREEN one at crowd 2 (today the YELLOW, the least crowded, was taken).
+    [Test]
+    public void The_least_crowded_within_its_limit_wins()
+    {
+        var candidates = new List<(string, Vector3, int)> { At("yellow", 0, 100), At("green", 10_000, 900) };
+        var adds = new List<(string, Vector3, int)> { Add("a", 300), Add("b", 9_700), Add("c", 10_300) };
+        Assert.That(PlayerBotDriver.PickUncrowded(candidates, adds, false, Aside, int.MaxValue, out int crowd, [0, 3]),
+            Is.EqualTo("green"));
+        Assert.That(crowd, Is.EqualTo(2));
+    }
+
+    // The limits hold a melee or archer bot unless lifted where it is (a camp the crowd bar barred, taken anyway, or none
+    // to leave for); FIGHT lifted=1 marks a pull such a bot made under a lift.
+    [TestCase(PlayerBotRole.Melee, 0L, 5_000L, true, false)] [TestCase(PlayerBotRole.Archer, 9_000L, 5_000L, false, true)]
+    [TestCase(PlayerBotRole.Archer, 5_000L, 5_000L, true, false)] [TestCase(PlayerBotRole.Healer, 0L, 5_000L, false, false)]
+    [TestCase(PlayerBotRole.Caster, 9_000L, 5_000L, false, false)]
+    public void The_crowd_limits_hold_a_melee_or_archer_bot_unless_lifted_where_it_is(PlayerBotRole role,
+        long liftedUntil, long now, bool limits, bool lifted) =>
+        Assert.That((PlayerBotDriver.LimitsCrowd(role, liftedUntil, now), PlayerBotDriver.CrowdLifted(role, liftedUntil, now)),
+            Is.EqualTo((limits, lifted)));
+
+    // The wider search's end (FindWithin; the review's wiring seam): one that only refused crowded pulls counts as passed
+    // over (the capped clock runs), keeps them for the capped plan's bar and lifts the limits at a fallback in place
+    // (crowdPassedOver); a target found starts the refusals afresh.
+    [TestCase(false, 2, false, true, true, false)] [TestCase(true, 1, false, true, false, true)]
+    [TestCase(false, 0, true, true, false, false)] [TestCase(false, 0, false, false, false, false)]
+    public void A_search_that_only_refused_crowded_pulls_runs_the_capped_clock(bool found, int refused,
+        bool passedOver, bool passed, bool crowdPassedOver, bool clear) =>
+        Assert.That(PlayerBotDriver.CrowdSearchEnd(found, refused, passedOver), Is.EqualTo((passed, crowdPassedOver, clear)));
+
+    // A capped plan after crowd refusals bars the refused monsters as failed camps are barred (within RoamRadius): the
+    // bot leaves the camp it could not pull one at a time. Any other plan bars only its failed camps.
+    [Test]
+    public void A_capped_plan_leaves_the_camp_whose_pulls_were_refused_for_their_crowd()
+    {
+        var monsters = new[] { Monster("pack camp", 500, ConColor.BLUE), Monster("next camp", 6_000, ConColor.BLUE) };
+        Vector3[] refusedAt = [new(700, 0, 0)];
+        string[] Plan(string reason) => PlayerBotDriver.PlanRelocation(monsters, Vector3.Zero, ConColor.BLUE, ConColor.YELLOW,
+            PlayerBotDriver.PlanBars([], refusedAt, reason), new HashSet<string>(), 5).Spots;
+        Assert.That(Plan(PlayerBotDriver.Capped), Is.EqualTo(new[] { "next camp" }));
+        Assert.That(Plan(PlayerBotDriver.Died), Is.EqualTo(new[] { "pack camp", "next camp" }));
+    }
+
+    // The review: a crowd bar holds 10 minutes, past the next camp. A capped plan from camp B, more than 5,000 from camp
+    // A (out of B's rings, so B's searches never refused A's pack), still bars A; 10 minutes on A's bar is gone. A bar
+    // refreshed at the same spot is one bar; another region's bars nothing here.
+    [Test]
+    public void A_crowd_bar_holds_ten_minutes_past_the_next_camp()
+    {
+        var bars = new List<(ushort Region, Vector3 At, long Until)>();
+        PlayerBotDriver.RememberCrowdBars(bars, 12, [new Vector3(500, 0, 0)], 0);                    // camp A's pack
+        PlayerBotDriver.RememberCrowdBars(bars, 12, [new Vector3(7_000, 0, 0)], 60_000);             // camp B's, 6,500 on
+        PlayerBotDriver.RememberCrowdBars(bars, 12, [new Vector3(7_000, 0, 0)], 90_000);             //   refused again
+        PlayerBotDriver.RememberCrowdBars(bars, 7, [new Vector3(14_000, 0, 0)], 90_000);             // another region's
+        Assert.That(bars.Count, Is.EqualTo(3));
+        var monsters = new[]
+        {
+            Monster("camp A", 500, ConColor.BLUE), Monster("camp B", 7_000, ConColor.BLUE), Monster("camp C", 14_000, ConColor.BLUE),
+        };
+        string[] Plan(long now) => PlayerBotDriver.PlanRelocation(monsters, new Vector3(7_000, 0, 0), ConColor.BLUE,
+            ConColor.YELLOW, PlayerBotDriver.PlanBars([], PlayerBotDriver.CrowdBarSpots(bars, 12, now), PlayerBotDriver.Capped),
+            new HashSet<string>(), 5).Spots;
+        Assert.That(Plan(120_000), Is.EqualTo(new[] { "camp C" }), "A and B barred");
+        Assert.That(Plan(600_000), Is.EqualTo(new[] { "camp A", "camp C" }), "A's bar 10 minutes old");
+    }
+
+    // A spot within RoamRadius of a crowd bar's spot is a barred camp the plan took anyway (no clean one left): the limits
+    // lift there.
+    [TestCase(800f, true)] [TestCase(1_400f, true)] [TestCase(2_200f, false)]
+    public void A_camp_taken_by_the_crowd_bar_lifts_the_limits_there(float x, bool lifted) =>
+        Assert.That(PlayerBotDriver.InCrowdBarred(new Vector3(x, 0, 0), [Vector3.Zero]), Is.EqualTo(lifted));
+
+    // No camp to leave for (FallBackInPlace) after a wider search that refused only crowded monsters: the limits lift
+    // where it is for 5 minutes; else the lift stays as it was.
+    [TestCase(true, 0L, 10_000L, 310_000L)] [TestCase(false, 0L, 10_000L, 0L)] [TestCase(false, 50_000L, 10_000L, 50_000L)]
+    public void No_camp_to_leave_for_lifts_the_crowd_limits_for_five_minutes(bool crowdPassedOver, long liftedUntil,
+        long now, long until) =>
+        Assert.That(PlayerBotDriver.CrowdLiftAfterFallback(crowdPassedOver, liftedUntil, now), Is.EqualTo(until));
+
+    // The fallback in place itself (the review: its lift is logged): with only crowded monsters refused it lifts the
+    // limits for 5 minutes, ends the hold and says so; else nothing changes and it says none.
+    [TestCase(true, true)] [TestCase(false, false)]
+    public void A_fallback_in_place_lifts_the_crowd_limits_and_says_so(bool crowdPassedOver, bool lifts)
+    {
+        var state = new PlayerBotState(Player(null)) { CrowdPassedOver = crowdPassedOver, CappedSince = 4_000 };
+        object lifted = typeof(PlayerBotDriver).GetMethod("FallBackInPlace", BindingFlags.Static | BindingFlags.NonPublic)!
+            .Invoke(null, [state, PlayerBotDriver.Outgrown, 40_000L]);
+        Assert.That((lifted, state.CrowdLiftedUntil, state.CappedSince, state.CrowdPassedOver),
+            Is.EqualTo(lifts ? (true, 340_000L, 0L, false) : (false, 0L, 4_000L, false)));
+    }
+
+    // A planned camp starts its crowd refusals afresh, with the limits lifted only when the plan took a barred camp; the
+    // crowd bars stay (the review: they last 10 minutes, not one hop).
+    [Test]
+    public void A_planned_camp_starts_its_crowd_refusals_afresh()
+    {
+        var state = new PlayerBotState(Player(null)) { CrowdPassedOver = true, CrowdLiftedUntil = 99_000 };
+        state.CrowdRefused.Add((GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC)));
+        state.CrowdBars.Add((12, new Vector3(500, 0, 0), 600_000));
+        PlayerBotDriver.PlanCamp(state, new Vector3(1, 2, 3), null, false, PlayerBotDriver.Capped);
+        Assert.That((state.CrowdRefused.Count, state.CrowdPassedOver, state.CrowdLiftedUntil, state.CrowdBars.Count),
+            Is.EqualTo((0, false, 0L, 1)));
+        PlayerBotDriver.PlanCamp(state, new Vector3(1, 2, 3), null, false, PlayerBotDriver.Capped, crowdLiftedUntil: 7_000);
+        Assert.That(state.CrowdLiftedUntil, Is.EqualTo(7_000L));
+    }
+
+    // Another region starts it all afresh: no refusals, lift or crowd bars carried over.
+    [Test]
+    public void A_region_change_drops_the_crowd_refusals_lift_and_bars()
+    {
+        var state = new PlayerBotState(Player(null)) { CrowdPassedOver = true, CrowdLiftedUntil = 99_000 };
+        state.CrowdRefused.Add((GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC)));
+        state.CrowdBars.Add((12, new Vector3(500, 0, 0), 600_000));
+        PlayerBotDriver.ResetOnRegionChange(state, 7);
+        Assert.That((state.CrowdRefused.Count, state.CrowdPassedOver, state.CrowdLiftedUntil, state.CrowdBars.Count),
+            Is.EqualTo((0, false, 0L, 0)));
+    }
+
+    // RELOCATE crowdRefused= on a capped plan's crowd bar, and lifted=1 on a barred camp it took anyway or on the none
+    // line of a fallback in place that lifted the limits; where no RELOCATE line is written (it can't move its leash,
+    // or stands off the mesh) a LIFT line says so.
+    [Test]
+    public void A_capped_relocation_gives_its_crowd_refusals_and_a_lifted_camp()
+    {
+        Assert.That(PlayerBotDriver.RelocateLine("Pbotaaaad", 41, Vector3.Zero, new Vector3(6_000, 0, 0), 6_000, "giant boar",
+                40, 12, PlayerBotDriver.Capped, null, 0, false, null, crowdRefused: 4, lifted: true),
+            Does.EndWith(" reason=capped fallback=- crowdRefused=4 lifted=1"));
+        Assert.That(PlayerBotDriver.RelocateNoneLine("Pbotaaaad", 41, 0, 12, PlayerBotDriver.Capped, 0, false, null,
+            crowdRefused: 4), Does.EndWith(" reason=capped crowdRefused=4"));
+        Assert.That(PlayerBotDriver.RelocateNoneLine("Pbotaaaad", 41, 0, 12, PlayerBotDriver.Capped, 0, false, null,
+            lifted: true), Does.EndWith(" reason=capped lifted=1"));
+        Assert.That(PlayerBotDriver.LiftLine("Pbotaaaad", 41, PlayerBotDriver.Capped, "offmesh"),
+            Is.EqualTo("PLAYER_BOT_LIFT bot=Pbotaaaad level=41 reason=capped why=offmesh lifted=1"));
+    }
+
     // FIGHT and DEATH addAt= and addHp= (#167, the next leg's): the first think in a fight a second monster, any but the
     // target, is on the bot's attacker list or comes at it (the add scan's): the whole seconds into the fight and the
     // bot's health then, kept after; -1 until then. Only one alive and on the bot (onBot; the review of 9aacd69: the
@@ -6380,7 +6546,8 @@ public sealed class UT_PlayerBotDriver
     // then (#167 F N1b) taps=, a Necromancer's power-tap casts; then (#167 F C1) addWhy=, the fight's add step in a word;
     // then (#167 F C2) ctlResisted= and ctlImmune=, of ctlFailed= the controls the server said were resisted or immune,
     // and qcCtl= and qcNuke=, the casts under Quickcast at a control and of its damage spell; then (#167 F-R) reserve=,
-    // the highest endurance reserve the fight read for a run (0: none).
+    // the highest endurance reserve the fight read for a run (0: none); then (#167 F P1) lifted=, 1 for a melee or
+    // archer bot's pull made with its crowd limits lifted.
     [Test]
     public void FightFormat()
     {
@@ -6391,14 +6558,14 @@ public sealed class UT_PlayerBotDriver
                 Walk: PlayerBotWalk.Hunt, KiteNone: (1, 0, 2, 3), Dots: 2, KillingQuickcast: true, TargetMezzes: 1,
                 RaceLeft: 22, EndStart: 85, End: 31, StylesHeld: 3, CastsHeld: 2, Sight: 4, Blind: true, BlindSteps: 2,
                 HealCasts: 1, HealsLanded: 1, HealHolds: 6, HealHoldMax: 4, Taps: 3,
-                AddWhy: PlayerBotAddWhy.Control, CtlResisted: 1, CtlImmune: 0, QcControls: 1, QcNukes: 2, Reserve: 36)),
+                AddWhy: PlayerBotAddWhy.Control, CtlResisted: 1, CtlImmune: 0, QcControls: 1, QcNukes: 2, Reserve: 36, Lifted: true)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbotaaaac level=40 target=\"widow claw\" targetLevel=40 con=YELLOW from=pull result=kill " +
                        "startHp=100 endHp=38 startMana=100 endMana=12 sec=21 adds=1 swings=9 notVisible=2 casts=4 lifeKills=0 rests=0 " +
                        "pet=alive heals=2 qc=1 buffs=3 petCasts=2 waits=5 ctl=2 kites=1 ctlBroken=1 addCtl=1 addAt=6 addHp=71 " +
                        "breakOff=1 engageDist=1450 crowd=1 heldSec=7 ctlLanded=1 ctlFailed=1 hpAtReach=92 tHpAtReach=64 rate=4.3 " +
                        "wouldBreak=38 walk=hunt kiteNone=1:0:2:3 dots=2 qcKill=1 ctlMez=1 raceLeft=22 endStart=85 end=31 " +
                        "styleHeld=3 castHeld=2 sight=4 blind=1 blindSteps=2 healCast=1 healLanded=1 healHold=6 healHoldMax=4 " +
-                       "taps=3 addWhy=ctl ctlResisted=1 ctlImmune=0 qcCtl=1 qcNuke=2 reserve=36"));
+                       "taps=3 addWhy=ctl ctlResisted=1 ctlImmune=0 qcCtl=1 qcNuke=2 reserve=36 lifted=1"));
         Assert.That(PlayerBotDriverReport.FormatFight(new PlayerBotFight("Pbothaaab", 43, "empyrean guardian", 36, ConColor.BLUE, true,
                 false, 64, 51, 100, 100, 7, 2, 3, 0, 0, 3, 1, Rate: -0.04, Walk: PlayerBotWalk.BreakOff)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbothaaab level=43 target=\"empyrean guardian\" targetLevel=36 con=BLUE from=defence " +
@@ -6408,7 +6575,7 @@ public sealed class UT_PlayerBotDriver
                        "tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=breakoff kiteNone=0:0:0:0 dots=0 qcKill=0 ctlMez=0 " +
                        "raceLeft=-999 endStart=-1 end=-1 styleHeld=0 castHeld=0 sight=0 blind=0 blindSteps=0 healCast=0 " +
                        "healLanded=0 healHold=0 healHoldMax=0 taps=0 addWhy=none ctlResisted=0 ctlImmune=0 qcCtl=0 " +
-                       "qcNuke=0 reserve=0"),
+                       "qcNuke=0 reserve=0 lifted=0"),
             "a gain under 0.05 a second: 0.0, not -0.0");
     }
 
@@ -7241,7 +7408,7 @@ public sealed class UT_PlayerBotDriver
             GameNPC below = MonsterAt(region, zone, new(840_323, 702_066, 8_343), 39),
                 near = MonsterAt(region, zone, new(840_700, 702_100, 8_700), 39);
             GameNPC Find(PlayerBotState state, long now) =>
-                (GameNPC)find.Invoke(null, [state, bot, PlayerBotDriver.ImmediateSearchRadius, now, -1]);
+                (GameNPC)find.Invoke(null, [state, bot, PlayerBotDriver.ImmediateSearchRadius, now, PlayerBotPickReading.None]);
             var state = new PlayerBotState(bot) { NukesLevel = 39, Nukes = [] };   // no spell to read (KnowSpells)
             Assert.That(Find(state, 10_000), Is.EqualTo(near), "the nearer");
             PlayerBotDriver.LeaveUnreachable(state, near, 10_000);
@@ -7406,7 +7573,8 @@ public sealed class UT_PlayerBotDriver
     // of a fight); then (#167 F H1) FIGHT's heals=, healCast= and healLanded=, (#167 F H2) healHold= and healHoldMax=,
     // (#167 F N1b) taps= (-1 each out of a fight), and (#167 F C1) addWhy= (-1 out of a fight); then (#167 F C2) FIGHT's
     // ctlResisted=, ctlImmune=, qcCtl= and qcNuke= (-1 each out of a fight) and qcLeft=, the seconds before Quickcast is
-    // ready again, at any death (-1 without it).
+    // ready again, at any death (-1 without it); then (#167 F P1) crowd=, FIGHT's: the rings' pick's crowding of its
+    // target (-1: no target, or another pick).
     [Test]
     public void DeathDetailFormat()
     {
@@ -7417,14 +7585,14 @@ public sealed class UT_PlayerBotDriver
                 WouldBreak: 52, Walk: PlayerBotWalk.Anchor, Endurance: 64, KiteNone: (0, 2, 1, 0), Dots: 1, KillingQuickcast: 1,
                 TargetMezzes: 1, RaceLeft: 35, StylesHeld: 3, CastsHeld: 1, Heals: 2, HealCasts: 1, HealsLanded: 0,
                 HealHolds: 4, HealHoldMax: 3, Taps: 2, AddWhy: PlayerBotAddWhy.Control, CtlResisted: 0, CtlImmune: 0,
-                QcControls: 1, QcNukes: 0, QcLeft: 22)),
+                QcControls: 1, QcNukes: 0, QcLeft: 22, Crowd: 3)),
             Is.EqualTo("activity=Fighting startHp=62 fightSec=14 targetHp=71 from=pull adds=2 lifeKills=3 rests=0 sinceKillSec=40 " +
                        "mana=100 swings=6 notVisible=1 killer=\"widow claw\" killerLevel=40 killerIsTarget=True fromBind=748 " +
                        "avoided=2 again=True sinceRelease=42 ill=True ctl=2 kites=1 casts=4 qc=1 waits=3 ctlBroken=1 addCtl=1 " +
                        "addAt=6 addHp=71 breakOff=0 engageDist=1450 heldSec=5 ctlLanded=1 ctlFailed=0 hpAtReach=88 tHpAtReach=90 " +
                        "rate=12.5 wouldBreak=52 walk=anchor end=64 kiteNone=0:2:1:0 dots=1 qcKill=1 ctlMez=1 raceLeft=35 " +
                        "styleHeld=3 castHeld=1 heals=2 healCast=1 healLanded=0 healHold=4 healHoldMax=3 taps=2 " +
-                       "addWhy=ctl ctlResisted=0 ctlImmune=0 qcCtl=1 qcNuke=0 qcLeft=22"));
+                       "addWhy=ctl ctlResisted=0 ctlImmune=0 qcCtl=1 qcNuke=0 qcLeft=22 crowd=3"));
         // Out of a fight, no target, no kill this life, no killer named by the Dying event, the bind in another region.
         Assert.That(PlayerBotDriverReport.FormatDeathDetail(new PlayerBotDeathDetail(PlayerBotActivity.Hunting, -1, -1, -1, true,
                 -1, 0, 2, -1, 37, -1, -1, null, 0, false, -1, BreakOff: true, Rate: 3, Walk: PlayerBotWalk.Clear, Endurance: 100)),
@@ -7434,7 +7602,7 @@ public sealed class UT_PlayerBotDriver
                        "addAt=-1 addHp=-1 breakOff=1 engageDist=-1 heldSec=-1 ctlLanded=-1 ctlFailed=-1 hpAtReach=-1 tHpAtReach=-1 " +
                        "rate=3.0 wouldBreak=-1 walk=clear end=100 kiteNone=-1:-1:-1:-1 dots=-1 qcKill=-1 ctlMez=-1 " +
                        "raceLeft=-999 styleHeld=-1 castHeld=-1 heals=-1 healCast=-1 healLanded=-1 healHold=-1 " +
-                       "healHoldMax=-1 taps=-1 addWhy=-1 ctlResisted=-1 ctlImmune=-1 qcCtl=-1 qcNuke=-1 qcLeft=-1"),
+                       "healHoldMax=-1 taps=-1 addWhy=-1 ctlResisted=-1 ctlImmune=-1 qcCtl=-1 qcNuke=-1 qcLeft=-1 crowd=-1"),
             "died on a break-off's run: out of a fight (the dropped one's FIGHT has it)");
     }
 
@@ -7472,7 +7640,7 @@ public sealed class UT_PlayerBotDriver
             "qc=-1 waits=-1 ctlBroken=-1 addCtl=-1 addAt=-1 addHp=-1 breakOff=0 engageDist=-1 heldSec=-1 ctlLanded=-1 ctlFailed=-1 " +
             "hpAtReach=-1 tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=none end=-1 kiteNone=-1:-1:-1:-1 dots=-1 qcKill=-1 " +
             "ctlMez=-1 raceLeft=-999 styleHeld=-1 castHeld=-1 heals=-1 healCast=-1 healLanded=-1 healHold=-1 healHoldMax=-1 " +
-            "taps=-1 addWhy=-1 ctlResisted=-1 ctlImmune=-1 qcCtl=-1 qcNuke=-1 qcLeft=-1"));
+            "taps=-1 addWhy=-1 ctlResisted=-1 ctlImmune=-1 qcCtl=-1 qcNuke=-1 qcLeft=-1 crowd=-1"));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, add, target),
             Does.Contain(" killer=\"a wolf\" killerLevel=38 killerIsTarget=False fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False "));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, null, null),

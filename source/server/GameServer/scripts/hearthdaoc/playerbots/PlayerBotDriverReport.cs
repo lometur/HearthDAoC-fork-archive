@@ -48,7 +48,8 @@ public readonly record struct PlayerBotCrossingWindow(int Seconds, long Took, lo
 /// (#167 F C2) of CtlFailed, the controls the server said were resisted (CtlResisted) or immune (CtlImmune), the rest
 /// refused, interrupted or unsaid, and the casts under Quickcast at a control (QcControls) and of Engage's damage spell,
 /// a Theurgist's pet too (QcNukes); then (#167 F-R) the highest endurance reserve the fight read for a run (Reserve;
-/// PlayerBotDriver.ReserveNow; 0: none).</summary>
+/// PlayerBotDriver.ReserveNow; 0: none); then (#167 F P1) whether the rings' pick of a melee or archer bot was made
+/// with its crowd limits lifted (Lifted; PlayerBotDriver.CrowdLifted).</summary>
 public readonly record struct PlayerBotFight(
     string Bot, int Level, string Target, int TargetLevel, ConColor Con, bool FromDefence, bool Killed,
     byte StartHp, byte EndHp, byte StartMana, byte EndMana, long Seconds, int Adds, int Swings, int NotVisible, int Casts,
@@ -60,7 +61,7 @@ public readonly record struct PlayerBotFight(
     int TargetMezzes = 0, int RaceLeft = -999, int EndStart = -1, int End = -1, int StylesHeld = 0, int CastsHeld = 0,
     int Sight = 0, bool Blind = false, int BlindSteps = 0, int HealCasts = 0, int HealsLanded = 0,
     int HealHolds = 0, int HealHoldMax = 0, int Taps = 0, PlayerBotAddWhy AddWhy = PlayerBotAddWhy.None, int CtlResisted = 0,
-    int CtlImmune = 0, int QcControls = 0, int QcNukes = 0, int Reserve = 0);
+    int CtlImmune = 0, int QcControls = 0, int QcNukes = 0, int Reserve = 0, bool Lifted = false);
 
 /// <summary>What a PLAYER_BOT_DEATH line adds after its first fields (levelmatch/DEATHS.md 2); -1 for none: the fight's
 /// fields (startHp, fightSec, adds, swings, notVisible) out of a fight, targetHp with no target, sinceKillSec with no kill
@@ -77,7 +78,8 @@ public readonly record struct PlayerBotFight(
 /// each out of a fight); then (#167 F H1) FIGHT's heals=, healCast= and healLanded=, (#167 F H2) healHold= and
 /// healHoldMax=, and (#167 F N1b) taps= (-1 each out of a fight); then (#167 F C1) FIGHT's addWhy= (none out of a fight:
 /// -1); then (#167 F C2) FIGHT's CtlResisted, CtlImmune, QcControls and QcNukes (-1 each out of a fight), and at any
-/// death Quickcast's remaining disable in seconds (QcLeft, -1 without it).</summary>
+/// death Quickcast's remaining disable in seconds (QcLeft, -1 without it); then (#167 F P1) FIGHT's Crowd, the rings'
+/// pick's crowding of the target (-1: no target, or another pick).</summary>
 public readonly record struct PlayerBotDeathDetail(
     PlayerBotActivity Activity, int StartHp, long FightSeconds, int TargetHp, bool FromDefence, int Adds, int LifeKills,
     int Rests, long SinceKillSeconds, byte Mana, int Swings, int NotVisible, string Killer, int KillerLevel,
@@ -89,7 +91,17 @@ public readonly record struct PlayerBotDeathDetail(
     int Dots = -1, int KillingQuickcast = -1, int TargetMezzes = -1, int RaceLeft = -999, int StylesHeld = -1,
     int CastsHeld = -1, int Heals = -1, int HealCasts = -1, int HealsLanded = -1,
     int HealHolds = -1, int HealHoldMax = -1, int Taps = -1, PlayerBotAddWhy? AddWhy = null, int CtlResisted = -1,
-    int CtlImmune = -1, int QcControls = -1, int QcNukes = -1, int QcLeft = -1);
+    int CtlImmune = -1, int QcControls = -1, int QcNukes = -1, int QcLeft = -1, int Crowd = -1);
+
+/// <summary>#167 F: what the rings' pick read for the target it took (PlayerBotDriver.FindWithin): FIGHT crowd= (the live
+/// potential adds CrowdingAlong counted), over= (those over the bot's cap, P1b), due= (its kills' respawns due, P2) and
+/// pathCrowd= (the corridor's count, P4; -1 unchecked), and lifted= (P1: a melee or archer bot's pick made with its
+/// crowd limits lifted). None (all -1): a pick that was not the rings' (self-defence, a monster coming at it,
+/// TurnOn).</summary>
+public readonly record struct PlayerBotPickReading(int Crowd, int Over, int Due, int PathCrowd, bool Lifted = false)
+{
+    public static readonly PlayerBotPickReading None = new(-1, -1, -1, -1);
+}
 
 // HearthDAoC player bots (#137): one PLAYER_BOT_DRIVER line a minute, then the lever's PLAYER_BOT_WAKE line and (#188) the
 // PLAYER_BOT_CROSSING win= line, from a thread-pool timer off the game loop, and every TallyEveryWindows windows a
@@ -258,7 +270,7 @@ public static class PlayerBotDriverReport
         $"end={f.End} styleHeld={f.StylesHeld} castHeld={f.CastsHeld} sight={f.Sight} blind={(f.Blind ? 1 : 0)} " +
         $"blindSteps={f.BlindSteps} healCast={f.HealCasts} healLanded={f.HealsLanded} healHold={f.HealHolds} " +
         $"healHoldMax={f.HealHoldMax} taps={f.Taps} addWhy={FormatAddWhy(f.AddWhy)} ctlResisted={f.CtlResisted} " +
-        $"ctlImmune={f.CtlImmune} qcCtl={f.QcControls} qcNuke={f.QcNukes} reserve={f.Reserve}");
+        $"ctlImmune={f.CtlImmune} qcCtl={f.QcControls} qcNuke={f.QcNukes} reserve={f.Reserve} lifted={(f.Lifted ? 1 : 0)}");
 
     /// <summary>#167 F C1 addWhy=: none, ctl, pets, noControl, tries, noneTakes, rootContact, targetFirst, hitNoQc,
     /// closeNoQc, los or noAdd.</summary>
@@ -352,7 +364,7 @@ public static class PlayerBotDriverReport
         $"styleHeld={d.StylesHeld} castHeld={d.CastsHeld} heals={d.Heals} healCast={d.HealCasts} " +
         $"healLanded={d.HealsLanded} healHold={d.HealHolds} healHoldMax={d.HealHoldMax} taps={d.Taps} " +
         $"addWhy={(d.AddWhy is { } why ? FormatAddWhy(why) : "-1")} ctlResisted={d.CtlResisted} ctlImmune={d.CtlImmune} " +
-        $"qcCtl={d.QcControls} qcNuke={d.QcNukes} qcLeft={d.QcLeft}");
+        $"qcCtl={d.QcControls} qcNuke={d.QcNukes} qcLeft={d.QcLeft} crowd={d.Crowd}");
 
     /// <summary>#188: PLAYER_BOT_CROSSING win=, the window's changes of island over all bots, then its ring points
     /// dropped: the totals (a bot's own CROSSING bot= lines are samples, at most one a minute;
