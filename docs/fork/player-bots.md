@@ -65,14 +65,19 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   it regains power at half the rate, so a pull that ends below half costs more rest than the last 10%); the quest bot's
   rests before an errand's walk stop there too, and a Skald's Song of Rest and an endurance regeneration buff run to the
   same 80%.
-- A bot with a heal heals itself below 60% health, whatever its power. Out of a fight it also heals itself below 85%
-  before it sits, if half its power is left after the heal. A caster doesn't start a cast that a hit would interrupt,
-  and uses Quickcast once a monster's hits interrupt it. Its own swing doesn't block its next cast: with a spell to
-  cast, it stops swinging until its own swing's interrupt runs out, and it doesn't swing between casts (an instant
-  spell does not mind). Between casts it keeps its spell range. A pet class summons its pet and sends it in, then
-  holds its spells until the monster turns on the pet, 4 s at most, and never while the bot is being hit. A Theurgist
-  casts a pet at its target at each cast choice while it can cast one, as a GameBot does, and its damage spell only
-  when it can't (the target out of the pet's range or view, or a pet just refused).
+- A bot with a heal heals itself below 60% health, whatever its power. As a player must, it heals only when no
+  interrupt stops the cast: right after its own swing (3 s) it casts an instant heal if it has one, else it stops
+  swinging and heals as that interrupt ends; while a monster's hits interrupt it, it fights on and looks again every
+  half second. That holds for any class with a heal (a Druid or a Mentalist too), and against a yellow or harder
+  monster too: there a hold can fall in a gap between the monster's interrupting hits, and its next hit then blocks
+  the heal, a few swings given up for nothing. Out of a fight it also heals itself below 85% before it sits, if half
+  its power is left after the heal. A caster doesn't start a cast that a hit would interrupt, and uses Quickcast once
+  a monster's hits interrupt it. Its own swing doesn't block its next cast: with a spell to cast, it stops swinging
+  until its own swing's interrupt runs out, and it doesn't swing between casts (an instant spell does not mind).
+  Between casts it keeps its spell range. A pet class summons its pet and sends it in, then holds its spells until the
+  monster turns on the pet, 4 s at most, and never while the bot is being hit. A Theurgist casts a pet at its target
+  at each cast choice while it can cast one, as a GameBot does, and its damage spell only when it can't (the target
+  out of the pet's range or view, or a pet just refused).
 - A caster (Wizard, Sorcerer, Runemaster, Eldritch, Mentalist) nukes a monster coming at it while there is time for a
   nuke and a control spell after it. Then it stuns, roots or mezzes it, in that order of choice, if the cast ends
   before the monster reaches it. In melee it uses Quickcast for the control spell. It skips the control while its
@@ -532,8 +537,9 @@ All start `PLAYER_BOT_`:
   navmesh's line said no), and `blind=` (1: dropped after 5 s out of sight in contact, fighting neither the bot nor its
   pet, nor coming at it), and `blindSteps=`, the steps it took toward its target out of sight. `FIGHT` then gives
   `healCast=`, the heal requests that began a cast that lasted to the next think, or landed (`heals=` counts requests,
-  which the server may refuse while an interrupt runs), and `healLanded=`, the heals cast; `DEATH` gives `heals=` and
-  the same two (-1 each out of a fight).
+  which the server may refuse while an interrupt runs), `healLanded=`, the heals cast, `healHold=`, the thinks it held
+  its swing for a heal, and `healHoldMax=`, its longest such hold in thinks; `DEATH` gives `heals=` and the same four
+  (-1 each out of a fight).
   `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `walkout`, `rest`, `kite`, `turret`
   or `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
   after a break-off its `reason=` is `brokeoff`. Either ends with `barred=old` when the death or the break-off came on

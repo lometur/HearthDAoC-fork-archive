@@ -41,6 +41,10 @@ public enum PlayerBotEngageStep { Wait, Add, PetLeads, Caster }
 /// <summary>What the bot does in reach of its target this think (PlayerBotDriver.CombatAction, #167 F6).</summary>
 public enum PlayerBotCombatAction { Cast, WaitToCast, Quickcast, Swing }
 
+/// <summary>The self-heal's step (PlayerBotDriver.SelfHealStep, #167 F H2): cast the heal now, hold (no swing, no walk)
+/// while only the bot's own swing's interrupt runs, blocked while a monster's hits interrupt it, or none.</summary>
+public enum PlayerBotHealStep { None, Cast, Hold, Blocked }
+
 /// <summary>An Animist's step before a pull (PlayerBotDriver.AnimistStepFor, #167 E CY3).</summary>
 public enum PlayerBotAnimistStep { Pull, Walk, Replant, Wait, Skip }
 
@@ -211,6 +215,10 @@ public sealed class PlayerBotState
     public long HealLandedTick;                                  //   next think or the death's line) and the heals cast
                                                                  //   (OnBotCastFinished), the request awaited, and when a
                                                                  //   heal last landed
+    public int FightHealHolds, FightHealHoldMax, HealHoldRun;    // #167 F H2: FIGHT and DEATH healHold= and healHoldMax=,
+                                                                 //   the thinks it held its swing for a heal (SelfHealStep's
+                                                                 //   Hold) and its longest hold, and the hold's thinks so
+                                                                 //   far (CountHealHold)
     public int EngageBuffs, FightPetCasts, FightWaits;           // #167 FIGHT buffs=, petCasts= and waits=
     public long SitSince;                                        // #167 PLAYER_BOT_REST: when the bot sat down, 0 standing
     public (string Head, PlayerBotDeathDetail Detail, GameObject Target)? PendingDeath;   // a DEATH line awaiting Dying (AwaitsDying)
@@ -376,6 +384,8 @@ public static class PlayerBotDriver
     public const int RestHealBelowPercent = 85;              // #167 F2: out of a fight, a heal before the sit,
     public const int RestHealPowerPercent = 50;              //   with this much power left after it (rest-work's model)
     public const int SelfHealRetryMilliseconds = 2_000;      // (inf.) a refused heal is not asked for every think
+    public const int HealBlockedRetryMilliseconds = 500;     // #167 F H2: a heal blocked by a monster's hits looks again
+                                                             //   this soon (s5_cadence: 95% of a look each think's heals)
     public const int PetPowerPercent = 30;                   // DEATHS.md A5: summon at this much power or more
     public const int SummonRetryMilliseconds = 2_000;        // (inf.) as the heal's
     public const int QuickcastRetryMilliseconds = 2_000;     // (inf.) as the heal's
@@ -1173,6 +1183,48 @@ public static class PlayerBotDriver
         return (best, bestLine);
     }
 
+    /// <summary>The self-heal's step and heal (#167 F H2). The server refuses an interruptible heal while either interrupt
+    /// runs: a monster's hit (interruptedByOther) or the bot's own swing (selfInterruptMilliseconds; 3 s, GameLiving.cs:737,
+    /// :689-693; SpellHandler.cs:570-585), so FindSelfHeal is told of both: under either an instant or uninterruptible
+    /// heal is cast now. With none, an interruptible heal it could cast once they end (ready) is held for while only its
+    /// own swing's interrupt runs (Hold: it swings no more, so the wait ends within 3 s), and blocked while a monster's
+    /// hits interrupt it (the bot fights on; a hit in a cast's first half would break it anyway, SpellHandler.cs:332-356).
+    /// None: no heal ready. Any class with a heal (a Druid, a Mentalist too), at any con: against a yellow or harder
+    /// monster a hold can fire in the gaps between its interrupting hits.</summary>
+    public static (Spell Heal, SpellLine Line, PlayerBotHealStep Step) SelfHealStep(
+        IReadOnlyCollection<(Spell Spell, SpellLine Line)> spells, int level, int maxHealth, bool interruptedByOther,
+        long selfInterruptMilliseconds, Func<Spell, bool> ready)
+    {
+        bool interrupted = interruptedByOther || selfInterruptMilliseconds > 0;
+        (Spell now, SpellLine nowLine) = FindSelfHeal(spells, level, maxHealth, interrupted, ready);
+        if (now != null) return (now, nowLine, PlayerBotHealStep.Cast);
+        if (!interrupted) return default;
+        (Spell later, SpellLine laterLine) = FindSelfHeal(spells, level, maxHealth, false, ready);
+        return later == null ? default
+            : (later, laterLine, interruptedByOther ? PlayerBotHealStep.Blocked : PlayerBotHealStep.Hold);
+    }
+
+    /// <summary>When the self-heal looks again (#167 F H2): a hold at the next think (its wait ends within 3 s), a heal
+    /// blocked by a monster's hits in HealBlockedRetryMilliseconds (the hits' interrupt lapses between swings at a chance
+    /// under 100%), else SelfHealRetryMilliseconds as before.</summary>
+    public static long HealRetryMs(PlayerBotHealStep step) => step switch
+    {
+        PlayerBotHealStep.Hold => 0,
+        PlayerBotHealStep.Blocked => HealBlockedRetryMilliseconds,
+        _ => SelfHealRetryMilliseconds,
+    };
+
+    /// <summary>#167 F H2 healHold= and healHoldMax= (the review's): a hold think after run hold thinks (SelfHeal: a look
+    /// that doesn't hold ends the hold, its run back to 0). In a fight it counts (FightHealHolds) and the fight keeps its
+    /// longest hold in thinks (FightHealHoldMax; the wait is the 3-s own interrupt, about 12 thinks).</summary>
+    public static void CountHealHold(PlayerBotState state, int run)
+    {
+        state.HealHoldRun = run + 1;
+        if (!state.Engaged) return;
+        state.FightHealHolds++;
+        state.FightHealHoldMax = Math.Max(state.FightHealHoldMax, state.HealHoldRun);
+    }
+
     /// <summary>The summon's gate (DEATHS.md A5): no pet, nothing hitting the bot, out of combat and of a cast, at
     /// PetPowerPercent or more, the retry timer due. A pet that died is summoned again so.</summary>
     public static bool WantsPet(bool hasPet, bool beingHit, bool inCombat, byte manaPercent, bool casting, long now, long nextTry) =>
@@ -1926,6 +1978,7 @@ public static class PlayerBotDriver
         state.EngageMana = mana;
         state.FightAdds = state.Swings = state.NotVisible = state.FightCasts = state.FightHeals = 0;
         (state.FightHealCasts, state.FightHealsLanded, state.PendingHeal) = (0, 0, default);   // #167 F H1
+        (state.FightHealHolds, state.FightHealHoldMax, state.HealHoldRun) = (0, 0, 0);       // #167 F H2
         state.FightPetCasts = state.FightWaits = state.FightControls = state.FightKites = state.FightCtlBroken = 0;
         state.FightKiteNone = default;                                              // #167 D8 kiteNone=
         state.FightDots = 0;                                                        // #167 E C1 dots=
@@ -5235,7 +5288,8 @@ public static class PlayerBotDriver
             inFight ? state.FightRaceLeft : NoRace,                                       // #167 E-L raceLeft=,
             inFight ? state.FightStylesHeld : -1, inFight ? state.FightCastsHeld : -1,    // #167 E-R as FIGHT's
             inFight ? state.FightHeals : -1, inFight ? state.FightHealCasts : -1,         // #167 F H1 heals=, healCast=
-            inFight ? state.FightHealsLanded : -1);                                       //   and healLanded=
+            inFight ? state.FightHealsLanded : -1,                                        //   and healLanded=,
+            inFight ? state.FightHealHolds : -1, inFight ? state.FightHealHoldMax : -1);  // #167 F H2
         string head = $"PLAYER_BOT_DEATH bot={player.Name} level={player.Level} at=({player.X},{player.Y},{player.Z}) " +
                       $"zone={player.CurrentZone?.ID} {fight} attackers={state.Attackers} deathSteps={state.DeathSafetySteps} " +
                       $"aliveSec={(now - state.AliveSince) / 1000} task={state.Task != null}";
@@ -5312,7 +5366,8 @@ public static class PlayerBotDriver
             state.FightTargetMezzes, state.FightRaceLeft, state.EngageEndurance,       //   E C4, E-L, E-R
             player.EndurancePercent, state.FightStylesHeld, state.FightCastsHeld,
             state.FightSight, state.FightBlind, state.FightBlindSteps,                  // #167 E M2, R1
-            state.FightHealCasts, state.FightHealsLanded)));                            // #167 F H1
+            state.FightHealCasts, state.FightHealsLanded,                               // #167 F H1
+            state.FightHealHolds, state.FightHealHoldMax)));                           // #167 F H2
     }
 
     // APP:585-624, changed: every 10 s, no inventory count, no saves; after 15 minutes with no progress, back to the
@@ -5855,9 +5910,15 @@ public static class PlayerBotDriver
 
     // A healer's heal on itself (DEATHS.md A6), before a rest as a GameBot's (AWBC:2725): below 60% health whatever its
     // power; out of a fight (MayRest's view) from 85% with power to spare, then it sits for power (#167 F2). The gate
-    // runs first at no cost, then with the heal's.
+    // runs first at no cost, then with the heal's. #167 F H2: the heal the interrupts allow (SelfHealStep): an instant
+    // one under either, else it holds while only its own swing's interrupt runs (no swing, no walk; the think ends here,
+    // and the next looks again) and casts as that ends; while a monster's hits interrupt it, it fights on and looks again
+    // in HealBlockedRetryMilliseconds. An interruptible heal stops the swing first, as Engage's cast does: a swing due
+    // this tick would land in the Attack phase before the Casting phase's check and refuse it.
     private static bool SelfHeal(PlayerBotState state, GamePlayer player, long now)
     {
+        int holdRun = state.HealHoldRun;                                                // #167 F H2 healHoldMax=: a look
+        state.HealHoldRun = 0;                                                          //   that doesn't hold ends the hold
         bool inFight = state.Engaged && state.Target?.IsAlive == true ||               // MayRest's view, and one coming
             Threat(state, player, now) != null;                                         //   at it (#167 F7)
         byte mana = PowerPercent(player.MaxMana, player.ManaPercent);
@@ -5865,15 +5926,27 @@ public static class PlayerBotDriver
         if (player.Level == state.NoSelfHealLevel ||
             !WantsSelfHeal(player.HealthPercent, player.IsCasting, now, nextTry, inFight, mana, 0))
             return false;
-        state.NextSelfHealTick = now + SelfHealRetryMilliseconds;
-        IEnumerable<(Spell, SpellLine)> spells = UsableSpells(player);
-        (Spell heal, SpellLine line) = FindSelfHeal(spells, player.Level, player.MaxHealth, player.IsBeingInterruptedByOther,
+        List<(Spell, SpellLine)> spells = UsableSpells(player).ToList();               // one walk for up to three looks
+        long selfInterrupt = Math.Max(0, player.SelfInterruptTime - now);
+        (Spell heal, SpellLine line, PlayerBotHealStep step) = SelfHealStep(spells, player.Level, player.MaxHealth,
+            player.IsBeingInterruptedByOther, selfInterrupt,
             spell => player.GetSkillDisabledDuration(spell) <= 0 && HasPowerFor(player.MaxMana, player.Mana, spell.Power));
+        state.NextSelfHealTick = now + HealRetryMs(step);
         if (heal == null && FindSelfHeal(spells, player.Level, player.MaxHealth, false, _ => true).Item1 == null)
             state.NoSelfHealLevel = player.Level;                                      // no heal at this level: none looked
-        if (heal == null ||                                                             //   for until the next
-            !WantsSelfHeal(player.HealthPercent, player.IsCasting, now, nextTry, inFight, mana, CostPercent(player.MaxMana, heal.Power)) ||
-            !CastOnSelf(state, player, now, heal, line, "heal"))
+        if (step is PlayerBotHealStep.None or PlayerBotHealStep.Blocked ||              //   for until the next
+            !WantsSelfHeal(player.HealthPercent, player.IsCasting, now, nextTry, inFight, mana, CostPercent(player.MaxMana, heal.Power)))
+            return false;
+        if (step is PlayerBotHealStep.Hold)
+        {
+            player.attackComponent.StopAttack();                                        // a swing would renew the wait
+            state.Mover.Stop(now);
+            state.Activity = state.Engaged ? PlayerBotActivity.Fighting : PlayerBotActivity.Waiting;
+            CountHealHold(state, holdRun);                                              // FIGHT healHold=, healHoldMax=
+            return true;
+        }
+        if (Interruptible(heal)) player.attackComponent.StopAttack();                   // no swing this tick to refuse it
+        if (!CastOnSelf(state, player, now, heal, line, "heal"))
             return false;
         if (state.Engaged)
         {
