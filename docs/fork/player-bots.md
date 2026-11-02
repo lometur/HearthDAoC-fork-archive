@@ -184,7 +184,8 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   in contact. In contact, out of sight 5 s, it is dropped, and the bot's picks pass it over for 30 s, each such monster
   for its own 30 s (it still fights it back if it comes on and hits it).
 - A monster its walk finds no path to it leaves, and for 30 s, each such monster for its own 30 s, neither its picks
-  nor its fighting back take it (a hitter still keeps it from sitting).
+  nor its fighting back take it (a hitter still keeps it from sitting). One whose walk is blocked again within 5
+  minutes its picks pass over for 15 minutes; it still fights that one back once the 30 s are over, if it comes.
 - A monster within 2,000 units that has the bot as its target counts as an attacker before its first hit, so the bot
   stands up and fights it first. Before it sits, a bot within reach of an aggressive monster from its last search,
   or of the spawn spot of one of its last 3 kills in the last 150 s (where that monster respawns, 80 s after the kill

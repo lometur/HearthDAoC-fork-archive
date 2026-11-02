@@ -112,6 +112,8 @@ public sealed class PlayerBotState
     public readonly List<(GameLiving Npc, long Until)> BlindSkips = new();   // #167 E M2, R1: the targets dropped for want
                                                                  //   of sight (or CY3's skip), each passed over by the
                                                                  //   pick only until its own time (MarkBlind)
+    public readonly List<(GameLiving Npc, long At)> TargetBlocks = new();   // #167 F P5: the last 5 minutes' blocked
+                                                                 //   walks to a target (RepeatBlock)
     public readonly List<(GameLiving Npc, long Until)> Unreachables = new();   // #167 E U1: the monsters a walk found no
                                                                  //   path to, each passed over by the pick and by
                                                                  //   self-defence until its own time (LeaveUnreachable)
@@ -368,6 +370,8 @@ public static class PlayerBotDriver
     public const int StyleMilliseconds = 1000;
     public const int NeighbourCountMilliseconds = 60_000;
     public const int UnreachableSkipMilliseconds = 30_000;
+    public const int RepeatBlockWindowMilliseconds = 300_000;  // #167 F P5: a target walk blocked again within this is the
+    public const int RepeatBlockSkipMilliseconds = 900_000;    //   pick's (BlindSkips) this long
     public const int ProgressCheckMilliseconds = 10_000;     // the pilot checked every tick (APP:585-604)
     public const int MeaningfulMoveDistance = 96;
     public const int DeathReleaseDelayMilliseconds = 10_000; // APP:29, :575-581
@@ -815,7 +819,8 @@ public static class PlayerBotDriver
         state.CrowdLiftedUntil = 0;
         state.CrowdBars.Clear();
         state.RecentRespawns.Clear();                                                    // #167 F P2: another region's
-    }                                                                                    //   spawn spots mean nothing here
+        state.TargetBlocks.Clear();                                                      //   spawn spots mean nothing here,
+    }                                                                                    //   nor (P5) its blocked walks
 
     // A task owns the bot's position while it runs: no leash then.
     private static bool Leashed(PlayerBotState state, GamePlayer player) =>
@@ -885,6 +890,8 @@ public static class PlayerBotDriver
             if (state.Mover.StepToward(goal, walkStop, now) is PlayerBotStepResult.Blocked)
             {
                 ReportBlocked(state, player, "target", goal, now);
+                if (RepeatBlock(state.TargetBlocks, target, now))                       // #167 F P5: blocked again within
+                    MarkBlind(state, target, now, RepeatBlockSkipMilliseconds);         //   5 min: the pick's for 15 min
                 LeaveUnreachable(state, target, now);                                   // #167 E U1: its own 30 s
             }
             return;
@@ -3945,8 +3952,24 @@ public static class PlayerBotDriver
     /// and it overwrote a real unreachable mark. #167 E R1: each marked one keeps its own time (BlindSkips; marked again,
     /// from then): with one mark, a second drop forgot the first and the pick went back to it (st-deathsE/Eb: 213 drops
     /// of a name dropped again within 30 s with another between, A, B, A). The marks past their time go as a new one
-    /// comes.</summary>
-    public static void MarkBlind(PlayerBotState state, GameLiving target, long now) => Mark(state.BlindSkips, target, now);
+    /// comes. #167 F P5: duration, a repeat block's RepeatBlockSkipMilliseconds (RepeatBlock); a later shorter mark
+    /// doesn't cut it (Mark).</summary>
+    public static void MarkBlind(PlayerBotState state, GameLiving target, long now,
+        long duration = UnreachableSkipMilliseconds) => Mark(state.BlindSkips, target, now, duration);
+
+    /// <summary>#167 F P5: a blocked walk to target (Engage's hunt walk) remembered; true when the same target's walk was
+    /// blocked within RepeatBlockWindowMilliseconds before: its pick-only mark then lasts RepeatBlockSkipMilliseconds. The
+    /// seven base legs: 104 BLOCKED walk=target lines (count= 139) from 12 bots, 74 of them a goal blocked before, a
+    /// median 113 s on (the 30-s mark ran out and the pick took it again); Pbotmaaci on every leg, always the same goal.
+    /// The blocks past the window go.</summary>
+    public static bool RepeatBlock<T>(List<(T Npc, long At)> blocks, T target, long now) where T : class
+    {
+        blocks.RemoveAll(block => now - block.At >= RepeatBlockWindowMilliseconds);
+        bool again = blocks.Exists(block => ReferenceEquals(block.Npc, target));
+        blocks.RemoveAll(block => ReferenceEquals(block.Npc, target));
+        blocks.Add((target, now));
+        return again;
+    }
 
     /// <summary>#167 E M2: whether the pick (FindWithin, and only it) passes over a monster: one MarkBlind marked, while
     /// its time lasts (#167 E R1: every one marked, BlindSkips).</summary>
@@ -3973,12 +3996,19 @@ public static class PlayerBotDriver
     public static bool PickSkips(PlayerBotState state, GameLiving npc, long now) =>
         UnreachableMarked(state, npc, now) || BlindSkipped(state, npc, now);
 
-    // A mark of its own for 30 s (UnreachableSkipMilliseconds): the target's old one and those past their time go.
-    private static void Mark(List<(GameLiving Npc, long Until)> marks, GameLiving target, long now)
+    // A mark of its own for duration (UnreachableSkipMilliseconds, 30 s): the target's old one and those past their time
+    // go. #167 F P5: a longer mark the target had stays (a later 30-s mark doesn't cut a repeat block's 15 minutes); with
+    // every mark 30 s, as before, the new time is always the later one.
+    private static void Mark(List<(GameLiving Npc, long Until)> marks, GameLiving target, long now,
+        long duration = UnreachableSkipMilliseconds)
     {
+        long until = now + duration;
         for (int i = marks.Count - 1; i >= 0; i--)
+        {
+            if (marks[i].Npc == target) until = Math.Max(until, marks[i].Until);
             if (marks[i].Npc == target || now >= marks[i].Until) marks.RemoveAt(i);
-        marks.Add((target, now + UnreachableSkipMilliseconds));
+        }
+        marks.Add((target, until));
     }
 
     private static bool Marked(List<(GameLiving Npc, long Until)> marks, GameLiving npc, long now)

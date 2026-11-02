@@ -6999,6 +6999,45 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.SkipsHitter(state, first, 40_000, false), Is.False, "its 30 s over");
     }
 
+    // --- #167 F P5: a target whose walk is blocked twice within 5 minutes is the pick's for 15 minutes ---
+
+    // The seven base legs: 104 BLOCKED walk=target lines (count= 139) from 12 bots, 74 of them a goal blocked before, a
+    // median 113 s on (the 30-s mark ran out and the pick took it again).
+    [Test]
+    public void A_target_blocked_twice_within_five_minutes_is_a_repeat()
+    {
+        var blocks = new List<(string Npc, long At)>();
+        Assert.That(PlayerBotDriver.RepeatBlock(blocks, "goal", 0), Is.False, "first");
+        Assert.That(PlayerBotDriver.RepeatBlock(blocks, "other", 50_000), Is.False);
+        Assert.That(PlayerBotDriver.RepeatBlock(blocks, "goal", 113_000), Is.True, "again, 113 s on (the legs' median)");
+        Assert.That(PlayerBotDriver.RepeatBlock(blocks, "goal", 413_000), Is.False, "5 minutes after the last");
+        Assert.That(blocks.Select(block => block.Npc), Is.EqualTo(new[] { "goal" }), "the old blocks gone");
+    }
+
+    // The long mark keeps its time: a later 30-s mark of the same target (a blind drop, the next block) doesn't cut it;
+    // only the pick reads it (self-defence reads the 30-s unreachable mark alone).
+    [Test]
+    public void A_repeat_blocks_mark_outlasts_a_later_short_one()
+    {
+        var state = new PlayerBotState(Player(null));
+        var npc = (GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC));
+        PlayerBotDriver.MarkBlind(state, npc, 0, PlayerBotDriver.RepeatBlockSkipMilliseconds);
+        PlayerBotDriver.MarkBlind(state, npc, 10_000);
+        Assert.That((PlayerBotDriver.BlindSkipped(state, npc, 100_000), PlayerBotDriver.BlindSkipped(state, npc, 900_000)),
+            Is.EqualTo((true, false)));
+        Assert.That(PlayerBotDriver.UnreachableMarked(state, npc, 100_000), Is.False, "self-defence still takes it");
+    }
+
+    // Another region's blocked walks mean nothing here.
+    [Test]
+    public void A_region_change_drops_the_blocked_target_walks()
+    {
+        var state = new PlayerBotState(Player(null));
+        state.TargetBlocks.Add(((GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC)), 1_000));
+        PlayerBotDriver.ResetOnRegionChange(state, 7);
+        Assert.That(state.TargetBlocks, Is.Empty);
+    }
+
     // #167 E R1: a bot out of sight of a target it would drop (fighting neither it nor its pet, nor coming at it: kept is
     // false) steps in toward it, BlindStepDistance at a time, until in sight or in contact (CaughtReach); in contact the
     // blind clock drops it as before (0: no step). The blind drops' stands on st-deathsE/Eb: 644 of 657 beyond contact,
