@@ -205,7 +205,8 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   when it is one the bot avoids (unless it was sent to a camp of them), when the bot is a caster and its target is
   above 25%, or, at any target health, when it is a caster that can't finish: hits interrupt it, its Quickcast is
   spent, and at the rate it is losing health it would die before the Quickcast comes back and a nuke is cast, unless
-  its own damage-over-time spells would kill the target first; or, for a bot that isn't a caster, when the race since
+  its own damage-over-time spells would kill the target first, and never while a spell of its own is still casting
+  (hits stop a cast only in its first half, so that one lands); or, for a bot that isn't a caster, when the race since
   the monster's first hit on it says the bot dies first with its target still above 10% (both sides' loss since that
   hit, read once the bot has lost 20% health since it, projects the target's health when the bot's runs out; a heal
   counts as less lost; a caster whose target is at 25% or less fights on for its killing nuke if it can finish); not

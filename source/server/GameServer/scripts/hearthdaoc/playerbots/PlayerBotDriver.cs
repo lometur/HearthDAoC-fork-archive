@@ -2505,14 +2505,23 @@ public static class PlayerBotDriver
     /// bot's time left, asked last: it walks the target's effects). In melee such a caster swings (CasterAction's Nuke,
     /// CombatAction's Swing): batch F's base had 43 caster deaths one nuke short, the Quickcast spent on a control, with no
     /// break-off (OneMonsterCase's caster arm needs its target above 25%, BreaksOff above 10%). A 1.65 player sees his
-    /// Quickcast's timer and runs.</summary>
+    /// Quickcast's timer and runs. The review of F: not while a cast is under way (casting): with hits on the bot it is
+    /// past its interruptible half (SpellHandler.cs:351-356; none starts under the interrupt timer, :573-585) and lands;
+    /// F-C reads again once it has.</summary>
     public static bool CasterCantFinish(bool interrupted, bool quickcastReady, bool quickcastOn, int quickcastLeftMs,
-        byte health, double rate, int castMs, Func<long, bool> dotFinishesWithin)
+        byte health, double rate, int castMs, Func<long, bool> dotFinishesWithin, bool casting = false)
     {
-        if (!interrupted || quickcastReady || quickcastOn || rate <= 0) return false;
+        if (casting || !interrupted || quickcastReady || quickcastOn || rate <= 0) return false;
         long lifeMs = (long)(health * 1000 / rate);
         return lifeMs < (long)quickcastLeftMs + castMs && !dotFinishesWithin(lifeMs);
     }
+
+    /// <summary>CantFinishNow's Quickcast (#167 F-C, the review of F): ready when the bot has the ability and it is off
+    /// its disable, the ability's own readiness (QuickcastReady's cast and retry terms read "not ready" with the disable
+    /// at 0, and F-C then stopped a nuke about to land); and the time left on its disable (no Quickcast at all:
+    /// int.MaxValue, CasterCantFinish's quickcastLeftMs).</summary>
+    public static (bool Ready, int LeftMs) CantFinishQuickcast(bool hasQuickcast, int disabledMilliseconds) =>
+        (hasQuickcast && disabledMilliseconds <= 0, hasQuickcast ? disabledMilliseconds : int.MaxValue);
 
     /// <summary>A break-off that owes a rest, not a relocation, and bars no camp and avoids no name (#167 D1: a spent
     /// caster's; #167 F-C: a caster's that couldn't finish): its power or its Quickcast's timer was the problem, not the
@@ -5759,22 +5768,23 @@ public static class PlayerBotDriver
     }
 
     // #167 F-C: an engaged caster that can't finish (CasterCantFinish), read in StartsBreakOff's scan (under
-    // BreakOffHealthPercent, or spent): hits interrupting it with no Quickcast on, its Quickcast not ready
-    // (QuickcastReady), its health at its loss rate (HealthRate) gone before the Quickcast's disable is over and its
-    // nuke cast (state.Spell's; none, CantFinishCastMs); not when its own DoTs land the target's health first
-    // (PendingDotDamage within that time, walked only then). No caster, or no target alive: false.
+    // BreakOffHealthPercent, or spent): hits interrupting it with no Quickcast on, its Quickcast not off its disable
+    // (CantFinishQuickcast, the review of F: not QuickcastReady, whose cast and retry terms read "not ready" with the
+    // disable at 0), its health at its loss rate (HealthRate) gone before the Quickcast's disable is over and its nuke
+    // cast (state.Spell's; none, CantFinishCastMs); not when its own DoTs land the target's health first
+    // (PendingDotDamage within that time, walked only then), nor while a cast of its own is under way (it lands). No
+    // caster, or no target alive: false.
     private static bool CantFinishNow(PlayerBotState state, GamePlayer player, PlayerBotRole role, byte health, long now)
     {
         if (role != PlayerBotRole.Caster || !state.Engaged || state.Target is not GameLiving target || !target.IsAlive)
             return false;
         bool quickcasting = player.effectListComponent.ContainsEffectForEffectType(eEffect.QuickCast);
         Ability quickcast = player.GetAbility(Abilities.Quickcast);
-        int disabled = quickcast == null ? 0 : player.GetSkillDisabledDuration(quickcast);
-        return CasterCantFinish(player.IsBeingInterruptedByOther && !quickcasting,
-            QuickcastReady(quickcast != null, quickcasting, disabled, state.NextQuickcastTick, player.IsCasting, now),
-            quickcasting, quickcast == null ? int.MaxValue : disabled, health, HealthRate(state.HealthSamples, now, health),
-            state.Spell?.CastTime ?? CantFinishCastMs,
-            lifeMs => PendingDotDamage(state, player, target, now, lifeMs) >= target.Health);
+        (bool quickcastReady, int quickcastLeftMs) =
+            CantFinishQuickcast(quickcast != null, quickcast == null ? 0 : player.GetSkillDisabledDuration(quickcast));
+        return CasterCantFinish(player.IsBeingInterruptedByOther && !quickcasting, quickcastReady, quickcasting,
+            quickcastLeftMs, health, HealthRate(state.HealthSamples, now, health), state.Spell?.CastTime ?? CantFinishCastMs,
+            lifeMs => PendingDotDamage(state, player, target, now, lifeMs) >= target.Health, casting: player.IsCasting);
     }
 
     // #167 D1: a damage spell the bot can pay for now, on its recast or not (power is what a spent caster lacks); the

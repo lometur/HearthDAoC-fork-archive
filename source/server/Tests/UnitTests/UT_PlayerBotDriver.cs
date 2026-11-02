@@ -1787,6 +1787,26 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.CasterCantFinish(interrupted, quickcastReady, quickcastOn, quickcastLeftMs, health, rate,
             castMs, _ => dotFinishes), Is.EqualTo(cantFinish));
 
+    // #167 F-C (the review of F): never while a cast is under way. Hits on the bot interrupt a cast only in its first half
+    // (SpellHandler.cs:351-356) and none starts under the interrupt timer (:573-585), so one still casting lands; the
+    // break-off would stop it (Disengage). 30% at 12% a second lasts 2,500 ms, under the 3,000 a nuke takes.
+    [Test]
+    public void A_caster_mid_cast_lets_its_cast_land()
+    {
+        Assert.That(PlayerBotDriver.CasterCantFinish(true, false, false, 0, 30, 12.0, 3_000, _ => false), Is.True);
+        Assert.That(PlayerBotDriver.CasterCantFinish(true, false, false, 0, 30, 12.0, 3_000, _ => false, casting: true),
+            Is.False, "its cast lands");
+    }
+
+    // #167 F-C (the review of F): CantFinishNow's Quickcast is the ability's own readiness, off its disable: QuickcastReady
+    // also reads "not ready" mid-cast and within its 2-s retry, with the disable at 0. Its time left: the disable's; no
+    // Quickcast at all, int.MaxValue.
+    [TestCase(false, 0, false, int.MaxValue)]
+    [TestCase(true, 0, true, 0)]
+    [TestCase(true, 4_000, false, 4_000)]
+    public void A_caster_cant_finish_reads_its_quickcasts_own_disable(bool has, int disabledMs, bool ready, int leftMs) =>
+        Assert.That(PlayerBotDriver.CantFinishQuickcast(has, disabledMs), Is.EqualTo((ready, leftMs)));
+
     // #167 F-C: the DoTs are read last, over the bot's time left; not at all when the nuke comes in time.
     [Test]
     public void The_cant_finish_DoT_read_comes_last_with_the_bots_time_left()
