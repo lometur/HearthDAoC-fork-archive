@@ -2359,6 +2359,13 @@ public static class PlayerBotDriver
     public static bool AfterDeathPlan(string reason, long sinceDeathMs) =>
         reason is Died or BrokeOff or Capped && RecentDeath(sinceDeathMs);
 
+    /// <summary>#167 F P3: the near pass's adds after a death (E W1; RelocateIfOutgrown, the review of F: a seam so it is
+    /// tested): the plan's own (planAdds) when the zone the bot stands in (nearZone) is the plan's, a fresh list for
+    /// another zone (PlanMonsters fills it), none otherwise (no near pass: its monsters are none too).</summary>
+    public static List<(GameNPC Npc, Vector3 At, int AggroRange, ConColor Con)> NearAdds(bool afterDeath, Zone nearZone,
+        Zone zone, List<(GameNPC Npc, Vector3 At, int AggroRange, ConColor Con)> planAdds) =>
+        !afterDeath || nearZone == null ? null : nearZone == zone ? planAdds : new();
+
     /// <summary>#167 E W1: the camp a plan takes. After a death (afterDeath, AfterDeathPlan) it first looks near the bot
     /// (tryNear): nearMonsters (the zone it stands in) from here, within NearWalk, no fallback over NearFallbackMax
     /// (BLUE), never a camp it failed at (PlanRelocation's maxWalk); a fresh one is taken (Near). Else the plan as
@@ -5225,7 +5232,7 @@ public static class PlayerBotDriver
         bool afterDeath = AfterDeathPlan(reason, state.LastDeathTick == 0 ? -1 : now - state.LastDeathTick);   // #167 E W1
         Zone nearZone = player.CurrentZone;                                        // the zone it stands in: after a
         List<(GameNPC Npc, Vector3 At, int AggroRange, ConColor Con)> nearAdds =   //   death its bind's (#167 F P3: and
-            !afterDeath || nearZone == null ? null : nearZone == zone ? planAdds : new();   //   its adds)
+            NearAdds(afterDeath, nearZone, zone, planAdds);                        //   its adds)
         List<(GameNPC Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> nearMonsters =
             nearAdds == null ? null : nearZone == zone ? monsters
                 : PlanMonsters(player, npcs, nearZone, natural, state.AvoidUntil, now, nearAdds);

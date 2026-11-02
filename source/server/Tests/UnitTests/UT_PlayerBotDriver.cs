@@ -379,6 +379,22 @@ public sealed class UT_PlayerBotDriver
         Assert.That(isNear, Is.True);
     }
 
+    // The review of F: the near pass's adds after a death (NearAdds, RelocateIfOutgrown's): the plan's own in the plan's
+    // zone, a fresh list in another (PlanMonsters fills it), and no near pass (null) otherwise. With the plan's zone's
+    // left null, the near pass after a death in the plan's own zone was off (nearMonsters null too).
+    [Test]
+    public void The_near_pass_after_a_death_reads_the_plans_adds_in_the_plans_zone()
+    {
+        var z1 = (Zone)RuntimeHelpers.GetUninitializedObject(typeof(Zone));
+        var z2 = (Zone)RuntimeHelpers.GetUninitializedObject(typeof(Zone));
+        var planAdds = new List<(GameNPC Npc, Vector3 At, int AggroRange, ConColor Con)> { (null, Vector3.Zero, 400, ConColor.RED) };
+        Assert.That(PlayerBotDriver.NearAdds(false, z1, z1, planAdds), Is.Null, "not after a death");
+        Assert.That(PlayerBotDriver.NearAdds(true, null, z1, planAdds), Is.Null, "no zone it stands in");
+        Assert.That(PlayerBotDriver.NearAdds(true, z1, z1, planAdds), Is.SameAs(planAdds), "the plan's zone");
+        Assert.That(PlayerBotDriver.NearAdds(true, z2, z1, planAdds), Is.Empty.And.Not.SameAs(planAdds),
+            "another zone: a fresh list");
+    }
+
     // A spot skipped in the near pass and again in the far one counts once (the review: overSkipped a set). The near
     // pass finds no camp (its fallback is BLUE at most), so the far pass plans.
     [Test]
