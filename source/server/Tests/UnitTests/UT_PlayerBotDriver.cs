@@ -8464,12 +8464,12 @@ public sealed class UT_PlayerBotDriver
         {
             var state = new PlayerBotState(bot) { Anchor = new(838_400, 702_100, 8_343) };
             Assert.That((state.Mover.OnItsNetwork(pocket), state.Mover.OnItsNetwork(field)), Is.EqualTo((false, true)));
-            Assert.That(onMesh.Invoke(null, [bot, pocket]), Is.EqualTo(pocket), "not a driven bot: as before");
+            Assert.That(onMesh.Invoke(null, [bot, pocket, true]), Is.EqualTo(pocket), "not a driven bot: as before");
             try
             {
                 states[bot] = state;
-                Assert.That(onMesh.Invoke(null, [bot, pocket]), Is.Null, "under the dome");
-                Assert.That(onMesh.Invoke(null, [bot, field]), Is.EqualTo(field), "on the camp's island");
+                Assert.That(onMesh.Invoke(null, [bot, pocket, true]), Is.Null, "under the dome");
+                Assert.That(onMesh.Invoke(null, [bot, field, true]), Is.EqualTo(field), "on the camp's island");
             }
             finally { states.TryRemove(bot, out _); }
         });
@@ -8520,7 +8520,7 @@ public sealed class UT_PlayerBotDriver
         try
         {
             if (driven != null) states[bot] = driven;
-            return (Vector3?)onMesh.Invoke(null, [bot, point]);
+            return (Vector3?)onMesh.Invoke(null, [bot, point, true]);              // a ring point: counted when dropped
         }
         finally { if (driven != null) states.TryRemove(bot, out _); }
     }
@@ -10228,6 +10228,301 @@ public sealed class UT_PlayerBotDriver
             Assert.That(state.RouteWaypoint, Is.Not.Null, "no target");
             take.Invoke(null, [state, bot, wolf, PlayerBotPickReading.None]);
             Assert.That(state.RouteWaypoint, Is.Null);
+        });
+    }
+
+    // --- #167 F12, the review of the build (c331ff2..2f63075): detour legs, monsters gone round, seams, monsters by the bot ---
+
+    // #167 F12, the build's review (its blocker): a detour's legs keep clear of a monster by the bot too, by its aggro range
+    // + 100, or no nearer than it stands. The route (0,0,0) -> (3000,0,0), the orange blocker at (1000,100,0) and a blue
+    // monster at (350,-550,0), both aggro 500, the blue 652 from the bot (its reach, 700, covered the bot, and the legs
+    // were not checked against it): the cheaper side's point, (1000,-720,0), took a first leg 241.8 from the blue, inside
+    // its aggro range, where the straight route passes it at 550. Only the far side's point is left. A blocker 650 ahead
+    // of the bot (named since the review: FirstBlocker's rows below) has no way round that keeps 600 from it.
+    [Test]
+    public void A_detours_legs_keep_clear_of_a_monster_by_the_bot_in_DetourCandidates()
+    {
+        var into = new List<(Vector3 Point, Vector3 Rejoin, float Cost)>();
+        List<(string Npc, Vector3 At, int AggroRange, ConColor Con)> threats =
+            [("B", new(1_000, 100, 0), 500, ConColor.ORANGE), ("M", new(350, -550, 0), 500, ConColor.BLUE)];
+        Vector3[] route = { Vector3.Zero, new(3_000, 0, 0) };
+        Assert.That(AutonomousRouteThreatPolicy.SegmentDistance2D(Vector3.Zero, new(1_000, -720, 0), threats[1].At),
+            Is.EqualTo(241.8).Within(0.05), "the near side's first leg");
+        PlayerBotDriver.DetourCandidates<string>(route, 0, threats, into);
+        Assert.That(into.Select(c => (c.Point, c.Rejoin)), Is.EqualTo(new[] { (new Vector3(1_000, 920, 0), new Vector3(2_230, 0, 0)) }));
+        Assert.That(into[0].Cost, Is.EqualTo(2_894.82f).Within(0.01));
+        PlayerBotDriver.DetourCandidates<string>(route, 0, [("A", new(650, 0, 0), 500, ConColor.ORANGE)], into);
+        Assert.That(into, Is.Empty, "a blocker by the bot: no way round keeps 600 from it");
+    }
+
+
+    // #167 F12 (the build's review): the monster a detour went round is read at the legs' clearance (AddMargin / 2) for the
+    // rest of the walk, as on the way to its point. The route (0,0,0) -> (2000,0,0), the orange blocker at (1000,100,0),
+    // aggro 500: the cheapest point, (1000,-720,0), rejoins at the route's end, a leg 665.5 from it (clear of its 600).
+    // From the point on, read at AddMargin (700), it was named again, 479.1 along: a second detour, or a give-up right
+    // after going round it. Gone round (rounded), it isn't.
+    [Test]
+    public void A_monster_a_detour_went_round_is_read_at_the_legs_clearance_after_its_point_in_FirstBlocker()
+    {
+        var into = new List<(Vector3 Point, Vector3 Rejoin, float Cost)>();
+        List<(string Npc, Vector3 At, int AggroRange, ConColor Con)> threats = [("B", new(1_000, 100, 0), 500, ConColor.ORANGE)];
+        Vector3 anchor = new(2_000, 0, 0);
+        PlayerBotDriver.DetourCandidates<string>(new[] { Vector3.Zero, anchor }, 0, threats, into);
+        (Vector3 point, Vector3 rejoin, _) = into[0];
+        Assert.That((point, rejoin), Is.EqualTo((new Vector3(1_000, -720, 0), anchor)));
+        Assert.That(AutonomousRouteThreatPolicy.SegmentDistance2D(point, anchor, threats[0].At), Is.EqualTo(665.5).Within(0.05));
+        Vector3[] after = { point, anchor };
+        Assert.That(PlayerBotDriver.FirstBlocker(after, threats, ConColor.YELLOW, null, null, out _, out float along),
+            Is.EqualTo(0), "not gone round: named again");
+        Assert.That(along, Is.EqualTo(479.1).Within(0.05));
+        Assert.That(PlayerBotDriver.FirstBlocker(after, threats, ConColor.YELLOW, null, null, out _, out _,
+            rounded: new HashSet<string> { "B" }), Is.EqualTo(-1), "gone round");
+    }
+
+
+    // #167 F12, the wiring (Roam, GuardsRoute; the build's review): a detour that arrives at its point marks its monster
+    // gone round (RouteRounded), and the walk on to the anchor reads it at the legs' clearance. The bot at the point,
+    // (1000,-720,0) off its walk's start, the anchor 2,000 east of that start, the orange drake at (1000,100,0), aggro
+    // 500: on a search's think a step on it is not named (the way on passes it at 665.5), and the bot walks on. A new walk
+    // (StartRoute) forgets it.
+    [Test]
+    public void A_detour_that_arrives_reads_the_monster_it_went_round_at_the_legs_clearance_in_Roam()
+    {
+        MethodInfo roam = typeof(PlayerBotDriver).GetMethod("Roam", BindingFlags.Static | BindingFlags.NonPublic)!;
+        Vector3 point = OnPocket + new Vector3(1_000, -720, 0);
+        InTheField(new OpenMesh(), point, (region, zone, bot) =>
+        {
+            Vector3 anchor = OnPocket + new Vector3(2_000, 0, 0);
+            GameNPC drake = MonsterAt(region, zone, OnPocket + new Vector3(1_000, 100, 0), LevelFor(bot, ConColor.ORANGE));
+            var brain = (DOL.AI.Brain.StandardMobBrain)drake.Brain;
+            (brain.AggroLevel, brain.AggroRange) = (100, 500);
+            var state = new PlayerBotState(bot) { AnchorRegion = region.ID, Anchor = anchor, RoamDestination = anchor,
+                RouteGoal = anchor, RouteWaypoint = point, RouteBlocker = drake, RouteGoalDetours = 1 };
+            state.RouteDetours[drake] = 1;
+            roam.Invoke(null, [state, bot, 10_000L]);                                    // at the point: arrived
+            Assert.That((state.RouteWaypoint, state.RouteRounded.Contains(drake)), Is.EqualTo(((Vector3?)null, true)), "gone round");
+            roam.Invoke(null, [state, bot, 10_250L]);                                    // the walk on's first step
+            state.SearchAdds.Add(drake);
+            state.SearchAddsAt = 12_000;
+            roam.Invoke(null, [state, bot, 12_000L]);
+            Assert.That((state.Walk, state.RouteWaypoint, state.RoutePassed.Count, state.ReplanOwed, state.RouteGoalDetours),
+                Is.EqualTo((PlayerBotWalk.Anchor, (Vector3?)null, 0, (string)null, 1)), "not named: it walks on");
+            PlayerBotDriver.StartRoute(state, anchor);
+            Assert.That(state.RouteRounded, Is.Empty, "a new walk");
+        });
+    }
+
+
+    // #167 F12 (the build's review): a death, a region change and a move back forget the monsters gone round, with the rest
+    // of the walk the look-ahead read (RouteGoal, its detour's point).
+    [Test]
+    public void A_death_a_region_change_or_a_move_back_forgets_the_monsters_gone_round_in_HandleDeath_and_MoveBack()
+    {
+        MethodInfo handleDeath = typeof(PlayerBotDriver).GetMethod("HandleDeath", BindingFlags.Static | BindingFlags.NonPublic)!;
+        MethodInfo moveBack = typeof(PlayerBotDriver).GetMethod("MoveBack", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var monster = (GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC));
+        GamePlayer dead = Player(null);
+        var state = new PlayerBotState(dead) { RouteGoal = new(1, 2, 3) };
+        state.RouteRounded.Add(monster);
+        handleDeath.Invoke(null, [state, dead, 54_000L]);
+        Assert.That(state.RouteRounded, Is.Empty, "a death");
+        state.RouteRounded.Add(monster);
+        PlayerBotDriver.ResetOnRegionChange(state, 7);
+        Assert.That(state.RouteRounded, Is.Empty, "a region change");
+        InTheField(new OpenMesh(), OnPocket, (region, zone, bot) =>
+        {
+            var back = new PlayerBotState(bot) { AnchorRegion = region.ID, Anchor = OnPocket + new Vector3(500, 0, 0),
+                RouteGoal = OnPocket + new Vector3(500, 0, 0) };
+            back.RouteRounded.Add(monster);
+            moveBack.Invoke(null, [back, bot, 10_000L]);
+            Assert.That((back.RouteGoal, back.RouteRounded.Count), Is.EqualTo(((Vector3?)null, 0)), "a move back");
+        });
+    }
+
+
+    // #167 F12 (the build's review): a walk to a goal in another zone builds its corridor only to the seam (PlayerTravelPath
+    // .TryStep: to the seam's inside, then the step across), so CopyCorners reads none on its way there, as none on the step
+    // across: the goal after the seam's corners would be a straight line over the other zone. Two zones side by side, the
+    // border at x 65,536 (UT_PlayerTravel has no seam fixture; this one plans a real seam, AutonomousZoneItinerary); the
+    // bot 1,536 west of it, the goal 1,464 east. Across, in the goal's zone, it reads its corridor again.
+    [Test]
+    public void A_walk_to_another_zone_reads_no_corners_until_across_the_seam_in_CopyCorners()
+    {
+        var (region, west) = World();
+        typeof(Region).GetField("m_regionData", Hidden)!.SetValue(region, new RegionData { Id = 9_901 });
+        var zones = (List<Zone>)typeof(Region).GetField("m_zones", Hidden)!.GetValue(region)!;
+        Zone east = new(region, 2, "East", 65_536, 0, 65_536, 65_536, 1, false, 0, false, 0, 0, 0, 0, 0);
+        zones.Add(east);
+        var mesh = new Mesh();
+        var path = new PlayerTravelPath();
+        Vector3 goal = new(67_000, 1_000, 0);
+        Span<Vector3> into = stackalloc Vector3[8];
+        Assert.That(PlayerBotPathMover.TryComputeNext(mesh, region, west, path, new(64_000, 1_000, 0), goal, 0, 47.75f, 0,
+            out Vector3 next, out string failure), Is.True, failure);
+        Assert.That(typeof(PlayerTravelPath).GetField("_seamExit", Hidden)!.GetValue(path), Is.Not.Null, "bound for the seam");
+        Assert.That(path.CopyCorners(goal, into), Is.EqualTo(0), "on its way to the seam");
+        long now = 0;
+        Zone at = west;
+        int read = 0;
+        for (int i = 0; i < 100 && read == 0; i++)                                       // the mover's: the bot's zone
+        {
+            at = region.GetZone((int)next.X, (int)next.Y);
+            Assert.That(PlayerBotPathMover.TryComputeNext(mesh, region, at, path, next, goal, 0, 47.75f, now += 250,
+                out next, out failure), Is.True, failure);
+            read = path.CopyCorners(goal, into);
+        }
+        Assert.That((read, at), Is.EqualTo((1, east)), "read again only in the goal's zone, from its corridor's first step");
+        Assert.That(into[0], Is.EqualTo(goal));
+    }
+
+
+    // #167 F12 (the build's review): a monster whose reach (aggro range + AddMargin) covers the bot is no longer passed
+    // over. One already within its aggro range of the bot is the fight's (self-defence: FirstBlocker's row, 424 off); one
+    // nearer than its reach is named only if the route ahead enters its aggro range (else a look that came late, after a
+    // fight's 10 s in combat, walked the bot into it). The route (0,0,0) -> (3000,0,0), an orange monster of aggro 500:
+    // 650 ahead, named, 650 along; 600 behind and 100 aside, or 600 beside: not.
+    [TestCase(650f, 0f, 0, 650f)] [TestCase(-600f, 100f, -1, 0f)] [TestCase(100f, 600f, -1, 0f)]
+    public void A_monster_by_the_bot_blocks_only_if_the_route_ahead_enters_its_aggro_range_in_FirstBlocker(float x, float y,
+        int expected, float along)
+    {
+        Vector3[] route = { Vector3.Zero, new(3_000, 0, 0) };
+        List<(string Npc, Vector3 At, int AggroRange, ConColor Con)> threats = [("A", new(x, y, 0), 500, ConColor.ORANGE)];
+        Assert.That(PlayerBotDriver.FirstBlocker(route, threats, ConColor.YELLOW, null, null, out _, out float crossing),
+            Is.EqualTo(expected));
+        if (expected == 0) Assert.That(crossing, Is.EqualTo(along).Within(0.01));
+    }
+
+
+    // #167 F12 (the build's review): the camp's own monsters are those by the camp (camp: GuardsRoute passes its goal), not
+    // those by the route's end, which on a detour's walk is the detour's point. The route (0,0,0) -> (1200,0,0), to a
+    // point; the camp at (600,800,0); an orange monster of aggro 300 (reach 500). One that wandered up to the point,
+    // (1300,-180,0), 206 from it: named, with the camp given (by the route's end, without). One beside the leg at
+    // (600,400,0), 400 from it and from the camp: the camp's own, with the camp given (named, without).
+    [TestCase(1_300f, -180f, true, "A")] [TestCase(1_300f, -180f, false, null)]
+    [TestCase(600f, 400f, true, null)] [TestCase(600f, 400f, false, "A")]
+    public void A_detours_walk_takes_the_camps_own_monsters_by_its_camp_not_its_point_in_FirstBlocker(float x, float y,
+        bool camp, string expected)
+    {
+        Vector3[] route = { Vector3.Zero, new(1_200, 0, 0) };
+        List<(string Npc, Vector3 At, int AggroRange, ConColor Con)> threats = [("A", new(x, y, 0), 300, ConColor.ORANGE)];
+        int first = PlayerBotDriver.FirstBlocker(route, threats, ConColor.YELLOW, null, null, out _, out _,
+            camp: camp ? new Vector3(600, 800, 0) : null);
+        Assert.That(first < 0 ? null : threats[first].Npc, Is.EqualTo(expected));
+    }
+
+
+    // #167 F12, the wiring (GuardsRoute; the build's review): on a detour's walk the camp's own are those by its anchor. An
+    // orange monster of aggro 300 that wandered up to the detour's point, 206 from it, is named on the walk to the point
+    // (the bot, inside a detour and within 10 minutes of a give-up, walks on past it).
+    [Test]
+    public void A_monster_by_a_detours_point_is_named_on_the_walk_to_it_in_Roam()
+    {
+        MethodInfo roam = typeof(PlayerBotDriver).GetMethod("Roam", BindingFlags.Static | BindingFlags.NonPublic)!;
+        InTheField(new OpenMesh(), OnPocket, (region, zone, bot) =>
+        {
+            Vector3 anchor = OnPocket + new Vector3(5_000, 0, 0), point = OnPocket + new Vector3(1_000, -720, 0);
+            GameNPC wolf = MonsterAt(region, zone, point + new Vector3(100, -180, 0), LevelFor(bot, ConColor.ORANGE));
+            var brain = (DOL.AI.Brain.StandardMobBrain)wolf.Brain;
+            (brain.AggroLevel, brain.AggroRange) = (100, 300);
+            var drake = (GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC));   // the one it goes round
+            var state = new PlayerBotState(bot) { AnchorRegion = region.ID, Anchor = anchor, RoamDestination = anchor,
+                RouteGoal = anchor, RouteWaypoint = point, RouteBlocker = drake, NextRouteGiveUpTick = long.MaxValue };
+            roam.Invoke(null, [state, bot, 9_750L]);                                     // the walk to the point's first step
+            state.SearchAdds.Add(wolf);
+            state.SearchAddsAt = 10_000;
+            roam.Invoke(null, [state, bot, 10_000L]);
+            Assert.That((state.Walk, state.RouteWaypoint, state.RoutePassed.Contains(wolf)),
+                Is.EqualTo((PlayerBotWalk.Detour, (Vector3?)point, true)));
+        });
+    }
+
+
+    // #167 F12 (the build's review): a rest ends a detour, as a fight does (TakeTarget): after it the walk reads afresh from
+    // where the bot rested, not straight on to the old point unread. A bot sitting at 30% health rests (Think's step 12).
+    [Test]
+    public void A_rest_ends_a_detour_in_Think()
+    {
+        MethodInfo think = typeof(PlayerBotDriver).GetMethod("Think", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var calculators = (DOL.GS.PropertyCalc.IPropertyCalculator[])typeof(GameLiving)
+            .GetField("m_propertyCalc", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        DOL.GS.PropertyCalc.IPropertyCalculator saved = calculators[(int)eProperty.Fatigue];
+        try
+        {
+            calculators[(int)eProperty.Fatigue] = new Fixed(100);                  // the rest reads endurance too
+            InTheField(new OpenMesh(), OnPocket, (region, zone, bot) =>
+            {
+                typeof(GameObject).GetField("m_health", Hidden)!.SetValue(bot, 30);
+                typeof(GamePlayer).GetField("m_sitting", Hidden)!.SetValue(bot, true);
+                var state = new PlayerBotState(bot) { AnchorRegion = region.ID, Anchor = OnPocket, LastRegion = bot.CurrentRegionID,
+                    RouteWaypoint = OnPocket + new Vector3(0, 800, 0), NoSelfHealLevel = bot.Level, NoPetSpellLevel = bot.Level,
+                    NextSelfBuffTick = long.MaxValue };                                  // a Thane: no heal, pet or buff
+                think.Invoke(null, [state, bot, 10_000L]);
+                Assert.That((state.Activity, state.RouteWaypoint), Is.EqualTo((PlayerBotActivity.Resting, (Vector3?)null)));
+            });
+        }
+        finally { calculators[(int)eProperty.Fatigue] = saved; }
+    }
+
+
+    // #167 F12 (the build's review): no look within the mover's direct step of what the bot walks to, with its stop: the
+    // detour's point (300 + its 60) or the anchor (300 + 20). There the mover steps straight on, and its corridor's
+    // corners stay as they were, passed ones too. Walked from 1,000 (980) units off in 47.75-unit steps: on a search's
+    // think 331.5 (311.5) off it reads nothing; 379.25 (359.25) off it reads (ROUTE win= checks=).
+    [TestCase(true, 1_000, 14, 0L)] [TestCase(true, 1_000, 13, 1L)] [TestCase(false, 980, 14, 0L)] [TestCase(false, 980, 13, 1L)]
+    public void No_look_within_the_movers_direct_step_of_what_the_bot_walks_to_in_Roam(bool detour, int off, int steps, long checks)
+    {
+        MethodInfo roam = typeof(PlayerBotDriver).GetMethod("Roam", BindingFlags.Static | BindingFlags.NonPublic)!;
+        InTheField(new OpenMesh(), OnPocket, (region, zone, bot) =>
+        {
+            Vector3 to = OnPocket + new Vector3(off, 0, 0), anchor = detour ? OnPocket + new Vector3(off, 4_000, 0) : to;
+            var state = new PlayerBotState(bot) { AnchorRegion = region.ID, Anchor = anchor, RoamDestination = anchor,
+                RouteGoal = anchor, RouteWaypoint = detour ? to : null,
+                RouteBlocker = detour ? (GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC)) : null };
+            long now = 10_000;
+            for (int i = 0; i < steps; i++, now += PlayerBotDriver.TickMilliseconds)
+                roam.Invoke(null, [state, bot, now]);
+            Assert.That(Vector3.Distance(new(bot.X, bot.Y, bot.Z), to), Is.EqualTo(off - steps * 47.75f).Within(1), "walked");
+            PlayerBotDriverReport.TakeRoute(0, 0);                          // the counters are process-wide
+            state.SearchAddsAt = now;
+            roam.Invoke(null, [state, bot, now]);
+            Assert.That(PlayerBotDriverReport.TakeRoute(60, 1).Checks, Is.EqualTo(checks));
+        });
+    }
+
+
+    // #167 F12 (the build's review): a detour's point dropped for its island (OnMesh, #188's rule) doesn't count in the
+    // report's CROSSING dropped=, the ring points' gauge (rest, clear-spot, walk-out, kite and break-off points). A bot on
+    // a pocket, its anchor 3,000 south on it, an orange drake 1,000 on and 100 east, aggro 500: the one way round whose
+    // legs are clear, 720 west, lies on the larger island (dropped: the camp's island only), so no detour; before the
+    // review it counted 1 there.
+    [Test]
+    public void A_detours_point_dropped_for_its_island_is_not_counted_as_a_ring_point_in_Roam()
+    {
+        MethodInfo roam = typeof(PlayerBotDriver).GetMethod("Roam", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var states = (ConcurrentDictionary<GamePlayer, PlayerBotState>)typeof(PlayerBotDriver)
+            .GetField("_states", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        Vector3 start = new(840_560, 702_100, 8_343), anchor = new(840_560, 699_100, 8_343);
+        InTheField(new PlayerBotIslandMesh(border: 840_500), start, (region, zone, bot) =>
+        {
+            GameNPC drake = MonsterAt(region, zone, start + new Vector3(100, -1_000, 0), LevelFor(bot, ConColor.ORANGE));
+            var brain = (DOL.AI.Brain.StandardMobBrain)drake.Brain;
+            (brain.AggroLevel, brain.AggroRange) = (100, 500);
+            var state = new PlayerBotState(bot) { AnchorRegion = region.ID, Anchor = anchor, RoamDestination = anchor };
+            try
+            {
+                states[bot] = state;                                                     // OnMesh's island rule: its bot
+                roam.Invoke(null, [state, bot, 9_750L]);                                 // the walk's first step
+                Assert.That(state.Mover.OnItsNetwork(start + new Vector3(-720, -1_000, 0)), Is.False, "the way round: off its island");
+                PlayerBotDriverReport.TakeCrossings(0);                     // the counters are process-wide
+                PlayerBotDriverReport.TakeRoute(0, 0);
+                state.SearchAdds.Add(drake);
+                state.SearchAddsAt = 10_000;
+                roam.Invoke(null, [state, bot, 10_000L]);
+                PlayerBotRouteWindow route = PlayerBotDriverReport.TakeRoute(60, 1);
+                Assert.That((route.Checks, route.Detours, route.GiveUps + route.Passes), Is.EqualTo((1L, 0L, 1L)), "named, no way round");
+                Assert.That(PlayerBotDriverReport.TakeCrossings(60).Dropped, Is.EqualTo(0L));
+            }
+            finally { states.TryRemove(bot, out _); }
         });
     }
 }

@@ -23,11 +23,13 @@ namespace DOL.GS.Commands
         public Vector3? LinkEnd => _link is Vector3 end && _nodes.TryPeek(out var head) && head.Position == end ? end : null; // HearthDAoC: the far corner of the floor link the walker is on, until it passes it (#166)
 
         // HearthDAoC: the corridor's corners still ahead of a walk to goal, read only (the player bots' route look-ahead,
-        // #167 F12): none with no corridor, while crossing a seam, or for another goal (more than 64 off, TryStep's own
-        // reset). Enumerating the queue moves nothing.
+        // #167 F12): none with no corridor, while the corridor leads to a seam (the goal lies in another zone: it ends at
+        // the seam, not the goal) or crosses it, or for another goal (more than 64 off, TryStep's own reset). Enumerating
+        // the queue moves nothing.
         public int CopyCorners(Vector3 goal, Span<Vector3> into)
         {
-            if (_crossingSeam || _nodes.Count == 0 || Vector3.DistanceSquared(goal, _goal) > 64 * 64) return 0;
+            if (_crossingSeam || _seamExit.HasValue || _nodes.Count == 0 || Vector3.DistanceSquared(goal, _goal) > 64 * 64)
+                return 0;
             int count = 0;
             foreach (WrappedPathfindingNode node in _nodes)
             {

@@ -467,8 +467,9 @@ public sealed class PlayerBotPathMover
     /// <summary>#167 F12: the walk to goal's route ahead (PlayerBotDriver.UpcomingRoute): from where the next step starts
     /// (StepStart) along the corridor's corners still ahead (PlayerTravelPath.CopyCorners) to goal; read only: no step,
     /// no corridor search, no replan. None (0) while it holds no corridor for goal: before the walk's first corridor step
-    /// (the first think back on a walk after a fight, a rest or a detour's point) or at a seam, where the straight line
-    /// is not the way it walks (the review of F12).</summary>
+    /// (the first think back on a walk after a fight, a rest or a detour's point), or on a walk to another zone until it
+    /// stands in goal's zone: its corridor ends at a seam, and the straight line on to goal is not the way it walks (the
+    /// review of F12, and of its build).</summary>
     public int CopyUpcoming(Vector3 goal, Span<Vector3> into)
     {
         Span<Vector3> corners = stackalloc Vector3[MaxUpcomingCorners];

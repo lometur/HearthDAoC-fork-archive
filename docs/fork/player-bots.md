@@ -286,17 +286,20 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   no new camp. A caster rests first, after its login buffs, as after a kill; a life after a release needs no such rest
   (the release restores full power).
 - On its walk to a camp (one it planned, or back to its leash) it looks ahead along its route at each search, every 2 s:
-  1,500 units along the navmesh corridor it walks (none before the walk's first step on it), against the aggressive
-  monsters that search found, where they stand then. A monster blocks the walk when its reach (its aggro range and 200
-  units) crosses that stretch, it reaches neither the bot (a fight already) nor the camp (the camp's own), and it is
-  over the bot's cap or in a pack bigger than its con allows on the way: 3 at a green, 2 at a blue, 1 at a yellow or
-  harder (itself and the others whose reach covers where the bot would pass it). The bot then goes round it, to a point
-  beside it its aggro range and 320 units out, from which a straight way on the navmesh leads back to the route past it,
-  both straight ways clear of every such monster by its aggro range and 100: at most twice round one monster and four
-  times on a walk, and none while it walks round one already. On the walk to the point it reads the others by their
-  aggro range and 100, the clearance its ways were checked at. With no way round it gives the camp up, at most once in
-  10 minutes: the camp is barred for 15 minutes and it plans a new one from where it stands at once, standing still
-  until then (with no other camp, or no way to one, it walks on to its own). Else it walks on past the monster.
+  1,500 units along the navmesh corridor it walks (none before the walk's first step on it, nor before a walk from
+  another zone is in the camp's zone), against the aggressive monsters that search found, where they stand then. A
+  monster blocks the walk when its reach (its aggro range and 200 units) crosses that stretch (its aggro range alone,
+  for one whose reach covers the bot), it is not within its aggro range of the bot (a fight already) and doesn't reach
+  the camp (the camp's own), and it is over the bot's cap or in a pack bigger than its con allows on the way: 3 at a
+  green, 2 at a blue, 1 at a yellow or harder (itself and the others whose reach covers where the bot would pass it).
+  The bot then goes round it, to a point beside it its aggro range and 320 units out, from which a straight way on the
+  navmesh leads back to the route past it, both straight ways clear of every such monster by its aggro range and 100
+  (one nearer the bot than that: approached no nearer than it stands): at most twice round one monster and four times on
+  a walk, and none while it walks round one already. On the walk to the point it reads the others by their aggro range
+  and 100, the clearance its ways were checked at, and from the point on the monster it went round too. A fight or a
+  rest ends the walk round it. With no way round it gives the camp up, at most once in 10 minutes: the camp is barred
+  for 15 minutes and it plans a new one from where it stands at once, standing still until then (with no other camp, or
+  no way to one, it walks on to its own). Else it walks on past the monster.
 - It walks on the navmesh. A bot made at a level from a spots line also trains on each level-up.
 - In a run of 3 bots or fewer, `hdbot-alb-01` also does quest 20206 (Immediate Resolution) and its class promotion.
 
@@ -340,10 +343,12 @@ Playing:
   - Only the walk to a camp looks ahead on its route (#167 F12). A walk to a target, a roam, the walk to a rest spot, a
     step out or back, and the walk out after a release don't (a break-off's run checks its straight way only). The
     look-ahead reads the last search's monsters (within 3,300 to 5,700 units, every 2 s) along the corridor's next 1,500
-    units, from the walk's first step on its corridor; it never pulls a monster on the way on its own terms, as a
-    GameBot does. A plan doesn't yet weigh the monsters on the way to a camp, only those round it: it takes a camp whose
-    corridor a monster blocks as readily as another, and the walk then goes round the monster, gives the camp up or
-    walks on past it. Choosing the camp by the way there is a follow-up.
+    units, from the walk's first step on its corridor; a walk from another zone reads nothing until it is in the camp's
+    zone (its corridor ends at the zone's border), so the walk from a bind in another zone reads only its stretch in the
+    camp's zone; it never pulls a monster on the way on its own terms, as a GameBot does. A plan doesn't yet weigh the
+    monsters on the way to a camp, only those round it: it takes a camp whose corridor a monster blocks as readily as
+    another, and the walk then goes round the monster, gives the camp up or walks on past it. Choosing the camp by the
+    way there is a follow-up.
 - **Resting:** about half their time: 52.1% over the six legs, against 52.6% on v0.37b-hearth.16 (time-weighted).
   Most of it is the real cost of player regeneration. A kill now skips its rest when the bot has what its next pull
   needs. The 80% endurance stop still starts sits that health and power wouldn't, a quarter fewer than on
@@ -420,7 +425,8 @@ A bot walks with upstream's `PlayerTravelPath` corridor cursor (`PlayerBotPathMo
 reach only player bots: `/travel` isn't registered, and `/grind` uses only `TryBuildCorridor`. If `/travel` is ever
 registered, test it in game. One of them only reads (#167 F12): `CopyCorners`, the corridor's corners still ahead of the
 walk, which the driver's route look-ahead reads through the mover (`CopyUpcoming`, nothing before the walk's first
-corridor step); it moves nothing and plans nothing. The mover:
+corridor step, nor before a walk from another zone is in the goal's zone); it moves nothing and plans nothing. The
+mover:
 - starts each step from the exact spot it last put the bot on. The game stores positions in whole units, and by
   Olorustos the rounded spot lay off the navmesh, so the quest bot stood there for 14 minutes.
   `UT_PlayerBotWalkReplay` replays that walk on the installed navmesh.
@@ -738,8 +744,9 @@ All start `PLAYER_BOT_`:
     bot stands), `at=` (where the monster stands), `goal=` (the camp) and `waypoint=` (the detour's point, `-` for
     none);
   - `ROUTE win=`, every minute after `CROSSING`, over all bots: `bots=`, `checks=` (the looks ahead; none on a think
-    with no corridor yet), `detours=`, `giveups=`, `passes=`, `blocked=`, `ms=` (the looks' time) and `msPerBotSec=`.
-    When the server stops, one more covers the part of a minute since the last, so a leg's lines sum exactly;
+    with no corridor to read yet, nor within the mover's direct step of the detour's point or the camp), `detours=`,
+    `giveups=`, `passes=`, `blocked=`, `ms=` (the looks' time) and `msPerBotSec=`. When the server stops, one more
+    covers the part of a minute since the last, so a leg's lines sum exactly;
 - `CUTOFF`: a blocked roam found no path from where the bot stands to its camp's centre, and the bot is teleported
   there: `at=`, where it stood, `anchor=`, the centre, `distance=` between them, and `waited=`, the seconds it was held
   for a real player in sight or a fight (0: none). `DRIVER`'s `stuck=` counts these teleports with those after 15
