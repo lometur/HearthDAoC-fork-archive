@@ -219,6 +219,7 @@ public sealed class PlayerBotState
                                                                  //   the thinks it held its swing for a heal (SelfHealStep's
                                                                  //   Hold) and its longest hold, and the hold's thinks so
                                                                  //   far (CountHealHold)
+    public int FightTaps;                                        // #167 F N1b: FIGHT and DEATH taps=, power-tap casts
     public int EngageBuffs, FightPetCasts, FightWaits;           // #167 FIGHT buffs=, petCasts= and waits=
     public long SitSince;                                        // #167 PLAYER_BOT_REST: when the bot sat down, 0 standing
     public (string Head, PlayerBotDeathDetail Detail, GameObject Target)? PendingDeath;   // a DEATH line awaiting Dying (AwaitsDying)
@@ -400,6 +401,8 @@ public static class PlayerBotDriver
                                                              //   a style or two: +0.3% of bot time on st-deathsD2's rests,
                                                              //   e-design s7). The chant (WantedChant), the regeneration
                                                              //   buff (KeepsUpOutOfFight) and the errand rests read it too
+    public const int PowerTapPetHealthPercent = 50;          // #167 F N1b: the Vacuum while the pet has this much health
+    public const int PowerTapDamagePercent = 75;             //   and does this share of the lifetap's damage (inf.)
     public const int SelfBuffScanMilliseconds = 5_000;       // #167 F8: the self-buffs' scan, out of a fight
     public const int ShortBuffMilliseconds = 120_000;        // #167 C9: a shorter buff is kept up in fights only, but a
                                                              //   regeneration one while its resource is low
@@ -935,6 +938,7 @@ public static class PlayerBotDriver
             state.NextCombatChoiceTick = now + Math.Max(900, state.Spell.CastTime + 250);
             state.FightCasts++;
             if (IsDamageOverTime(state.Spell)) state.FightDots++;                       // #167 E C1 dots=
+            if (IsPowerTap(state.Spell)) state.FightTaps++;                             // #167 F N1b taps=
             state.FightQuickcast |= quickcasting;
             state.FightKillingQuickcast |= quickcasting && state.KillingQuickcast;      // #167 E C2b qcKill=
             state.Activity = PlayerBotActivity.Casting;
@@ -1979,6 +1983,7 @@ public static class PlayerBotDriver
         state.FightAdds = state.Swings = state.NotVisible = state.FightCasts = state.FightHeals = 0;
         (state.FightHealCasts, state.FightHealsLanded, state.PendingHeal) = (0, 0, default);   // #167 F H1
         (state.FightHealHolds, state.FightHealHoldMax, state.HealHoldRun) = (0, 0, 0);       // #167 F H2
+        state.FightTaps = 0;                                                        // #167 F N1b taps=
         state.FightPetCasts = state.FightWaits = state.FightControls = state.FightKites = state.FightCtlBroken = 0;
         state.FightKiteNone = default;                                              // #167 D8 kiteNone=
         state.FightDots = 0;                                                        // #167 E C1 dots=
@@ -3791,6 +3796,34 @@ public static class PlayerBotDriver
     public static eSpellType PayloadKind(Spell spell, Func<int, Spell> payload) =>
         spell.SpellType is eSpellType.PetSpell && payload?.Invoke(spell.SubSpellID) is Spell sub ? sub.SpellType : spell.SpellType;
 
+    /// <summary>A Necromancer's power tap (#167 F N1b): its ready damage spell whose payload drains power for the owner
+    /// (PayloadKind PowerDrainPet: the pet's hit gives the owner half its damage as power, PowerDrain.cs:38-48), the
+    /// highest level; none for every other class (no other has a PetSpell).</summary>
+    public static (Spell, SpellLine) PowerTap(IEnumerable<(Spell Spell, SpellLine Line)> nukes, Func<Spell, bool> ready,
+        Func<int, Spell> payload)
+    {
+        Spell best = null;
+        SpellLine bestLine = null;
+        foreach ((Spell spell, SpellLine line) in nukes)
+            if (PayloadKind(spell, payload) is eSpellType.PowerDrainPet && ready(spell) && (best == null || spell.Level > best.Level))
+                (best, bestLine) = (spell, line);
+        return (best, bestLine);
+    }
+
+    /// <summary>Whether a Necromancer casts its power tap instead of its lifetap (#167 F N1b), as a 1.65 Deathsight
+    /// Necromancer plays with the same two spells: while its power isn't full (a pet class rests to 100%,
+    /// RestPowerStop; a tap at full power returns nothing, "You cannot absorb any more power", PowerDrain.cs:52), its
+    /// pet at PowerTapPetHealthPercent or more (the lifetap heals the pet) and the tap doing PowerTapDamagePercent of the
+    /// lifetap's damage or more (Spirit Vacuum 124 against Theft of Energy 143; Lifeforce Vacuum and Theft of Vigor 92
+    /// each), so the kill isn't slowed much.</summary>
+    public static bool TapsPower(Spell lifetap, Spell powerTap, byte ownerPowerPercent, int petHealthPercent) =>
+        lifetap != null && powerTap != null && ownerPowerPercent < 100 && petHealthPercent >= PowerTapPetHealthPercent &&
+        powerTap.Damage * 100 >= lifetap.Damage * PowerTapDamagePercent;
+
+    // #167 F N1b taps=: a cast of a power tap (PayloadKind PowerDrainPet).
+    private static bool IsPowerTap(Spell spell) =>
+        spell != null && PayloadKind(spell, SkillBase.GetSpellByID) is eSpellType.PowerDrainPet;
+
     // #167 F10b: an Animist's bomber does only its payload (BomberBrain.cs:32-34, its SubSpellID); the bomber's own
     // Damage (50 on every one) is no damage. One whose payload does none (Spreading Vines: a root) is no nuke, nor does it
     // outrank a damage bomber (BotBrain.IsOutclassedDamageSpell compares spell types). Production resolves payloads with
@@ -4019,6 +4052,11 @@ public static class PlayerBotDriver
         Func<Spell, double> value = values == null ? null : spell => values.TryGetValue(spell, out double v) ? v : 0;
         bool rootWanted = scores && state.HasRoot;
         (Spell spell, SpellLine line) = ScoredNuke(state.Nukes, Ready, false, value, rootWanted);
+        if (!scores && spell?.SpellType is eSpellType.PetSpell &&                      // #167 F N1b: a Necromancer's
+            PayloadKind(spell, SkillBase.GetSpellByID) is eSpellType.Lifedrain &&      //   lifetap gives way to its
+            PowerTap(state.Nukes, Ready, SkillBase.GetSpellByID) is (Spell tap, SpellLine tapLine) &&   //   power tap
+            TapsPower(spell, tap, PowerPercent(player.MaxMana, player.ManaPercent), player.ControlledBrain?.Body?.HealthPercent ?? 0))
+            (spell, line) = (tap, tapLine);
         if (spell == null || spell.Radius <= 0 || target == null) return (spell, line);
         foreach (GameNPC npc in target.GetNPCsInRadius((ushort)spell.Radius))
             if (npc != target && npc.IsAlive && IsExperienceTarget(npc) && !(npc.IsAttacking && npc.TargetObject == player))
@@ -5317,7 +5355,8 @@ public static class PlayerBotDriver
             inFight ? state.FightStylesHeld : -1, inFight ? state.FightCastsHeld : -1,    // #167 E-R as FIGHT's
             inFight ? state.FightHeals : -1, inFight ? state.FightHealCasts : -1,         // #167 F H1 heals=, healCast=
             inFight ? state.FightHealsLanded : -1,                                        //   and healLanded=,
-            inFight ? state.FightHealHolds : -1, inFight ? state.FightHealHoldMax : -1);  // #167 F H2
+            inFight ? state.FightHealHolds : -1, inFight ? state.FightHealHoldMax : -1,   // #167 F H2
+            inFight ? state.FightTaps : -1);                                              // #167 F N1b taps=
         string head = $"PLAYER_BOT_DEATH bot={player.Name} level={player.Level} at=({player.X},{player.Y},{player.Z}) " +
                       $"zone={player.CurrentZone?.ID} {fight} attackers={state.Attackers} deathSteps={state.DeathSafetySteps} " +
                       $"aliveSec={(now - state.AliveSince) / 1000} task={state.Task != null}";
@@ -5395,7 +5434,8 @@ public static class PlayerBotDriver
             player.EndurancePercent, state.FightStylesHeld, state.FightCastsHeld,
             state.FightSight, state.FightBlind, state.FightBlindSteps,                  // #167 E M2, R1
             state.FightHealCasts, state.FightHealsLanded,                               // #167 F H1
-            state.FightHealHolds, state.FightHealHoldMax)));                           // #167 F H2
+            state.FightHealHolds, state.FightHealHoldMax,                              // #167 F H2
+            state.FightTaps)));                                                         // #167 F N1b
     }
 
     // APP:585-624, changed: every 10 s, no inventory count, no saves; after 15 minutes with no progress, back to the

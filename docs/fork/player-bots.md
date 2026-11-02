@@ -77,7 +77,10 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   Between casts it keeps its spell range. A pet class summons its pet and sends it in, then holds its spells until the
   monster turns on the pet, 4 s at most, and never while the bot is being hit. A Theurgist casts a pet at its target
   at each cast choice while it can cast one, as a GameBot does, and its damage spell only when it can't (the target
-  out of the pet's range or view, or a pet just refused).
+  out of the pet's range or view, or a pet just refused). A Necromancer casts its power tap (a Vacuum) instead of its
+  lifetap while its power isn't full and its pet has half its health or more, when the tap does three quarters of the
+  lifetap's damage or more, so it fights on its power and rests less; a Deathsight Necromancer of level 40-43 keeps its
+  Spirit Vacuum beside its Theft of Energy (the two are told apart by what the pet casts).
 - A caster (Wizard, Sorcerer, Runemaster, Eldritch, Mentalist) nukes a monster coming at it while there is time for a
   nuke and a control spell after it. Then it stuns, roots or mezzes it, in that order of choice, if the cast ends
   before the monster reaches it. In melee it uses Quickcast for the control spell. It skips the control while its
@@ -538,8 +541,8 @@ All start `PLAYER_BOT_`:
   pet, nor coming at it), and `blindSteps=`, the steps it took toward its target out of sight. `FIGHT` then gives
   `healCast=`, the heal requests that began a cast that lasted to the next think, or landed (`heals=` counts requests,
   which the server may refuse while an interrupt runs), `healLanded=`, the heals cast, `healHold=`, the thinks it held
-  its swing for a heal, and `healHoldMax=`, its longest such hold in thinks; `DEATH` gives `heals=` and the same four
-  (-1 each out of a fight).
+  its swing for a heal, `healHoldMax=`, its longest such hold in thinks, and `taps=`, a Necromancer's power-tap casts;
+  `DEATH` gives `heals=` and the same five (-1 each out of a fight).
   `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `walkout`, `rest`, `kite`, `turret`
   or `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
   after a break-off its `reason=` is `brokeoff`. Either ends with `barred=old` when the death or the break-off came on
