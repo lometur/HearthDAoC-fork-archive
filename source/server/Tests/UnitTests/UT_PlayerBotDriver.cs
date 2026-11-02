@@ -3103,7 +3103,9 @@ public sealed class UT_PlayerBotDriver
     // (SprintSeconds; 999: no end; -1: not read), a refusal's too; then (#167 F-W) joined=, the monsters that joined its
     // chasers on the run, and wayAdds=, 1 when its point's straight way passed another monster's reach (no clear one), 0
     // when clear, -1 with no point; then (#167 F-C) qcLeft=, a caster's Quickcast disable left at the start in whole
-    // seconds, rounded up (QuickcastLeftSeconds, as DEATH qcLeft=; -1: no caster, or no Quickcast).
+    // seconds, rounded up (QuickcastLeftSeconds, as DEATH qcLeft=; -1: no caster, or no Quickcast); then (#167 F-CS)
+    // cfSkip=, 1 when a can't-finish run marked its target's name for the pick and the plan, 0 when it didn't, -1 for
+    // every other why.
     [Test]
     public void A_break_off_line_gives_its_start_and_outcome()
     {

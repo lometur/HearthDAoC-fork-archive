@@ -1685,13 +1685,14 @@ public static class PlayerBotDriver
     // the adds this scan finds, no new one), the 5,000-unit ring the least crowded. The scan reaches AddScanMargin past
     // the ring for the adds by a candidate at its edge; those along a walk in lie within it. One over the cap is passed over, never taken (DEATHS.md A4: the old rollback
     // reset the death steps to fit it), and the capped clock runs while the wider ring finds nothing else. An avoided
-    // name is passed over too, unless the bot was sent to a camp of them (HuntAvoided). A keep guard of another realm or
-    // of none counts as an add, never as a candidate (#167 D7, CountsAsThreat). #167 F P1: the wider ring holds a melee
-    // or archer bot to MaxPullCrowd (unless lifted where it is, LimitsCrowd), and P1b refuses an over-cap add in the
-    // crowd; a refused candidate counts as passed over, and those refused since the last target go to CrowdRefused for
-    // the capped plan's bar. A target the bot walks to is searched again every 2 s until it fights, so one whose crowd
-    // rises past its limit on the walk in is dropped. The scan reads each threat's con before the filters (P1b's overCap;
-    // GetConLevel is level arithmetic): the candidates' con is the same as before.
+    // name is passed over too, unless the bot was sent to a camp of them (HuntAvoided); #167 F-CS: so is a name a
+    // can't-finish run skips at its con (CantFinishSkipped). A keep guard of another realm or of none counts as an add,
+    // never as a candidate (#167 D7, CountsAsThreat). #167 F P1: the wider ring holds a melee or archer bot to
+    // MaxPullCrowd (unless lifted where it is, LimitsCrowd), and P1b refuses an over-cap add in the crowd; a refused
+    // candidate counts as passed over, and those refused since the last target go to CrowdRefused for the capped plan's
+    // bar. A target the bot walks to is searched again every 2 s until it fights, so one whose crowd rises past its
+    // limit on the walk in is dropped. The scan reads each threat's con before the filters (P1b's overCap; GetConLevel
+    // is level arithmetic): the candidates' con is the same as before.
     private static GameNPC FindWithin(PlayerBotState state, GamePlayer player, ushort radius, long now,
         out PlayerBotPickReading reading)
     {
@@ -2007,10 +2008,12 @@ public static class PlayerBotDriver
     /// <summary>#167 D4: the plan's monsters (RelocateIfOutgrown, PlanRelocation's) among npcs: those in zone it counts
     /// (IsPlannable; the review of D: with the old filter, IsAttackable, put back no test failed) over GREY, each with
     /// its con to the bot, whether the bot would hunt it under natural (IsEligibleExperienceTarget) and whether it
-    /// avoids its name (avoidUntil). #167 F P3: with adds, the plan's potential adds there in the same pass (the review:
-    /// one pass over the region's NPCs): each such monster that would aggro the bot (IsPotentialAdd, busy or not: the
-    /// plan looks ahead), with its own brain's aggro range (each rainbow sprite colour is its own brain,
-    /// RainbowSprites.cs) and its con to the bot (OverCapNear).</summary>
+    /// avoids its name (avoidUntil). #167 F P3: with adds, the plan's potential adds there in the same pass (the
+    /// review: one pass over the region's NPCs): each such monster that would aggro the bot (IsPotentialAdd, busy or
+    /// not: the plan looks ahead), with its own brain's aggro range (each rainbow sprite colour is its own brain,
+    /// RainbowSprites.cs) and its con to the bot (OverCapNear). #167 F-CS: a name a can't-finish run skips at its con
+    /// (cantFinish, CantFinishSkipped) counts as avoided too: a camp of only that name fits no cap, so a capped bot
+    /// leaves it for one it can finish.</summary>
     public static List<(GameNPC Npc, Vector3 At, ConColor Con, bool Huntable, bool Avoided)> PlanMonsters(GamePlayer player,
         IEnumerable<GameNPC> npcs, Zone zone, ConColor natural, IReadOnlyDictionary<string, long> avoidUntil, long now,
         List<(GameNPC Npc, Vector3 At, int AggroRange, ConColor Con)> adds = null,
@@ -2581,7 +2584,13 @@ public static class PlayerBotDriver
     /// median 6,117 units.</summary>
     public static bool RestsAfterBreakOff(string why) => why is Spent or CantFinish;
 
-    /// <summary>#167 F-CS: a can't-finish run's mark (BrokeOffFrom).</summary>
+    /// <summary>#167 F-CS: a can't-finish run's mark (BrokeOffFrom): its target's name (name), from its con (con) on,
+    /// for FailureMemoryMilliseconds, when that con is CantFinishSkipCon or harder and the bot hasn't killed the name
+    /// at CantFinishSkipCon or harder in that time (hardKills, RememberHardKill: any such kill, whatever its con); a
+    /// live mark keeps the lower con; true when it marks. F-C leaves the name pullable and the pick ranks a yellow
+    /// first (TargetScore): on st-deathsF/Fb the 16 yellow runs' first re-pulls of the name were 10, 7 of them run from
+    /// again, while Pbotaaacr's yellow giant boar, killed 48 s before its run, gave 7 kills in 7. The marks past their
+    /// time go as a new one comes.</summary>
     public static bool MarkCantFinish(Dictionary<string, (long Until, ConColor Con)> skips,
         IReadOnlyDictionary<string, long> hardKills, string name, ConColor con, long now)
     {
@@ -2596,13 +2605,17 @@ public static class PlayerBotDriver
         return true;
     }
 
-    /// <summary>#167 F-CS: whether the pick and the plan pass over name at con.</summary>
+    /// <summary>#167 F-CS: whether the pick (FindWithin) and the plan (PlanMonsters) pass over name at con: a
+    /// can't-finish mark on it (MarkCantFinish) from that con or under, while its time lasts. Self-defence and a
+    /// monster coming at the bot don't read it: the bot still fights one back.</summary>
     public static bool CantFinishSkipped(IReadOnlyDictionary<string, (long Until, ConColor Con)> skips, string name,
         ConColor con, long now) =>
         name != null && skips != null && skips.TryGetValue(name, out (long Until, ConColor Con) skip) &&
         now < skip.Until && con >= skip.Con;
 
-    /// <summary>#167 F-CS: a kill of name at con (SettleTarget).</summary>
+    /// <summary>#167 F-CS: a kill of name at con (SettleTarget), CantFinishSkipCon or harder: each name's last one,
+    /// MarkCantFinish's read, and the end of a can't-finish mark on the name from that con or under (the bot can finish
+    /// it). Those past FailureMemoryMilliseconds go once HardKillNames are kept.</summary>
     public static void RememberHardKill(Dictionary<string, long> hardKills,
         Dictionary<string, (long Until, ConColor Con)> skips, string name, ConColor con, long now)
     {
@@ -3107,11 +3120,12 @@ public static class PlayerBotDriver
             RememberFailedCamp(state.FailedCamps, state.AnchorRegion, state.Anchor, now);
     }
 
-    /// <summary>A break-off's start (#167 C2): the camp it ran from and the names of its target and chasers, remembered as
-    /// after a death (Remember, DEATHS.md A3; RememberFailedCamp, #167 F4), so it neither pulls them nor plans back
+    /// <summary>A break-off's start (#167 C2): the camp it ran from and the names of its target and chasers, remembered
+    /// as after a death (Remember, DEATHS.md A3; RememberFailedCamp, #167 F4), so it neither pulls them nor plans back
     /// there; on the walk to its anchor, that too (BarOldAnchor, #167 D9). #167 D1: none of it for a spent caster's
     /// (BreakOffWhy Spent): the power was the problem, not the camp or the names. #167 F-C: a can't-finish one's too
-    /// (RestsAfterBreakOff).</summary>
+    /// (RestsAfterBreakOff). #167 F-CS: a can't-finish one marks its target (target, targetCon) for the pick and the
+    /// plan (MarkCantFinish) and says so (BREAKOFF cfSkip=; -1 for every other why).</summary>
     public static void BrokeOffFrom(PlayerBotState state, ushort region, Vector3 at, IEnumerable<string> names, long now,
         string target = null, ConColor targetCon = ConColor.UNKNOWN)
     {
@@ -6198,7 +6212,7 @@ public static class PlayerBotDriver
     // A break-off's end: its line (PLAYER_BOT_BREAKOFF, #167 D1 why=), the state's end (FinishBreakOff: the relocation
     // owed, OwesReplan's rule as after a death; fought, no new break-off for BreakOffMilliseconds), and unless the bot died
     // (the death's own recovery then, HandleDeath) the sprint off. #167 E T1: turn=, holds=, speed= and chaserSpeed=;
-    // #167 F-O: sprint=; #167 F-W: joined= and wayAdds=; #167 F-C: qcLeft=.
+    // #167 F-O: sprint=; #167 F-W: joined= and wayAdds=; #167 F-C: qcLeft=; F-CS: cfSkip=.
     private static void EndBreakOff(PlayerBotState state, GamePlayer player, long now, string outcome)
     {
         if (Log.IsInfoEnabled)

@@ -352,8 +352,10 @@ public static class PlayerBotDriverReport
     /// point's straight way passed another monster's reach (no clear one), 0 when clear, -1 with no point
     /// (PlayerBotDriver.WayInAddReach). Then (#167 F-C) qcLeft=, a caster's Quickcast disable left at the start, whole
     /// seconds rounded up (PlayerBotDriver.QuickcastLeftSeconds, as DEATH qcLeft=; -1: no caster, or no Quickcast).
-    /// why= is (#167 F-C) cantfinish too: a caster hit with its Quickcast spent that would die before it came back and a
-    /// nuke was cast.</summary>
+    /// why= is (#167 F-C) cantfinish too: a caster hit with its Quickcast spent that would die before it came back and
+    /// a nuke was cast. Then (#167 F-CS) cfSkip=, 1 when a why=cantfinish run marked its target's name for the pick and
+    /// the plan (PlayerBotDriver.MarkCantFinish: yellow or harder, no kill of that name at yellow or harder in 15
+    /// minutes), 0 when it didn't, -1 for every other why and on a refusal.</summary>
     public static string FormatBreakOff(string bot, int level, int hp, int end, int attackers, long seconds, string outcome,
         double rate, string why, long sprintOff = -1, int endLeft = -1, string turn = "-", int holds = 0, int speed = -1,
         int chaserSpeed = -1, int sprint = -1, int joined = 0, int wayAdds = -1, int qcLeft = -1, int cfSkip = -1) =>
