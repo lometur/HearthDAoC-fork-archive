@@ -6849,7 +6849,9 @@ public sealed class UT_PlayerBotDriver
     // the rings' pick's crowd (-1: another pick); then (#167 F P2) due=, the bot's own kills' spots coming due by the
     // target or its stand point (-1: unread, a healer's or pet class's pick, or another pick); then (#167 F P4) seen=,
     // for a target not the rings' pick, whether that pick counted it, its search scanned it, or never saw it (-: a rings'
-    // pick), and pathCrowd=, the potential adds along the corridor of the pick's walk in (-1: unchecked).
+    // pick), and pathCrowd=, the potential adds along the corridor of the pick's walk in (-1: unchecked); then (#167 F
+    // F5) huntCrowd= and huntTarget=, the rings' pick a defence or a monster coming at the bot replaced on the walk in,
+    // its crowd= and name (-1 and "": none replaced).
     [Test]
     public void FightFormat()
     {
@@ -6861,7 +6863,7 @@ public sealed class UT_PlayerBotDriver
                 RaceLeft: 22, EndStart: 85, End: 31, StylesHeld: 3, CastsHeld: 2, Sight: 4, Blind: true, BlindSteps: 2,
                 HealCasts: 1, HealsLanded: 1, HealHolds: 6, HealHoldMax: 4, Taps: 3,
                 AddWhy: PlayerBotAddWhy.Control, CtlResisted: 1, CtlImmune: 0, QcControls: 1, QcNukes: 2, Reserve: 36, Lifted: true,
-                Over: 1, Due: 1, Seen: "scanned", PathCrowd: 2)),
+                Over: 1, Due: 1, Seen: "scanned", PathCrowd: 2, HuntCrowd: 1, HuntTarget: "forest giant")),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbotaaaac level=40 target=\"widow claw\" targetLevel=40 con=YELLOW from=pull result=kill " +
                        "startHp=100 endHp=38 startMana=100 endMana=12 sec=21 adds=1 swings=9 notVisible=2 casts=4 lifeKills=0 rests=0 " +
                        "pet=alive heals=2 qc=1 buffs=3 petCasts=2 waits=5 ctl=2 kites=1 ctlBroken=1 addCtl=1 addAt=6 addHp=71 " +
@@ -6869,7 +6871,7 @@ public sealed class UT_PlayerBotDriver
                        "wouldBreak=38 walk=hunt kiteNone=1:0:2:3 dots=2 qcKill=1 ctlMez=1 raceLeft=22 endStart=85 end=31 " +
                        "styleHeld=3 castHeld=2 sight=4 blind=1 blindSteps=2 healCast=1 healLanded=1 healHold=6 healHoldMax=4 " +
                        "taps=3 addWhy=ctl ctlResisted=1 ctlImmune=0 qcCtl=1 qcNuke=2 reserve=36 lifted=1 over=1 due=1 seen=scanned " +
-                       "pathCrowd=2"));
+                       "pathCrowd=2 huntCrowd=1 huntTarget=\"forest giant\""));
         Assert.That(PlayerBotDriverReport.FormatFight(new PlayerBotFight("Pbothaaab", 43, "empyrean guardian", 36, ConColor.BLUE, true,
                 false, 64, 51, 100, 100, 7, 2, 3, 0, 0, 3, 1, Rate: -0.04, Walk: PlayerBotWalk.BreakOff)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbothaaab level=43 target=\"empyrean guardian\" targetLevel=36 con=BLUE from=defence " +
@@ -6879,7 +6881,7 @@ public sealed class UT_PlayerBotDriver
                        "tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=breakoff kiteNone=0:0:0:0 dots=0 qcKill=0 ctlMez=0 " +
                        "raceLeft=-999 endStart=-1 end=-1 styleHeld=0 castHeld=0 sight=0 blind=0 blindSteps=0 healCast=0 " +
                        "healLanded=0 healHold=0 healHoldMax=0 taps=0 addWhy=none ctlResisted=0 ctlImmune=0 qcCtl=0 " +
-                       "qcNuke=0 reserve=0 lifted=0 over=-1 due=-1 seen=- pathCrowd=-1"),
+                       "qcNuke=0 reserve=0 lifted=0 over=-1 due=-1 seen=- pathCrowd=-1 huntCrowd=-1 huntTarget=\"\""),
             "a gain under 0.05 a second: 0.0, not -0.0");
     }
 
@@ -7918,7 +7920,8 @@ public sealed class UT_PlayerBotDriver
     // ctlResisted=, ctlImmune=, qcCtl= and qcNuke= (-1 each out of a fight) and qcLeft=, the seconds before Quickcast is
     // ready again, at any death (-1 without it); then (#167 F P1) crowd=, FIGHT's: the rings' pick's crowding of its
     // target (-1: no target, or another pick), and (#167 F P1b) over=, (#167 F P2) due= and (#167 F P4) seen= and
-    // pathCrowd=, FIGHT's too.
+    // pathCrowd=, FIGHT's too; then (#167 F F5) FIGHT's huntCrowd= and huntTarget= (-1 and "" with no target) and the
+    // fatal fight's blindSteps= (-1 out of a fight).
     [Test]
     public void DeathDetailFormat()
     {
@@ -7930,7 +7933,7 @@ public sealed class UT_PlayerBotDriver
                 TargetMezzes: 1, RaceLeft: 35, StylesHeld: 3, CastsHeld: 1, Heals: 2, HealCasts: 1, HealsLanded: 0,
                 HealHolds: 4, HealHoldMax: 3, Taps: 2, AddWhy: PlayerBotAddWhy.Control, CtlResisted: 0, CtlImmune: 0,
                 QcControls: 1, QcNukes: 0, QcLeft: 22, Crowd: 3, Over: 1, Due: 1,
-                Seen: "scanned", PathCrowd: 2)),
+                Seen: "scanned", PathCrowd: 2, HuntCrowd: 1, HuntTarget: "forest giant", BlindSteps: 1)),
             Is.EqualTo("activity=Fighting startHp=62 fightSec=14 targetHp=71 from=pull adds=2 lifeKills=3 rests=0 sinceKillSec=40 " +
                        "mana=100 swings=6 notVisible=1 killer=\"widow claw\" killerLevel=40 killerIsTarget=True fromBind=748 " +
                        "avoided=2 again=True sinceRelease=42 ill=True ctl=2 kites=1 casts=4 qc=1 waits=3 ctlBroken=1 addCtl=1 " +
@@ -7938,7 +7941,7 @@ public sealed class UT_PlayerBotDriver
                        "rate=12.5 wouldBreak=52 walk=anchor end=64 kiteNone=0:2:1:0 dots=1 qcKill=1 ctlMez=1 raceLeft=35 " +
                        "styleHeld=3 castHeld=1 heals=2 healCast=1 healLanded=0 healHold=4 healHoldMax=3 taps=2 " +
                        "addWhy=ctl ctlResisted=0 ctlImmune=0 qcCtl=1 qcNuke=0 qcLeft=22 crowd=3 over=1 due=1 seen=scanned " +
-                       "pathCrowd=2"));
+                       "pathCrowd=2 huntCrowd=1 huntTarget=\"forest giant\" blindSteps=1"));
         // Out of a fight, no target, no kill this life, no killer named by the Dying event, the bind in another region.
         Assert.That(PlayerBotDriverReport.FormatDeathDetail(new PlayerBotDeathDetail(PlayerBotActivity.Hunting, -1, -1, -1, true,
                 -1, 0, 2, -1, 37, -1, -1, null, 0, false, -1, BreakOff: true, Rate: 3, Walk: PlayerBotWalk.Clear, Endurance: 100)),
@@ -7949,9 +7952,35 @@ public sealed class UT_PlayerBotDriver
                        "rate=3.0 wouldBreak=-1 walk=clear end=100 kiteNone=-1:-1:-1:-1 dots=-1 qcKill=-1 ctlMez=-1 " +
                        "raceLeft=-999 styleHeld=-1 castHeld=-1 heals=-1 healCast=-1 healLanded=-1 healHold=-1 " +
                        "healHoldMax=-1 taps=-1 addWhy=-1 ctlResisted=-1 ctlImmune=-1 qcCtl=-1 qcNuke=-1 qcLeft=-1 crowd=-1 " +
-                       "over=-1 due=-1 seen=- pathCrowd=-1"),
+                       "over=-1 due=-1 seen=- pathCrowd=-1 huntCrowd=-1 huntTarget=\"\" blindSteps=-1"),
             "died on a break-off's run: out of a fight (the dropped one's FIGHT has it)");
     }
+
+    // #167 F F5: DEATH's hunt fields come last with their defaults, so a line from a record that sets none of them still
+    // ends in the same order (deathdiag.py and the measure scripts read key=value; the fields before stay). Before F5
+    // the line ended at pathCrowd=.
+    [Test]
+    public void A_death_line_ends_with_the_hunt_pick_and_the_blind_steps()
+    {
+        string line = PlayerBotDriverReport.FormatDeathDetail(new PlayerBotDeathDetail(PlayerBotActivity.Fighting, 62, 14, 71,
+            true, 2, 3, 0, 40, 100, 6, 1, "widow claw", 40, true, 748));
+        Assert.That(line, Does.EndWith(" pathCrowd=-1 huntCrowd=-1 huntTarget=\"\" blindSteps=-1"));
+    }
+
+    // #167 F F5 (remainder F5's check): a target that is no ring pick keeps the ring pick it replaced on the walk in, its
+    // crowd= and name; a defence after a defence keeps what the first carried; a ring pick, or none, carries nothing.
+    // TakeTarget overwrote the pick's crowd= with -1 (PickCrowd), so a defence on the walk in to a pick (about 33 a leg
+    // on the seven base legs, 41 of them fatal within 60 s over the seven) lost it.
+    [TestCase(true, false, "forest giant", 2, -1, null, 2, "forest giant")]        // a defence replaces the pick
+    [TestCase(true, false, "forest giant", 0, -1, null, 0, "forest giant")]        //   an uncrowded one
+    [TestCase(true, false, "a wolf", -1, 2, "forest giant", 2, "forest giant")]    // a defence after a defence
+    [TestCase(true, false, null, -1, 2, "forest giant", -1, null)]                 // none before (after a kill)
+    [TestCase(true, true, "forest giant", 2, -1, null, -1, null)]                  // a ring pick
+    [TestCase(false, false, "forest giant", 2, -1, null, -1, null)]                // dropped: no target
+    public void A_defence_keeps_the_pick_it_replaced_on_the_walk_in(bool found, bool ringPick, string oldTarget, int oldCrowd,
+        int carriedCrowd, string carriedTarget, int crowd, string target) =>
+        Assert.That(PlayerBotDriver.HuntReplaced(found, ringPick, oldTarget, oldCrowd, (carriedCrowd, carriedTarget)),
+            Is.EqualTo((crowd, target)));
 
     // DEATH again= and sinceRelease= (#167 F4): a death with no kill since the bot's last release; none before the first
     // release of the login.
@@ -7988,7 +8017,7 @@ public sealed class UT_PlayerBotDriver
             "hpAtReach=-1 tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=none end=-1 kiteNone=-1:-1:-1:-1 dots=-1 qcKill=-1 " +
             "ctlMez=-1 raceLeft=-999 styleHeld=-1 castHeld=-1 heals=-1 healCast=-1 healLanded=-1 healHold=-1 healHoldMax=-1 " +
             "taps=-1 addWhy=-1 ctlResisted=-1 ctlImmune=-1 qcCtl=-1 qcNuke=-1 qcLeft=-1 crowd=-1 over=-1 due=-1 " +
-            "seen=- pathCrowd=-1"));
+            "seen=- pathCrowd=-1 huntCrowd=-1 huntTarget=\"\" blindSteps=-1"));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, add, target),
             Does.Contain(" killer=\"a wolf\" killerLevel=38 killerIsTarget=False fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False "));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, null, null),

@@ -303,6 +303,8 @@ public sealed class PlayerBotState
     public readonly List<(GameNPC Npc, Vector3 At, int Reach, long KilledAt)> RecentRespawns = new();   // #167 F P2: the
     public int PickDue = -1;                                     //   last kills' monsters, due at the pick 50-150 s after the
                                                                  //   kill (DueAfterKill), and FIGHT due=
+    public int HuntCrowd = -1;                                   // #167 F F5: FIGHT and DEATH huntCrowd= and huntTarget=,
+    public string HuntTarget;                                    //   the rings' pick a defence replaced (HuntReplaced)
     public (int At, int Hp) FightAdd = (-1, -1);                 // #167 FIGHT and DEATH addAt= and addHp= (FirstAdd), the
     public int EngageDistance = -1, PickCrowd = -1;              //   distance at the first think in reach, the pick's
                                                                  //   crowding (crowd=, FindWithin's; -1 for another pick);
@@ -1615,6 +1617,8 @@ public static class PlayerBotDriver
     // and its damage spell. #167 F: the rings' pick's reading (PlayerBotPickReading; None for another pick).
     private static void TakeTarget(PlayerBotState state, GamePlayer player, GameNPC found, PlayerBotPickReading reading)
     {
+        (state.HuntCrowd, state.HuntTarget) = HuntReplaced(found != null, reading.Crowd >= 0, state.Target?.Name,
+            state.PickCrowd, (state.HuntCrowd, state.HuntTarget));                         // #167 F F5: before both go
         state.PickSeen = found != null && reading.Crowd < 0                               // #167 F P4: seen= for a pick
             ? SeenAtPick(state.Target != null && state.PickCounted.Contains(found),       //   not the rings', while the
                 state.SearchAdds.Contains(found)) : "-";                                  //   pick it was read for (or
@@ -4276,6 +4280,18 @@ public static class PlayerBotDriver
         bool passedOver) =>
         (passedOver || refused > 0, !found && refused > 0, found);
 
+    /// <summary>FIGHT and DEATH huntCrowd= and huntTarget= (#167 F F5; remainder F5's check): TakeTarget overwrote the
+    /// pick's crowd= with -1 when a defence replaced it (PickCrowd), so a fight a monster started on the walk in to a
+    /// pick (walk=hunt: about 33 a leg on the seven base legs, 41 of them fatal within 60 s over the seven) couldn't tell
+    /// the pick's crowd from a roamer. A new target found that is no rings' pick (ringPick: crowd= 0 or more; a defence,
+    /// a monster coming at the bot, a caught bot's turn) keeps the rings' pick it replaced (oldTarget's name, oldCrowd 0
+    /// or more), or the one the target it replaced carried (a defence replacing a defence: carried); a rings' pick, no
+    /// target, or no target before, (-1, null). A turn after a break-off has none before (the break-off's Disengage): its
+    /// pick's crowd= is on the break-off's own FIGHT line.</summary>
+    public static (int Crowd, string Target) HuntReplaced(bool found, bool ringPick, string oldTarget, int oldCrowd,
+        (int Crowd, string Target) carried) =>
+        !found || ringPick || oldTarget == null ? (-1, null) : oldCrowd >= 0 ? (oldCrowd, oldTarget) : carried;
+
     /// <summary>FIGHT and DEATH addAt= and addHp= (#167, the next leg's: when the second-monster case starts): the first
     /// think in a fight a second monster, any but the target, alive and on the bot (onBot: IsAttacking), is on the bot's
     /// attacker list or comes at it (coming: the add scan's, ScanComing), as the whole seconds since the fight's first
@@ -6018,7 +6034,9 @@ public static class PlayerBotDriver
                 quickcast == null ? 0 : player.GetSkillDisabledDuration(quickcast)),
             target != null ? state.PickCrowd : -1, target != null ? state.PickOver : -1,   // #167 F P1 crowd=, P1b
             target != null ? state.PickDue : -1,                                          //   over=, P2 due=, P4
-            target != null ? state.PickSeen : "-", target != null ? state.PickPathCrowd : -1);   //   seen= and pathCrowd=
+            target != null ? state.PickSeen : "-", target != null ? state.PickPathCrowd : -1,   //   seen= and pathCrowd=
+            target != null ? state.HuntCrowd : -1, target != null ? state.HuntTarget : null,   // #167 F F5: the hunt
+            inFight ? state.FightBlindSteps : -1);                                        //   pick, blindSteps=
         string head = $"PLAYER_BOT_DEATH bot={player.Name} level={player.Level} at=({player.X},{player.Y},{player.Z}) " +
                       $"zone={player.CurrentZone?.ID} {fight} attackers={state.Attackers} deathSteps={state.DeathSafetySteps} " +
                       $"aliveSec={(now - state.AliveSince) / 1000} task={state.Task != null}";
@@ -6160,7 +6178,8 @@ public static class PlayerBotDriver
             state.PickLifted,                                                           // #167 F P1
             state.PickOver,                                                             // #167 F P1b
             state.PickDue,                                                              // #167 F P2
-            state.PickSeen, state.PickPathCrowd)));                                     // #167 F P4
+            state.PickSeen, state.PickPathCrowd,                                        // #167 F P4
+            state.HuntCrowd, state.HuntTarget)));                                       // #167 F F5
     }
 
     // APP:585-624, changed: every 10 s, no inventory count, no saves; after 15 minutes with no progress, back to the

@@ -596,7 +596,12 @@ All start `PLAYER_BOT_`:
   replaced counted), `scanned` (that search had it, but its reach covered neither the target nor the straight walk in)
   or `unseen` (that search never had it), `-` for a rings' pick; and `pathCrowd=`, the potential adds along the
   corridor of the pick's walk in, counted for a melee or archer bot's new target over 1,000 units away, at most once
-  every 4 s (-1: not counted, or no corridor; logged only).
+  every 4 s (-1: not counted, or no corridor; logged only). Both then give `huntCrowd=` and `huntTarget=`: when a
+  defence or a monster coming at the bot replaced the rings' pick it was walking to, that pick's `crowd=` and name (a
+  defence after a defence keeps the first one's; -1 and "" otherwise, and on `DEATH` with no target). A turn on a
+  chaser after a break-off replaced none, so it reads -1: its pick's `crowd=` is on the break-off's `FIGHT
+  result=dropped breakOff=1` line. `DEATH` then ends with the fatal fight's `blindSteps=` as `FIGHT` gives it (-1 out
+  of a fight).
   `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `walkout`, `rest`, `kite`, `turret`
   or `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
   after a break-off its `reason=` is `brokeoff`. Either ends with `barred=old` when the death or the break-off came on
