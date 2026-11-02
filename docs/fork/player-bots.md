@@ -661,8 +661,8 @@ All start `PLAYER_BOT_`:
   and `wayAdds=`, 1 when its spot's straight way passed another aggressive monster's reach (there was no clear one), 0
   when clear, -1 with no spot, and `qcLeft=`, a caster's Quickcast disable left at the start in whole seconds, rounded
   up as `DEATH`'s (-1: no caster, or no Quickcast); then `cfSkip=`, 1 when a `cantfinish` run made its target's name
-  its picks' and plans' skip (yellow or harder, not killed at that con or harder in 15 minutes), 0 when it didn't, -1
-  for every other why and on a refusal. A break-off that would fire but doesn't logs once a fight as
+  its picks' and plans' skip (yellow or harder, no kill of that name at yellow or harder in the 15 minutes before), 0
+  when it didn't, -1 for every other why and on a refusal. A break-off that would fire but doesn't logs once a fight as
   `outcome=refused` with `sec=0` and the bot's `hp=`, `end=`, `attackers=` and `rate=` then, and `why=`: `control` (an
   add's control comes first), `speed` (a chaser as fast as its sprint), `sprint` (its sprint too short for the
   fastest), `ranged` (a chaser that harms from range) or `point` (nowhere to run), with `sprintOff=-1`, `endLeft=` its
