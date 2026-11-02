@@ -367,6 +367,9 @@ public sealed class PlayerBotState
                                                                  //   detour went round on this walk, each read at the
     public int RouteBlockerMargin;                               //   margin its legs kept (DetourClearance; the
                                                                  //   detour's)
+    public GameNPC RouteGaveUpOn;                                // #167 F12-R: the monster its walk gave its camp up
+                                                                 //   for (GiveUpRoute), the replan's blocker
+                                                                 //   (RouteGiveUpBlockers)
 }
 
 // HearthDAoC player bots (#137): a thin copy of the /bot pilot's think (bots/autonomous/AutonomousPlayerPilot.cs:229-374) for a
@@ -2146,15 +2149,16 @@ public static class PlayerBotDriver
     /// reason (RelocateReason) and the fallback camp's con, - for none (the death cap holds, Cap); after a death, the
     /// milliseconds since the release, barred=old when the plan bars the anchor it had (#167 D9), and capKill= (#167 D6;
     /// RelocateSuffix). #167 E W1: then recent=1 on a plan after a death (AfterDeathPlan) and near=1 on a camp its near
-    /// pass took (RelocateSuffix).</summary>
+    /// pass took (RelocateSuffix). #167 F12-R: a route give-up's ends with routeSkipped= (RelocateSuffix).</summary>
     public static string RelocateLine(string bot, int level, Vector3 from, Vector3 to, int distance, string monster,
         int monsterLevel, ushort zone, string reason, ConColor? fallback, long sinceReleaseMs, bool barredOld,
         ConColor? capKill, bool recent = false, bool near = false, int crowdRefused = 0, bool lifted = false,
-        int overSkipped = 0) =>
+        int overSkipped = 0, int routeSkipped = 0) =>
         $"PLAYER_BOT_RELOCATE bot={bot} level={level} from=({from.X:0},{from.Y:0}) to=({to.X:0},{to.Y:0},{to.Z:0}) " +
         $"distance={distance} monster=\"{monster}\" monsterLevel={monsterLevel} zone={zone} reason={reason} " +
         $"fallback={fallback?.ToString() ?? "-"}" +
-        RelocateSuffix(reason, sinceReleaseMs, barredOld, capKill, recent, near, crowdRefused, lifted, overSkipped);
+        RelocateSuffix(reason, sinceReleaseMs, barredOld, capKill, recent, near, crowdRefused, lifted, overSkipped,
+            routeSkipped);
 
     /// <summary>#167 F12: PLAYER_BOT_ROUTE, a walk's blocker (GuardsRoute) and what the bot did (action=: detour,
     /// giveup, pass; blocked: a detour's walk ended blocked): its name, con, the bot's cap, its pack (RoutePackAt; -1 on
@@ -2169,12 +2173,14 @@ public static class PlayerBotDriver
         $"waypoint={(waypoint is Vector3 w ? $"({w.X:0},{w.Y:0},{w.Z:0})" : "-")}";
 
     /// <summary>PLAYER_BOT_RELOCATE when no camp checked had a corridor (or none was found): checked= of them. #167 F
-    /// P1: lifted=1 when the fallback in place that follows lifted the crowd limits (FallBackInPlace).</summary>
+    /// P1: lifted=1 when the fallback in place that follows lifted the crowd limits (FallBackInPlace). #167 F12-R: on a
+    /// route give-up's, the spots it skipped (routeSkipped=: a corridor, but a way past a blocker) count too.</summary>
     public static string RelocateNoneLine(string bot, int level, int candidates, ushort zone, string reason,
         long sinceReleaseMs, bool barredOld, ConColor? capKill, bool recent = false, int crowdRefused = 0,
-        bool lifted = false, int overSkipped = 0) =>
+        bool lifted = false, int overSkipped = 0, int routeSkipped = 0) =>
         $"PLAYER_BOT_RELOCATE bot={bot} level={level} none checked={candidates} zone={zone} reason={reason}" +
-        RelocateSuffix(reason, sinceReleaseMs, barredOld, capKill, recent, false, crowdRefused, lifted, overSkipped);
+        RelocateSuffix(reason, sinceReleaseMs, barredOld, capKill, recent, false, crowdRefused, lifted, overSkipped,
+            routeSkipped);
 
     /// <summary>#167 F P1 (the review: every lift logged): PLAYER_BOT_LIFT, a fallback in place that lifted the crowd
     /// limits where RelocateIfOutgrown writes no RELOCATE line (why=norelocate: it can't move its leash, or no zone to
@@ -2188,13 +2194,15 @@ public static class PlayerBotDriver
     // the bot in the last 5 minutes, YELLOW or harder (RememberKillerCon), while it keeps one (PlanCaps). #167 E W1: then
     // recent=1 and near=1. #167 F P1: then crowdRefused=, the crowd bars' spots a capped plan barred, and lifted=1 on a
     // camp it took anyway (InCrowdBarred) or a fallback in place that lifted the limits. #167 F P3: then overSkipped=, the
-    // fit spots skipped for an over-cap aggressive monster in reach (each once).
+    // fit spots skipped for an over-cap aggressive monster in reach (each once). #167 F12-R: last, on a route give-up's
+    // (reason=route) only, routeSkipped=, the camp spots skipped for a monster it gave up on or walked past (0 too).
     private static string RelocateSuffix(string reason, long sinceReleaseMs, bool barredOld, ConColor? capKill,
-        bool recent, bool near, int crowdRefused = 0, bool lifted = false, int overSkipped = 0) =>
+        bool recent, bool near, int crowdRefused = 0, bool lifted = false, int overSkipped = 0, int routeSkipped = 0) =>
         (reason == Died ? $" sinceRelease={sinceReleaseMs}" : "") + (barredOld ? " barred=old" : "") +
         (capKill is ConColor kill ? $" capKill={kill}" : "") + (recent ? " recent=1" : "") + (near ? " near=1" : "") +
         (crowdRefused > 0 ? $" crowdRefused={crowdRefused}" : "") + (lifted ? " lifted=1" : "") +
-        (overSkipped > 0 ? $" overSkipped={overSkipped}" : "");
+        (overSkipped > 0 ? $" overSkipped={overSkipped}" : "") +
+        (reason == RouteGiveUp ? $" routeSkipped={routeSkipped}" : "");
 
     /// <summary>The capped clock after a search of the wider ring (or one that found a target): set at the first that
     /// passed a monster over for the cap and found none, kept while that lasts, 0 once a search finds a target or
@@ -3392,29 +3400,58 @@ public static class PlayerBotDriver
     }
 
     /// <summary>#167 F12: whether a route threat (threats[index]) blocks a route (from the bot to its goal) within
-    /// lookAhead: its reach (aggro range + AddMargin) crosses it there within 160 of the route's height (the GameBots'
-    /// corridor test, AutonomousDungeonPolicy.IntersectsCorridor), it is not within its aggro range of the route's start
-    /// (a fight self-defence has already), it doesn't reach the camp (camp, else the route's end: the camp's own, the
-    /// plan's: PlanRelocation's over-cap bar), and it RouteBlocks under cap in its pack (RoutePackAt). One whose reach
-    /// covers the start (near the bot) blocks only where the route ahead enters its aggro range (the build's review: a
-    /// late look, after a fight, walked the bot into it). along: how far along the route the first leg it crosses passes
-    /// nearest it (IntersectsCorridor's). margin: the corridor's reach past the aggro range, AddMargin but on a detour's
-    /// walk (GuardsRoute: AddMargin / 2, the clearance DetourLegsClear checked its legs at; the review of F12).</summary>
+    /// lookAhead: its reach crosses it there (RouteCrosses) and it RouteBlocks under cap in its pack (RoutePackAt).
+    /// along, margin and camp: RouteCrosses'.</summary>
     public static bool BlocksRoute<T>(ReadOnlySpan<Vector3> route, int index,
         IReadOnlyList<(T Npc, Vector3 At, int AggroRange, ConColor Con)> threats, ConColor cap, float lookAhead,
         out int pack, out float along, int margin = AddMargin, Vector3? camp = null) where T : class
     {
-        (pack, along) = (0, float.MaxValue);
+        pack = 0;
         (_, Vector3 at, int aggroRange, ConColor con) = threats[index];
+        if (!RouteCrosses(route, at, aggroRange, lookAhead, margin, camp, out along)) return false;
+        pack = RoutePackAt(route, index, threats, lookAhead);
+        return RouteBlocks(con, cap, pack);
+    }
+
+    /// <summary>#167 F12: BlocksRoute's reach test, its con and pack aside (#167 F12-R: ReplanBlocker's too), for a
+    /// monster at `at`: its reach (aggro range + margin) crosses the route within lookAhead, within 160 of the route's
+    /// height (the GameBots' corridor test, AutonomousDungeonPolicy.IntersectsCorridor), it is not within its aggro
+    /// range of the route's start (a fight self-defence has already), and it doesn't reach the camp (camp, else the
+    /// route's end: the camp's own, the plan's: PlanRelocation's over-cap bar). One whose reach covers the start (near
+    /// the bot) crosses only where the route ahead enters its aggro range (the build's review: a late look, after a
+    /// fight, walked the bot into it). along: how far along the route the first leg it crosses passes nearest it
+    /// (IntersectsCorridor's). margin: the reach past the aggro range, AddMargin but on a detour's walk (GuardsRoute:
+    /// AddMargin / 2, the clearance DetourLegsClear checked its legs at; the review of F12).</summary>
+    public static bool RouteCrosses(ReadOnlySpan<Vector3> route, Vector3 at, int aggroRange, float lookAhead,
+        int margin, Vector3? camp, out float along)
+    {
+        along = float.MaxValue;
         if (route.Length < 2) return false;
         bool nearStart = CoversPoint(at, aggroRange, route[0]);
         if (Vector3.DistanceSquared(at, route[0]) <= (float)aggroRange * aggroRange ||
-            CoversPoint(at, aggroRange, camp ?? route[^1]) ||
-            !AutonomousDungeonPolicy.IntersectsCorridor(route, at, nearStart ? aggroRange : aggroRange + margin, lookAhead,
-                out along))
+            CoversPoint(at, aggroRange, camp ?? route[^1]))
             return false;
-        pack = RoutePackAt(route, index, threats, lookAhead);
-        return RouteBlocks(con, cap, pack);
+        return AutonomousDungeonPolicy.IntersectsCorridor(route, at, nearStart ? aggroRange : aggroRange + margin,
+            lookAhead, out along);
+    }
+
+    /// <summary>#167 F12-R: the monster a route give-up's replan (TakeCamp) skips a camp spot for: the first of
+    /// blockers (the one the walk gave its camp up for, then those it walked on past: RouteGiveUpBlockers) whose reach
+    /// (aggro range + AddMargin, 3D) covers the spot (a camp of the blocker itself, or in its reach: the look-ahead's
+    /// camp's own), or that the spot's route (from the bot along its corridor to the spot, WalkRoute) passes as the
+    /// look-ahead reads a monster (RouteCrosses at AddMargin, the spot its camp), the whole way, not RouteLookAhead.
+    /// Its con and pack aside: the walk found each a blocker. Its index, or -1.</summary>
+    public static int ReplanBlocker(ReadOnlySpan<Vector3> route, Vector3 spot,
+        IReadOnlyList<(Vector3 At, int AggroRange)> blockers)
+    {
+        for (int i = 0; i < blockers.Count; i++)
+        {
+            (Vector3 at, int aggroRange) = blockers[i];
+            if (CoversPoint(at, aggroRange, spot) ||
+                RouteCrosses(route, at, aggroRange, float.MaxValue, AddMargin, spot, out _))
+                return i;
+        }
+        return -1;
     }
 
     /// <summary>#167 F12: the first monster along a walk's route ahead (route: from the bot, UpcomingRoute) that blocks it
@@ -3516,7 +3553,7 @@ public static class PlayerBotDriver
         detourFound ? PlayerBotRouteAction.Detour : mayGiveUp ? PlayerBotRouteAction.GiveUp : PlayerBotRouteAction.Pass;
 
     /// <summary>#167 F12: a new walk for the look-ahead (GuardsRoute, at a goal it hasn't read): no detour, none counted,
-    /// none passed or gone round.</summary>
+    /// none passed or gone round (#167 F12-R: nor given up on).</summary>
     public static void StartRoute(PlayerBotState state, Vector3 goal)
     {
         state.RouteGoal = goal;
@@ -3524,15 +3561,18 @@ public static class PlayerBotDriver
         state.RouteDetours.Clear();
         state.RoutePassed.Clear();
         state.RouteRounded.Clear();
+        state.RouteGaveUpOn = null;
     }
 
     /// <summary>#167 F12: a walk to its camp that gives the camp up (GuardsRoute): the camp barred as a failed one
     /// (RememberFailedCamp, 15 minutes; RELOCATE barred=old), a relocation owed at once (RouteGiveUp; planned from
     /// where it stands, RelocationOrigin), the bot held for it from now (no walk: HoldsForRelocation, MaxHoldMilliseconds
-    /// at most), no other give-up for RouteGiveUpMilliseconds.</summary>
-    public static void GiveUpRoute(PlayerBotState state, long now)
+    /// at most), no other give-up for RouteGiveUpMilliseconds. #167 F12-R: blocker, the monster it gave the camp up
+    /// for, kept for the replan (RouteGaveUpOn), as are the monsters it walked on past (RoutePassed).</summary>
+    public static void GiveUpRoute(PlayerBotState state, long now, GameNPC blocker = null)
     {
         RememberFailedCamp(state.FailedCamps, state.AnchorRegion, state.Anchor, now);
+        state.RouteGaveUpOn = blocker;
         state.ReplanOwed = RouteGiveUp;
         state.ReplanSince = now;
         state.NextRelocateTick = 0;
@@ -5458,7 +5498,7 @@ public static class PlayerBotDriver
                     state.RouteGoalDetours++;
                     return false;
                 case PlayerBotRouteAction.GiveUp:
-                    GiveUpRoute(state, now);
+                    GiveUpRoute(state, now, npc);
                     state.Mover.Stop(now);
                     return true;
                 default:
@@ -5658,7 +5698,9 @@ public static class PlayerBotDriver
     // monsters read by IsPlannable (PlanMonsters; C1 held the plan until it was over: IsAttackable found none then). The
     // anchor's region is the bot's (CanRelocate). #167 E W1: after a death (AfterDeathPlan) it first takes a camp near
     // where it stands (PlanCampChoice's near pass: the zone it stands in, within NearWalk, corridors from here), and only
-    // with none the plan as before. One read of the region's monsters serves both passes.
+    // with none the plan as before. One read of the region's monsters serves both passes. #167 F12-R: a route give-up's
+    // plan skips the camp spots whose way passes a monster that walk gave up on or walked past (TakeCamp,
+    // ReplanBlocker).
     private static void RelocateIfOutgrown(PlayerBotState state, GamePlayer player, long now)
     {
         string reason = RelocateReason(state.RoamingSince, state.CappedSince, now, state.ReplanOwed);
@@ -5706,6 +5748,9 @@ public static class PlayerBotDriver
         Vector3? nearFrom = nearZone != null && nav.HasNavmesh(nearZone) ? here : null;   // on the mesh (checked above)
         HashSet<GameNPC> overSkipped = new();                                      // #167 F P3: RELOCATE overSkipped=,
                                                                                    //   each spot once (the review)
+        List<(Vector3 At, int AggroRange)> gaveUpOn =                              // #167 F12-R: a route give-up's
+            reason == RouteGiveUp ? RouteGiveUpBlockers(state, player) : null;     //   blockers, and the spots skipped
+        int routeSkipped = 0;                                                      //   for them (routeSkipped=)
         (GameNPC[] spots, ConColor? fallback, bool stale, bool near) = PlanCampChoice(nearMonsters, monsters, here, from,
             fit, natural, failed, state.RelocateRejected, RelocateCandidates, killerCon, afterDeath, nearAdds: nearAdds,
             planAdds: planAdds, overSkipped: overSkipped);
@@ -5723,10 +5768,12 @@ public static class PlayerBotDriver
             FallBack(state, player, reason, now);                                  //   time either; #167 F P1: a lift
         if (Log.IsInfoEnabled)
             Log.Info(RelocateNoneLine(player.Name, player.Level, spots.Length, zone.ID, reason, now - state.ReleasedAt,
-                barredOld, killerCon, afterDeath, crowdRefused, lifted, overSkipped.Count));
+                barredOld, killerCon, afterDeath, crowdRefused, lifted, overSkipped.Count, routeSkipped));
 
         // The first of a camp's spots it has a corridor to (one without is rejected, RelocateRejected): RELOCATE, PlanCamp.
         // #167 F P1: a spot the crowd bar barred (only the fallback takes one) lifts the limits there (InCrowdBarred).
+        // #167 F12-R: on a route give-up's plan, not one whose way (its corridor, kept) passes a blocker
+        // (ReplanBlocker); such a spot is skipped, not rejected (the blocker may move or die): a later plan tries it.
         bool TakeCamp(GameNPC[] camp, ConColor? campFallback, bool campStale, bool nearCamp)
         {
             Zone campZone = nearCamp ? nearZone : zone;
@@ -5734,9 +5781,17 @@ public static class PlayerBotDriver
             foreach (GameNPC npc in camp)
             {
                 Vector3 spot = new(npc.X, npc.Y, npc.Z);
-                if (walkFrom is Vector3 origin && !PlayerTravelPath.TryBuildCorridor(nav, campZone, origin, spot, out _))
+                List<WrappedPathfindingNode> corridor = null;
+                if (walkFrom is Vector3 origin &&
+                    !PlayerTravelPath.TryBuildCorridor(nav, campZone, origin, spot, out corridor))
                 {
                     state.RelocateRejected.Add(npc);
+                    continue;
+                }
+                if (gaveUpOn is { Count: > 0 } &&
+                    ReplanBlocker(WalkRoute(walkFrom ?? here, corridor, spot), spot, gaveUpOn) >= 0)
+                {
+                    routeSkipped++;                                                     // #167 F12-R
                     continue;
                 }
                 long liftUntil = CampLiftUntil(crowdRefused, spot, crowdBarred, now);
@@ -5744,12 +5799,45 @@ public static class PlayerBotDriver
                 if (Log.IsInfoEnabled)
                     Log.Info(RelocateLine(player.Name, player.Level, state.Anchor, spot, (int)Vector3.Distance(here, spot),
                         npc.Name, npc.EffectiveLevel, campZone.ID, reason, campFallback, now - state.ReleasedAt, barredOld,
-                        killerCon, afterDeath, nearCamp, crowdRefused, liftedCamp, overSkipped.Count));
+                        killerCon, afterDeath, nearCamp, crowdRefused, liftedCamp, overSkipped.Count, routeSkipped));
                 PlanCamp(state, spot, campFallback, campStale, reason, liftUntil);   // and BACK replan=moved (#167 C1)
                 return true;
             }
             return false;
         }
+    }
+
+    // #167 F12-R: a route give-up's blockers for its replan (ReplanBlocker): the monster the walk gave its camp up for
+    // (RouteGaveUpOn), then those it walked on past (RoutePassed), each still alive in the bot's region, where it
+    // stands now, at its aggro range: monsters the bot has seen on that walk. Read as the plan reads an add
+    // (PlanMonsters: aggressive, not grey to the bot, busy or not).
+    private static List<(Vector3 At, int AggroRange)> RouteGiveUpBlockers(PlayerBotState state, GamePlayer player)
+    {
+        List<(Vector3 At, int AggroRange)> blockers = new();
+        void Add(GameNPC npc)
+        {
+            if (npc != null && npc.IsAlive && npc.ObjectState is GameObject.eObjectState.Active &&
+                npc.CurrentRegion == player.CurrentRegion && npc.Brain is StandardMobBrain brain &&
+                IsPotentialAdd(brain.AggroLevel, brain.AggroRange, player.IsObjectGreyCon(npc), false))
+                blockers.Add((new(npc.X, npc.Y, npc.Z), brain.AggroRange));
+        }
+        Add(state.RouteGaveUpOn);
+        foreach (GameNPC npc in state.RoutePassed)
+            if (npc != state.RouteGaveUpOn) Add(npc);
+        return blockers;
+    }
+
+    // #167 F12-R: a camp spot's way from where its walk starts (ReplanBlocker's): start, its corridor's corners (none:
+    // straight), the spot; in _route (part C's WalkRoute, the spot added: a corridor ends on the mesh near it).
+    private static ReadOnlySpan<Vector3> WalkRoute(Vector3 start, List<WrappedPathfindingNode> corridor, Vector3 spot)
+    {
+        List<Vector3> points = _route ??= new();
+        points.Clear();
+        points.Add(start);
+        if (corridor != null)
+            foreach (WrappedPathfindingNode node in corridor) points.Add(node.Position);
+        points.Add(spot);
+        return System.Runtime.InteropServices.CollectionsMarshal.AsSpan(points);
     }
 
     // A capped bot's FallBackInPlace; after a death (#167 F4) or a break-off (C2), the end of the relocation owed; after a

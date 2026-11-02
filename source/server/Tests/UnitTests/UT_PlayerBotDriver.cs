@@ -10167,6 +10167,7 @@ public sealed class UT_PlayerBotDriver
             roam.Invoke(null, [giving, bot, 10_000L]);
             Assert.That((giving.ReplanOwed, giving.RoamDestination, giving.NextRouteGiveUpTick, (int)bot.CurrentSpeed),
                 Is.EqualTo((PlayerBotDriver.RouteGiveUp, (Vector3?)null, 610_000L, 0)), "gave its camp up, stopped");
+            Assert.That(giving.RouteGaveUpOn, Is.SameAs(drake), "#167 F12-R: the monster given up on, for the replan");
             Assert.That(PlayerBotDriver.FailedCamps(giving.FailedCamps, region.ID, 10_000), Is.EqualTo(new[] { anchor }));
             PlayerBotState passing = Walking(10_000);
             passing.NextRouteGiveUpTick = 10_001;
@@ -10550,6 +10551,143 @@ public sealed class UT_PlayerBotDriver
                 Assert.That(PlayerBotDriverReport.TakeCrossings(60).Dropped, Is.EqualTo(0L));
             }
             finally { states.TryRemove(bot, out _); }
+        });
+    }
+
+
+    // --- #167 F12-R: a route give-up's replan skips the camps behind the monster it gave up on ---
+
+    // #167 F12-R: the replan's skip test (ReplanBlocker), the look-ahead's reach test (RouteCrosses) the whole way. The
+    // way (0,0,0) -> (4000,0,0) to a camp spot at its end; a blocker of aggro 500 (reach 700). It bars the spot 600
+    // off the way, not 750 off; not on another floor (|dz| 200 over 160); 3D: 150 up and 600 off it does (618.5), 690
+    // off it doesn't (706.1); not within its aggro range of the bot (300: the fight's); one whose reach covers the bot
+    // only where the way enters its aggro range (608 behind: no; 600 ahead: yes); a spot in its reach (600 past it) or
+    // the blocker's own spot is barred, where the look-ahead counts it the camp's own; 800 past the spot it isn't; and
+    // 3,500 along, past the look-ahead's 1,500, it bars the spot too.
+    [TestCase(2_000f, 600f, 0f, 0)] [TestCase(2_000f, 750f, 0f, -1)] [TestCase(2_000f, 600f, 200f, -1)]
+    [TestCase(2_000f, 600f, 150f, 0)] [TestCase(2_000f, 690f, 150f, -1)] [TestCase(300f, 0f, 0f, -1)]
+    [TestCase(-600f, 100f, 0f, -1)] [TestCase(600f, 0f, 0f, 0)] [TestCase(4_600f, 0f, 0f, 0)] [TestCase(4_000f, 0f, 0f, 0)]
+    [TestCase(4_800f, 0f, 0f, -1)] [TestCase(3_500f, 600f, 0f, 0)]
+    public void ReplanBlocker(float x, float y, float z, int expected)
+    {
+        Vector3 spot = new(4_000, 0, 0);
+        Assert.That(PlayerBotDriver.ReplanBlocker(new Vector3[] { Vector3.Zero, spot }, spot, [(new(x, y, z), 500)]),
+            Is.EqualTo(expected));
+    }
+
+    // #167 F12-R: ReplanBlocker reads the way corner by corner and names the first blocker that bars the spot. The way
+    // (0,0,0) -> (2000,0,0) -> (2000,2000,0): a blocker of aggro 500 at (1000,1000,0), 1,000 off both legs, bars
+    // nothing; one at (2600,1000,0), 600 off the second leg, does (index 1); with none, nothing is barred.
+    [Test]
+    public void ReplanBlocker_reads_each_leg_and_names_the_first_blocker()
+    {
+        Vector3[] route = { Vector3.Zero, new(2_000, 0, 0), new(2_000, 2_000, 0) };
+        Vector3 spot = route[^1];
+        Assert.That(PlayerBotDriver.ReplanBlocker(route, spot, [(new(1_000, 1_000, 0), 500)]), Is.EqualTo(-1));
+        Assert.That(PlayerBotDriver.ReplanBlocker(route, spot, [(new(1_000, 1_000, 0), 500), (new(2_600, 1_000, 0), 500)]),
+            Is.EqualTo(1));
+        Assert.That(PlayerBotDriver.ReplanBlocker(route, spot, []), Is.EqualTo(-1));
+    }
+
+    // #167 F12-R: RELOCATE routeSkipped=, last, on every route give-up's replan (reason=route), with a camp or none:
+    // the camp spots it skipped for a monster it gave up on or walked past. No other reason's line has it.
+    [Test]
+    public void A_route_give_ups_RELOCATE_line_ends_with_the_spots_it_skipped()
+    {
+        Assert.That(PlayerBotDriver.RelocateLine("Pbotaaaad", 41, Vector3.Zero, new Vector3(6_000, 0, 0), 6_000, "giant boar",
+            40, 12, PlayerBotDriver.RouteGiveUp, null, 0, true, null, routeSkipped: 2), Is.EqualTo(
+            "PLAYER_BOT_RELOCATE bot=Pbotaaaad level=41 from=(0,0) to=(6000,0,0) distance=6000 monster=\"giant boar\" " +
+            "monsterLevel=40 zone=12 reason=route fallback=- barred=old routeSkipped=2"));
+        Assert.That(PlayerBotDriver.RelocateLine("Pbotaaaad", 41, Vector3.Zero, new Vector3(6_000, 0, 0), 6_000, "giant boar",
+            40, 12, PlayerBotDriver.RouteGiveUp, null, 0, true, null, overSkipped: 1), Does.EndWith(
+            " reason=route fallback=- barred=old overSkipped=1 routeSkipped=0"));
+        Assert.That(PlayerBotDriver.RelocateNoneLine("Pbotaaaad", 41, 3, 12, PlayerBotDriver.RouteGiveUp, 0, true, null,
+            routeSkipped: 3), Is.EqualTo("PLAYER_BOT_RELOCATE bot=Pbotaaaad level=41 none checked=3 zone=12 reason=route " +
+            "barred=old routeSkipped=3"));
+        Assert.That(PlayerBotDriver.RelocateLine("Pbotaaaad", 41, Vector3.Zero, new Vector3(6_000, 0, 0), 6_000, "giant boar",
+            40, 12, PlayerBotDriver.Outgrown, null, 0, false, null, routeSkipped: 2), Does.EndWith(" reason=outgrown fallback=-"));
+        Assert.That(PlayerBotDriver.RelocateNoneLine("Pbotaaaad", 41, 3, 12, PlayerBotDriver.Capped, 0, false, null,
+            routeSkipped: 2), Does.EndWith(" none checked=3 zone=12 reason=capped"));
+    }
+
+    // #167 F12-R: a give-up (GiveUpRoute) keeps the monster it gave up on (RouteGaveUpOn) and those the walk passed
+    // (RoutePassed) for the replan; a new walk (StartRoute) forgets both.
+    [Test]
+    public void A_route_give_up_keeps_its_blocker_and_the_monsters_passed_until_a_new_walk()
+    {
+        Vector3 camp = new(100, 200, 0);
+        var drake = (GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC));
+        var wolf = (GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC));
+        var state = new PlayerBotState(Player(null)) { AnchorRegion = 7, Anchor = camp, RoamDestination = camp };
+        state.RoutePassed.Add(wolf);
+        PlayerBotDriver.GiveUpRoute(state, 10_000, drake);
+        Assert.That((state.RouteGaveUpOn, state.RoutePassed.Contains(wolf)), Is.EqualTo((drake, true)));
+        PlayerBotDriver.StartRoute(state, new(300, 400, 0));
+        Assert.That((state.RouteGaveUpOn, state.RoutePassed.Count), Is.EqualTo(((GameNPC)null, 0)));
+    }
+
+    // #167 F12-R, the wiring (RelocateIfOutgrown's TakeCamp): two yellow camps, a cyclops 2,884 units west of the bot
+    // and a giant boar 5,116 east, its old camp 6,884 west; an orange drake, aggro 500, on the way west, 1,384 from the
+    // bot and 1,500 from the cyclops (no part of its camp). A route give-up's replan for the drake (or with the drake
+    // walked past, RoutePassed) skips the cyclops' camp, whose way passes it, for the boar's.
+    // With the cyclops given up on itself (aggressive, aggro 500), its own camp is skipped too. With no blocker, a dead
+    // drake, or an outgrown plan that still remembers the drake, it takes the cyclops' camp, as before.
+    [TestCase("drake", false, true, "boar")] [TestCase(null, true, true, "boar")] [TestCase("cyclops", false, true, "boar")]
+    [TestCase(null, false, true, "cyclops")] [TestCase("dead", false, true, "cyclops")]
+    [TestCase("drake", true, false, "cyclops")]
+    public void A_route_give_ups_replan_skips_a_camp_behind_the_monster_it_gave_up_on_in_RelocateIfOutgrown(string gaveUpOn,
+        bool drakePassed, bool route, string expected)
+    {
+        MethodInfo relocate = typeof(PlayerBotDriver).GetMethod("RelocateIfOutgrown", BindingFlags.Static | BindingFlags.NonPublic)!;
+        InTheField(new SplitFloorMesh(), OnPocket, (region, zone, bot) =>
+        {
+            Vector3 cyclopsAt = new(838_000, OnPocket.Y, 8_700), boarAt = new(846_000, OnPocket.Y, 8_700);
+            Vector3 oldCamp = new(834_000, OnPocket.Y, 8_700);
+            GameNPC cyclops = MonsterAt(region, zone, cyclopsAt, LevelFor(bot, ConColor.YELLOW));
+            GameNPC boar = MonsterAt(region, zone, boarAt, LevelFor(bot, ConColor.YELLOW));
+            GameNPC drake = MonsterAt(region, zone, new(839_500, OnPocket.Y, 8_700), LevelFor(bot, ConColor.ORANGE));
+            foreach (GameNPC npc in new[] { drake, cyclops })
+                ((DOL.AI.Brain.StandardMobBrain)npc.Brain).AggroLevel = 100;
+            ((DOL.AI.Brain.StandardMobBrain)drake.Brain).AggroRange = 500;
+            ((DOL.AI.Brain.StandardMobBrain)cyclops.Brain).AggroRange = 500;
+            if (gaveUpOn == "dead") typeof(GameObject).GetField("m_health", Hidden)!.SetValue(drake, 0);
+            GameNPC blocker = gaveUpOn switch { "drake" or "dead" => drake, "cyclops" => cyclops, _ => null };
+            InWorld(region, [cyclops, boar, drake], () =>
+            {
+                var state = new PlayerBotState(bot) { AnchorRegion = region.ID, Anchor = oldCamp, RoamDestination = oldCamp };
+                if (drakePassed) state.RoutePassed.Add(drake);
+                if (route) PlayerBotDriver.GiveUpRoute(state, 130_000, blocker);
+                else (state.RoamingSince, state.RouteGaveUpOn) = (1, blocker);   // outgrown, the drake remembered
+                relocate.Invoke(null, [state, bot, 130_000L]);
+                Assert.That((state.Anchor, state.ReplanOwed), Is.EqualTo((expected == "boar" ? boarAt : cyclopsAt, (string)null)));
+            });
+        });
+    }
+
+    // #167 F12-R, the wiring: a route give-up whose replan skips every camp (here the cyclops', the only one, behind
+    // the drake) walks on to its own (FallBack's ResumeRoute, R1), the bar on it kept; the spot skipped is not
+    // rejected (it has a corridor).
+    [Test]
+    public void A_route_give_up_whose_replan_skips_every_camp_walks_on_to_its_own_in_RelocateIfOutgrown()
+    {
+        MethodInfo relocate = typeof(PlayerBotDriver).GetMethod("RelocateIfOutgrown", BindingFlags.Static | BindingFlags.NonPublic)!;
+        InTheField(new SplitFloorMesh(), OnPocket, (region, zone, bot) =>
+        {
+            Vector3 oldCamp = new(834_000, OnPocket.Y, 8_700);
+            GameNPC cyclops = MonsterAt(region, zone, new(838_000, OnPocket.Y, 8_700), LevelFor(bot, ConColor.YELLOW));
+            GameNPC drake = MonsterAt(region, zone, new(839_500, OnPocket.Y, 8_700), LevelFor(bot, ConColor.ORANGE));
+            var brain = (DOL.AI.Brain.StandardMobBrain)drake.Brain;
+            (brain.AggroLevel, brain.AggroRange) = (100, 500);
+            InWorld(region, [cyclops, drake], () =>
+            {
+                var state = new PlayerBotState(bot) { AnchorRegion = region.ID, Anchor = oldCamp, RoamDestination = oldCamp };
+                PlayerBotDriver.GiveUpRoute(state, 130_000, drake);
+                relocate.Invoke(null, [state, bot, 130_000L]);
+                Assert.That((state.ReplanOwed, state.ReplanSince, state.RoamDestination, state.Anchor),
+                    Is.EqualTo(((string)null, 0L, (Vector3?)oldCamp, oldCamp)));
+                Assert.That(PlayerBotDriver.FailedCamps(state.FailedCamps, region.ID, 130_000), Is.EqualTo(new[] { oldCamp }));
+                Assert.That(state.RelocateRejected, Is.Empty, "skipped, not rejected");
+            });
         });
     }
 }
