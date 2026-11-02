@@ -4018,6 +4018,54 @@ public sealed class UT_PlayerBotDriver
         Assert.That(Plan(600_000), Is.EqualTo(new[] { "camp A", "camp C" }), "A's bar 10 minutes old");
     }
 
+    // The review of F: a pull the wider ring refuses for its crowd goes to CrowdRefused (FindWithin), which the capped
+    // plan's bar reads. A melee bot's BLUE candidate with two aggressive BLUE adds (avoided, so no picks) 50 units off:
+    // over a BLUE pull's 1.
+    [Test]
+    public void A_pull_refused_for_its_crowd_goes_to_the_capped_plans_refusals_in_FindWithin()
+    {
+        MethodInfo find = typeof(PlayerBotDriver).GetMethod("FindWithin", BindingFlags.Static | BindingFlags.NonPublic)!;
+        InTheField(new SplitFloorMesh(), new(840_884, 702_153, 8_784), (region, zone, bot) =>
+        {
+            var state = new PlayerBotState(bot) { NukesLevel = 39, Nukes = [] };
+            GameNPC candidate = MonsterAt(region, zone, new(840_700, 702_100, 8_700), LevelFor(bot, ConColor.BLUE));
+            foreach (float y in new[] { 702_000f, 702_200f })
+            {
+                GameNPC add = MonsterAt(region, zone, new(840_650, y, 8_700), LevelFor(bot, ConColor.BLUE));
+                ((DOL.AI.Brain.StandardMobBrain)add.Brain).AggroLevel = 100;
+                ((DOL.AI.Brain.StandardMobBrain)add.Brain).AggroRange = 400;
+                typeof(GameObject).GetField("m_name", Hidden)!.SetValue(add, "wolf");
+            }
+            state.AvoidUntil["wolf"] = 10_000_000;
+            object[] args = [state, bot, PlayerBotDriver.SearchRadius, 10_000L, PlayerBotPickReading.None];
+            Assert.That(find.Invoke(null, args), Is.Null, "two adds: over a blue pull's 1");
+            Assert.That(state.CrowdRefused, Does.Contain(candidate));
+        });
+    }
+
+    // The review of F: a capped plan bars the spots its crowd refusals stood at for 10 minutes and starts the refusals
+    // afresh (PlanCrowdBars, RelocateIfOutgrown's); any other plan bars nothing and keeps them.
+    [Test]
+    public void A_capped_plan_bars_the_spots_its_crowd_refusals_stood_at()
+    {
+        var (region, _) = World();
+        var state = new PlayerBotState(Player(null)) { AnchorRegion = 12 };
+        state.CrowdRefused.Add(CampMonster(region, 500, 0, 20));
+        Assert.That(PlayerBotDriver.PlanCrowdBars(state, PlayerBotDriver.Died, 1_000), Is.Empty);
+        Assert.That((state.CrowdRefused.Count, state.CrowdBars.Count), Is.EqualTo((1, 0)), "another plan");
+        Assert.That(PlayerBotDriver.PlanCrowdBars(state, PlayerBotDriver.Capped, 1_000),
+            Is.EqualTo(new[] { new Vector3(500, 0, 0) }));
+        Assert.That(state.CrowdBars, Is.EqualTo(new[] { ((ushort)12, new Vector3(500, 0, 0), 601_000L) }));
+        Assert.That(state.CrowdRefused, Is.Empty);
+    }
+
+    // The review of F: a camp the crowd bar barred, taken anyway after crowd refusals, lifts the limits there for 5
+    // minutes from the plan (TakeCamp's CampLiftUntil); no refusals, or a spot out of every bar's RoamRadius, none.
+    [TestCase(1, 800f, 310_000L)] [TestCase(0, 800f, 0L)] [TestCase(1, 2_200f, 0L)]
+    public void A_camp_taken_by_the_crowd_bar_lifts_the_limits_there_for_five_minutes(int crowdRefused, float x, long until) =>
+        Assert.That(PlayerBotDriver.CampLiftUntil(crowdRefused, new Vector3(x, 0, 0), [Vector3.Zero], 10_000),
+            Is.EqualTo(until));
+
     // A spot within RoamRadius of a crowd bar's spot is a barred camp the plan took anyway (no clean one left): the limits
     // lift there.
     [TestCase(800f, true)] [TestCase(1_400f, true)] [TestCase(2_200f, false)]
@@ -8052,6 +8100,18 @@ public sealed class UT_PlayerBotDriver
         short index = (short)typeof(Zone).GetMethod("GetSubZoneIndex", Hidden)!.Invoke(zone, [(int)at.X, (int)at.Y])!;
         subZones[index].AddObject(npc.SubZoneObject.Node);
         return npc;
+    }
+
+    // The first level from 20 at which a monster cons con to the bot (GetConLevel), for a field bot's FindWithin tests.
+    private static byte LevelFor(GamePlayer bot, ConColor con)
+    {
+        var probe = (GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC));
+        for (byte level = 20; level < 60; level++)
+        {
+            typeof(GameObject).GetField("m_level", Hidden)!.SetValue(probe, level);
+            if (ConLevels.GetConColor(bot.GetConLevel(probe)) == con) return level;
+        }
+        throw new InvalidOperationException(con.ToString());
     }
 
     // #167 E fix U1, the wiring: self-defence (Attacker) passes over a hitter Engage found unreachable

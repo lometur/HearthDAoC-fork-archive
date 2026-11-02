@@ -3875,6 +3875,24 @@ public static class PlayerBotDriver
         }
     }
 
+    /// <summary>#167 F P1: a capped plan's crowd bar (RelocateIfOutgrown; the review of F, a seam so it is tested): the
+    /// spots of the camps it refused for their crowd (CrowdRefused) barred for CrowdBarMilliseconds (RememberCrowdBars,
+    /// the review: 10 minutes), the refusals afresh, and the spots its region's bars still bar (CrowdBarSpots); any other
+    /// plan, none, the refusals kept.</summary>
+    public static Vector3[] PlanCrowdBars(PlayerBotState state, string reason, long now)
+    {
+        if (reason != Capped) return [];
+        RememberCrowdBars(state.CrowdBars, state.AnchorRegion, CrowdRefusedSpots(state.CrowdRefused), now);
+        state.CrowdRefused.Clear();
+        return CrowdBarSpots(state.CrowdBars, state.AnchorRegion, now);
+    }
+
+    /// <summary>#167 F P1: the lift a planned camp starts with (TakeCamp; the review of F, a seam so it is tested): a camp
+    /// the crowd bar barred, taken anyway after crowd refusals (InCrowdBarred), lifts the limits there for
+    /// CrowdLiftMilliseconds from now; any other, none (0).</summary>
+    public static long CampLiftUntil(int crowdRefused, Vector3 spot, IReadOnlyList<Vector3> crowdBarred, long now) =>
+        crowdRefused > 0 && InCrowdBarred(spot, crowdBarred) ? now + CrowdLiftMilliseconds : 0;
+
     /// <summary>#167 F P1: the crowd bars in a region a capped plan still bars (PlanBars, InCrowdBarred), as FailedCamps
     /// reads the failed camps.</summary>
     public static Vector3[] CrowdBarSpots(IReadOnlyList<(ushort Region, Vector3 At, long Until)> bars, ushort region,
@@ -5200,13 +5218,8 @@ public static class PlayerBotDriver
             zone, natural, state.AvoidUntil, now, planAdds);                       //   monsters' pass
         Vector3[] failed = FailedCamps(state.FailedCamps, state.AnchorRegion, now);
         bool barredOld = Array.IndexOf(failed, state.Anchor) >= 0;                 // #167 D9: RELOCATE barred=old
-        if (reason == Capped)                                                      // #167 F P1: a capped plan bars the
-        {                                                                          //   camps it refused for their crowd,
-            RememberCrowdBars(state.CrowdBars, state.AnchorRegion, CrowdRefusedSpots(state.CrowdRefused), now);   //   for
-            state.CrowdRefused.Clear();                                            //   10 minutes (the review), and leaves
-        }                                                                          //   them
-        Vector3[] crowdBarred = reason == Capped ? CrowdBarSpots(state.CrowdBars, state.AnchorRegion, now) : [];
-        failed = PlanBars(failed, crowdBarred, reason);
+        Vector3[] crowdBarred = PlanCrowdBars(state, reason, now);                 // #167 F P1: a capped plan leaves the
+        failed = PlanBars(failed, crowdBarred, reason);                            //   camps it refused for their crowd
         int crowdRefused = crowdBarred.Length;
         (ConColor fit, ConColor? killerCon) = PlanCaps(state, now);                 // #167 D6
         bool afterDeath = AfterDeathPlan(reason, state.LastDeathTick == 0 ? -1 : now - state.LastDeathTick);   // #167 E W1
@@ -5249,13 +5262,13 @@ public static class PlayerBotDriver
                     state.RelocateRejected.Add(npc);
                     continue;
                 }
-                bool liftedCamp = crowdRefused > 0 && InCrowdBarred(spot, crowdBarred);
+                long liftUntil = CampLiftUntil(crowdRefused, spot, crowdBarred, now);
+                bool liftedCamp = liftUntil > 0;
                 if (Log.IsInfoEnabled)
                     Log.Info(RelocateLine(player.Name, player.Level, state.Anchor, spot, (int)Vector3.Distance(here, spot),
                         npc.Name, npc.EffectiveLevel, campZone.ID, reason, campFallback, now - state.ReleasedAt, barredOld,
                         killerCon, afterDeath, nearCamp, crowdRefused, liftedCamp, overSkipped.Count));
-                PlanCamp(state, spot, campFallback, campStale, reason,            // and BACK replan=moved (#167 C1)
-                    liftedCamp ? now + CrowdLiftMilliseconds : 0);
+                PlanCamp(state, spot, campFallback, campStale, reason, liftUntil);   // and BACK replan=moved (#167 C1)
                 return true;
             }
             return false;
