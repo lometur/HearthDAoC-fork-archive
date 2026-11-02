@@ -6257,6 +6257,27 @@ public sealed class UT_PlayerBotDriver
             Is.EqualTo(new[] { "Theft of Energy" }), "a payload it can't resolve: the spell's own type, as BotBrain's");
     }
 
+    // #167 F N1a (the review of F): for a spell that is no PetSpell, OutclassedByKind is BotBrain's rule exactly: the higher
+    // rank of the same type, target, area, instant-ness and PBAoE, strictly higher, and the half-level floor.
+    [Test]
+    public void Outclassed_by_kind_is_botbrains_rule_for_any_other_spell()
+    {
+        Spell S(int id, string type, int level, string target = "Enemy", int radius = 0, double castTime = 2.5, int range = 1500) =>
+            new(new DbSpell { SpellID = id, Name = $"s{id}", Type = type, Target = target, Damage = 100, Range = range,
+                Radius = radius, CastTime = castTime }, level);
+        Spell[] known =
+        [
+            S(1, "DirectDamage", 40), S(2, "DirectDamage", 45), S(3, "DirectDamage", 45), S(4, "DirectDamage", 46, "Cone"),
+            S(5, "DirectDamage", 47, radius: 350), S(6, "DirectDamage", 48, castTime: 0), S(7, "DirectDamage", 49, radius: 350, range: 0),
+            S(8, "Bolt", 10),
+        ];
+        foreach (Spell spell in known)
+            Assert.That(PlayerBotDriver.OutclassedByKind(spell, known, 50, _ => null),
+                Is.EqualTo(DOL.AI.Brain.BotBrain.IsOutclassedDamageSpell(spell, known, 50)), spell.Name);
+        Assert.That(known.Select(spell => PlayerBotDriver.OutclassedByKind(spell, known, 50, _ => null)),
+            Is.EqualTo(new[] { true, false, false, false, false, false, false, true }));
+    }
+
     // #167 F N1b: a Necromancer casts its power tap (the Vacuum: half its damage back as power, PowerDrain.cs:38-48)
     // instead of its lifetap while its power isn't full (a pet class rests to 100%, PlayerBotDriver.RestPowerStop), its
     // pet at 50% or more (the lifetap heals the pet) and the tap doing 75% of the lifetap's damage or more. Seven legs:
@@ -6274,6 +6295,13 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.TapsPower(TheftOfEnergy, null, 50, 100), Is.False);
         Assert.That(PlayerBotDriver.TapsPower(null, SpiritVacuum, 50, 100), Is.False);
     }
+
+    // #167 F N1b (the review of F): the tap at 75% of the lifetap's damage taps; under it, not (BATCH-F: "the Vacuum at
+    // 75%+"). The DB pairs (124/143, 92/92) and the weak row (100/143) can't tell 70 from 85.
+    [TestCase(75.0, true)] [TestCase(74.0, false)]
+    public void A_power_tap_from_75_percent_of_the_lifetaps_damage_is_cast(double tapDamage, bool taps) =>
+        Assert.That(PlayerBotDriver.TapsPower(PetSpell(9001, "Lifetap", 40, 100, 6018), PetSpell(9002, "Tap", 34, tapDamage, 6117),
+            50, 100), Is.EqualTo(taps));
 
     [Test]
     public void A_necromancers_power_tap_is_its_ready_power_drain_payload()
