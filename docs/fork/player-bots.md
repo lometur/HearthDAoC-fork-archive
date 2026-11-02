@@ -542,7 +542,15 @@ All start `PLAYER_BOT_`:
   `healCast=`, the heal requests that began a cast that lasted to the next think, or landed (`heals=` counts requests,
   which the server may refuse while an interrupt runs), `healLanded=`, the heals cast, `healHold=`, the thinks it held
   its swing for a heal, `healHoldMax=`, its longest such hold in thinks, and `taps=`, a Necromancer's power-tap casts;
-  `DEATH` gives `heals=` and the same five (-1 each out of a fight).
+  `DEATH` gives `heals=` and the same five (-1 each out of a fight). Both then give `addWhy=`, the fight's add step in
+  a word: `none` (no add), `ctl` (a control cast at one), `pets` (a Theurgist's pets cast at one), or why it cast
+  none, the reason counted most over its looks: `noControl` (no control in its kit: most melee classes read it once
+  an add is seen), `tries` (3 casts that held nothing), `noneTakes` (no control the add takes now, ready, in range and paid
+  for), `rootContact` (only a root, the add in contact), `targetFirst` (the target's control first), `hitNoQc` (hits
+  interrupt it, no Quickcast ready), `closeNoQc` (the add reaches it before the cast ends, no Quickcast ready), `los`
+  (no sight to the add) or `noAdd` (none counted, or the add gone or held); on a dropped fight's line too, -1 on
+  `DEATH` out of a fight. "Counted most" leans away from `los`: a sight refusal counts once (the add step then waits
+  out the sight check), the others at every look.
   `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `walkout`, `rest`, `kite`, `turret`
   or `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
   after a break-off its `reason=` is `brokeoff`. Either ends with `barred=old` when the death or the break-off came on

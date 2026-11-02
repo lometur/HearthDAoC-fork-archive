@@ -45,6 +45,10 @@ public enum PlayerBotCombatAction { Cast, WaitToCast, Quickcast, Swing }
 /// while only the bot's own swing's interrupt runs, blocked while a monster's hits interrupt it, or none.</summary>
 public enum PlayerBotHealStep { None, Cast, Hold, Blocked }
 
+/// <summary>Why a fight's add step cast nothing at an add (#167 F C1, FIGHT and DEATH addWhy=; PlayerBotDriver.AddRefusal,
+/// FightAddWhy): none (no add), Control (a control cast at one), Pets (a Theurgist's pets), else the refusal.</summary>
+public enum PlayerBotAddWhy { None, Control, Pets, NoControl, Tries, NoneTakes, RootInContact, TargetFirst, HitNoQc, CloseNoQc, Los, NoAdd }
+
 /// <summary>An Animist's step before a pull (PlayerBotDriver.AnimistStepFor, #167 E CY3).</summary>
 public enum PlayerBotAnimistStep { Pull, Walk, Replant, Wait, Skip }
 
@@ -220,6 +224,8 @@ public sealed class PlayerBotState
                                                                  //   Hold) and its longest hold, and the hold's thinks so
                                                                  //   far (CountHealHold)
     public int FightTaps;                                        // #167 F N1b: FIGHT and DEATH taps=, power-tap casts
+    public readonly int[] FightAddWhy = new int[(int)PlayerBotAddWhy.NoAdd + 1];   // #167 F C1: the add step's looks with
+                                                                                   //   an add seen, by why (FightAddWhy)
     public int EngageBuffs, FightPetCasts, FightWaits;           // #167 FIGHT buffs=, petCasts= and waits=
     public long SitSince;                                        // #167 PLAYER_BOT_REST: when the bot sat down, 0 standing
     public (string Head, PlayerBotDeathDetail Detail, GameObject Target)? PendingDeath;   // a DEATH line awaiting Dying (AwaitsDying)
@@ -1984,6 +1990,7 @@ public static class PlayerBotDriver
         (state.FightHealCasts, state.FightHealsLanded, state.PendingHeal) = (0, 0, default);   // #167 F H1
         (state.FightHealHolds, state.FightHealHoldMax, state.HealHoldRun) = (0, 0, 0);       // #167 F H2
         state.FightTaps = 0;                                                        // #167 F N1b taps=
+        Array.Clear(state.FightAddWhy);                                             // #167 F C1 addWhy=
         state.FightPetCasts = state.FightWaits = state.FightControls = state.FightKites = state.FightCtlBroken = 0;
         state.FightKiteNone = default;                                              // #167 D8 kiteNone=
         state.FightDots = 0;                                                        // #167 E C1 dots=
@@ -2974,6 +2981,34 @@ public static class PlayerBotDriver
     /// while the add is still away (past ContactDistance), as in melee a rooted monster still hits (inf.).</summary>
     public static bool ControlKeepsAddOff(Spell spell, int addDistance) =>
         spell.SpellType is not eSpellType.SpeedDecrease || addDistance > ContactDistance;
+
+    /// <summary>Why the add step cast nothing at an add (#167 F C1 addWhy=): no control in the kit (noControl),
+    /// MaxControlTries spent on it (tries), none it takes now that keeps it off, ready, in range and paid for (noneTakes;
+    /// rootContact when a root would take but the add is in contact, ControlKeepsAddOff), the target's control first
+    /// (targetFirst, TargetFirst), or an interruptible control with no Quickcast ready while hits interrupt the bot
+    /// (hitNoQc) or the add reaches it before the cast ends (closeNoQc; AddAction).</summary>
+    public static PlayerBotAddWhy AddRefusal(bool hasControl, bool triesSpent, bool chosen, bool rootTakes, bool targetFirst,
+        bool interrupted) =>
+        !hasControl ? PlayerBotAddWhy.NoControl : triesSpent ? PlayerBotAddWhy.Tries
+        : !chosen ? (rootTakes ? PlayerBotAddWhy.RootInContact : PlayerBotAddWhy.NoneTakes)
+        : targetFirst ? PlayerBotAddWhy.TargetFirst : interrupted ? PlayerBotAddWhy.HitNoQc : PlayerBotAddWhy.CloseNoQc;
+
+    /// <summary>A fight's add step in a word (#167 F C1 addWhy=): none with no add (addAt -1), ctl with a control cast at
+    /// one (addCtl above 0), pets with a Theurgist's pets cast at one, else the why counted most over the add step's looks
+    /// with an add (the earlier in PlayerBotAddWhy on a tie), noAdd with none counted (no look came: a cast under way
+    /// throughout, or the add gone or held by its first look). Most counted is biased: a sight refusal (los) counts once
+    /// (the sight wait then returns before counting), the others at every due look.</summary>
+    public static PlayerBotAddWhy FightAddWhy(int addAt, int addControls, int[] counts)
+    {
+        if (addAt < 0) return PlayerBotAddWhy.None;
+        if (addControls > 0) return PlayerBotAddWhy.Control;
+        if (counts[(int)PlayerBotAddWhy.Pets] > 0) return PlayerBotAddWhy.Pets;
+        PlayerBotAddWhy best = PlayerBotAddWhy.NoAdd;
+        int most = 0;
+        for (int i = (int)PlayerBotAddWhy.NoControl; i < counts.Length; i++)
+            if (counts[i] > most) (best, most) = ((PlayerBotAddWhy)i, counts[i]);
+        return best;
+    }
 
     /// <summary>Whom the bot faces (#167 C4, the verifier's correction): while a cast at the add is under way (addCast,
     /// casting) the add, as CheckBeginCast and CheckEndCast need the spell's target in the front 180 degrees
@@ -5356,7 +5391,8 @@ public static class PlayerBotDriver
             inFight ? state.FightHeals : -1, inFight ? state.FightHealCasts : -1,         // #167 F H1 heals=, healCast=
             inFight ? state.FightHealsLanded : -1,                                        //   and healLanded=,
             inFight ? state.FightHealHolds : -1, inFight ? state.FightHealHoldMax : -1,   // #167 F H2
-            inFight ? state.FightTaps : -1);                                              // #167 F N1b taps=
+            inFight ? state.FightTaps : -1,                                               // #167 F N1b taps=
+            inFight ? FightAddWhy(state.FightAdd.At, state.FightAddControls, state.FightAddWhy) : null);   // #167 F C1
         string head = $"PLAYER_BOT_DEATH bot={player.Name} level={player.Level} at=({player.X},{player.Y},{player.Z}) " +
                       $"zone={player.CurrentZone?.ID} {fight} attackers={state.Attackers} deathSteps={state.DeathSafetySteps} " +
                       $"aliveSec={(now - state.AliveSince) / 1000} task={state.Task != null}";
@@ -5435,7 +5471,8 @@ public static class PlayerBotDriver
             state.FightSight, state.FightBlind, state.FightBlindSteps,                  // #167 E M2, R1
             state.FightHealCasts, state.FightHealsLanded,                               // #167 F H1
             state.FightHealHolds, state.FightHealHoldMax,                              // #167 F H2
-            state.FightTaps)));                                                         // #167 F N1b
+            state.FightTaps,                                                            // #167 F N1b
+            FightAddWhy(state.FightAdd.At, state.FightAddControls, state.FightAddWhy))));   // #167 F C1
     }
 
     // APP:585-624, changed: every 10 s, no inventory count, no saves; after 15 minutes with no progress, back to the
@@ -5684,18 +5721,33 @@ public static class PlayerBotDriver
         GamePlayer player, GameLiving target, bool targetHeld, int targetDistance, long now, bool interrupted,
         bool quickcastReady, bool quickcasting)
     {
-        if (now < state.NextAddTick) return default;
+        if (now < state.NextAddTick) return default;                                   // a sight wait (los, counted)
         KnowSpells(state, player);
-        if (state.Controls.Count == 0 && state.CombatPets.Count == 0) return default;
-        if (Add(state, player, target, now) is not GameNPC add) return default;
-        (PlayerBotAddAction step, Spell control, SpellLine line) = AddControl(state, player, target, targetHeld,
-            targetDistance, add, interrupted, quickcastReady, quickcasting, now);
-        if (step is not PlayerBotAddAction.None) return (step, add, control, line);
-        if (state.CombatPets.Count == 0 || !IsAttacking(player, add) ||
-            !player.attackComponent.AttackerTracker.Attackers.Contains(add))
+        if (state.Controls.Count == 0 && state.CombatPets.Count == 0)
+        {
+            CountAddWhy(state, PlayerBotAddWhy.NoControl);                              // #167 F C1 addWhy=
             return default;
-        (Spell pet, SpellLine petLine) = CombatPet(state, player, add, now, inView: true);     // its sight: CastAtAdd's
-        return pet == null ? default : (PlayerBotAddAction.Pets, add, pet, petLine);
+        }
+        if (Add(state, player, target, now) is not GameNPC add)
+        {
+            CountAddWhy(state, PlayerBotAddWhy.NoAdd);
+            return default;
+        }
+        (PlayerBotAddAction step, Spell control, SpellLine line, PlayerBotAddWhy why) = AddControl(state, player, target,
+            targetHeld, targetDistance, add, interrupted, quickcastReady, quickcasting, now);
+        if (step is not PlayerBotAddAction.None) return (step, add, control, line);   // AddAct counts it
+        (Spell pet, SpellLine petLine) = state.CombatPets.Count == 0 || !IsAttacking(player, add) ||
+            !player.attackComponent.AttackerTracker.Attackers.Contains(add)
+                ? default : CombatPet(state, player, add, now, inView: true);           // its sight: CastAtAdd's
+        if (pet != null) return (PlayerBotAddAction.Pets, add, pet, petLine);
+        CountAddWhy(state, why);
+        return default;
+    }
+
+    // #167 F C1 addWhy=: an add step that did nothing, counted by why once the fight has seen an add (FightAdd.At).
+    private static void CountAddWhy(PlayerBotState state, PlayerBotAddWhy why)
+    {
+        if (state.FightAdd.At >= 0) state.FightAddWhy[(int)why]++;
     }
 
     // #167 C4: the add's step (AddPlan) carried out: Quickcast turned on (the next think casts with it), or the control
@@ -5713,6 +5765,7 @@ public static class PlayerBotDriver
         if (!CastAtAdd(state, player, target, add, spell, line, now))
         {
             if (pets) state.NextCombatPetTick = now + SummonRetryMilliseconds;
+            CountAddWhy(state, PlayerBotAddWhy.Los);                                    // #167 F C1 addWhy=los
             return false;
         }
         if (pets)
@@ -5720,6 +5773,7 @@ public static class PlayerBotDriver
             state.NextCombatPetTick = now + Math.Max(250, spell.CastTime + 100);        // as Engage's
             state.FightPetCasts++;
             state.FightCasts++;
+            state.FightAddWhy[(int)PlayerBotAddWhy.Pets]++;                             // #167 F C1 addWhy=pets
         }
         else
         {
@@ -5767,20 +5821,29 @@ public static class PlayerBotDriver
     // MaxControlTries casts on it that held nothing. A caster's control on its target comes first while the target
     // reaches it first (TargetFirst) with a control CasterStep would cast at it now (TargetControl; the review of
     // 9aacd69: any control the target takes, recasting, unpaid or a mez not yet wanted, held the add's back), and worth
-    // it (#167 D11, WorthyTargetControl: CasterStep casts none at a GREEN while the bot is healthy and alone).
-    private static (PlayerBotAddAction Step, Spell Spell, SpellLine Line) AddControl(PlayerBotState state,
+    // it (#167 D11, WorthyTargetControl: CasterStep casts none at a GREEN while the bot is healthy and alone). #167 F C1:
+    // with no step, why (AddRefusal; a second ChooseControl without the keep-off test, only when the first chose none,
+    // tells a root in contact from none that takes).
+    private static (PlayerBotAddAction Step, Spell Spell, SpellLine Line, PlayerBotAddWhy Why) AddControl(PlayerBotState state,
         GamePlayer player, GameLiving target, bool targetHeld, int targetDistance, GameNPC add, bool interrupted,
         bool quickcastReady, bool quickcasting, long now)
     {
-        if (state.AddControlTries >= MaxControlTries || state.Controls.Count == 0) return default;
+        bool triesSpent = state.AddControlTries >= MaxControlTries;
+        if (triesSpent || state.Controls.Count == 0)
+            return (PlayerBotAddAction.None, null, null,
+                AddRefusal(state.Controls.Count > 0, triesSpent, false, false, false, false));   // #167 F C1
         PlayerBotRole role = RoleOf(player.CharacterClass.ID);
         int distance = player.GetDistanceTo(add);
-        (Spell control, SpellLine line) = ChooseControl(state.Controls, spell => player.GetSkillDisabledDuration(spell) <= 0 &&
-                HasPowerFor(player.MaxMana, player.Mana, spell.Power) &&
-                player.IsWithinRadius(add, player.castingComponent.CalculateSpellRange(spell)),
+        bool Ready(Spell spell) => player.GetSkillDisabledDuration(spell) <= 0 &&
+            HasPowerFor(player.MaxMana, player.Mana, spell.Power) &&
+            player.IsWithinRadius(add, player.castingComponent.CalculateSpellRange(spell));
+        (Spell control, SpellLine line) = ChooseControl(state.Controls, Ready,
             spell => Takes(player, add, spell) && ControlKeepsAddOff(spell, distance), forAdd: true,
             petClass: role == PlayerBotRole.Pet);
-        if (control == null) return default;
+        if (control == null)                                                            // #167 F C1: a root in contact?
+            return (PlayerBotAddAction.None, null, null, AddRefusal(true, false, false,
+                ChooseControl(state.Controls, Ready, spell => Takes(player, add, spell), forAdd: true,
+                    petClass: role == PlayerBotRole.Pet).Item1 != null, false, false));
         long contact = TimeToContact(distance, add.MaxSpeedBase);
         GameNPC targetNpc = role == PlayerBotRole.Caster && !targetHeld ? target as GameNPC : null;   // else none first
         bool closing = targetNpc?.TargetObject == player;
@@ -5788,8 +5851,10 @@ public static class PlayerBotDriver
         bool targetFirst = closing && TargetFirst(                                                     // #167 D11
             WorthyTargetControl(state, player, targetNpc, targetContact, now).Item1 != null,
             targetHeld, closing, targetContact, contact);
-        return (AddAction(true, true, contact, targetFirst, control.CastTime, Interruptible(control), interrupted,
-            quickcastReady, quickcasting), control, line);
+        PlayerBotAddAction step = AddAction(true, true, contact, targetFirst, control.CastTime, Interruptible(control),
+            interrupted, quickcastReady, quickcasting);
+        return (step, control, line, step is PlayerBotAddAction.None
+            ? AddRefusal(true, false, true, false, targetFirst, interrupted) : PlayerBotAddWhy.Control);
     }
 
     // #167 C4: a cast at the add as a player makes one (the verifier's corrections): the add in sight (the cast's start
