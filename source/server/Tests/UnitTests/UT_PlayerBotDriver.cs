@@ -4539,6 +4539,38 @@ public sealed class UT_PlayerBotDriver
         Assert.That(pulled.FightCapHold, Is.EqualTo(-1));
     }
 
+    // #167 F-WD (the review of its revert): capHold= reaches the lines from the fight's clock: FIGHT's record
+    // (FightRecord, ReportFight's) carries it, and DEATH's (DeathDetail, ReportDeath's) in the fatal fight only; a
+    // death out of a fight logs -1, not the last fight's. Both read the bot's endurance (end=): 100 at most.
+    [Test]
+    public void A_fights_capped_clock_reaches_its_FIGHT_record_and_a_death_in_that_fight_only()
+    {
+        var calculators = (DOL.GS.PropertyCalc.IPropertyCalculator[])typeof(GameLiving)
+            .GetField("m_propertyCalc", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        DOL.GS.PropertyCalc.IPropertyCalculator saved = calculators[(int)eProperty.Fatigue];
+        try
+        {
+            calculators[(int)eProperty.Fatigue] = new Fixed(100);
+            InTheField(new SplitFloorMesh(), new(840_884, 702_153, 8_784), (region, zone, bot) =>
+            {
+                GameNPC wolf = MonsterAt(region, zone, new(840_700, 702_100, 8_700), LevelFor(bot, ConColor.BLUE));
+                var state = new PlayerBotState(bot) { Target = wolf, Engaged = true, EngagedSince = 1_000,
+                    FightCapHold = 12 };
+                Assert.That(PlayerBotDriver.FightRecord(state, bot, 10_000, true, false, false).CapHold,
+                    Is.EqualTo(12), "FIGHT");
+                Assert.That(PlayerBotDriver.DeathDetail(state, bot, 10_000, PlayerBotActivity.Fighting, -1).CapHold,
+                    Is.EqualTo(12), "a death in the fight");
+                state.Engaged = false;
+                Assert.That(PlayerBotDriver.DeathDetail(state, bot, 10_000, PlayerBotActivity.Hunting, -1).CapHold,
+                    Is.EqualTo(-1), "a death out of a fight: not the last fight's");
+            });
+        }
+        finally
+        {
+            calculators[(int)eProperty.Fatigue] = saved;
+        }
+    }
+
     // #167 F-WD (the review): step 15 (IdleStep): one with no capped clock roams (BACK walk=); a capped bot stands
     // where it is (Mover.Stop: a walking bot stops; BACK hold=), in an aggressive monster's reach too: the step out of
     // reach F-WD tried is gone (its legs, st-deathsF2/F2b: 4 capped plans with a step out against 8 or more, 17 of

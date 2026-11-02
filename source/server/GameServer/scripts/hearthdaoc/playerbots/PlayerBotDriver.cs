@@ -6246,9 +6246,28 @@ public static class PlayerBotDriver
             $"con={ConLevels.GetConColor(player.GetConLevel(target))} engaged={state.Engaged}";
         int fromBind = player.CurrentRegionID == player.BindRegion ? (int)Vector3.Distance(new(player.X, player.Y, player.Z),
             new(player.BindXpos, player.BindYpos, player.BindZpos)) : -1;
+        PlayerBotDeathDetail detail = DeathDetail(state, player, now, last, fromBind);
+        string head = $"PLAYER_BOT_DEATH bot={player.Name} level={player.Level} " +
+                      $"at=({player.X},{player.Y},{player.Z}) zone={player.CurrentZone?.ID} {fight} " +
+                      $"attackers={state.Attackers} deathSteps={state.DeathSafetySteps} " +
+                      $"aliveSec={(now - state.AliveSince) / 1000} task={state.Task != null}";
+        if (AwaitsDying(state.Killer, player.IsBeingHandledByReaperService))
+            state.PendingDeath = (head, detail, target);                                   // the next think writes it
+        else
+            Log.Info(DeathLine(head, detail, state.Killer, target));
+    }
+
+    /// <summary>#167 F-WD (the review of its revert): the detail of a PLAYER_BOT_DEATH line as ReportDeath logs it,
+    /// from the bot's state at the death (last: the last think's activity alive; fromBind, ReportDeath's); the killer's
+    /// fields are DeathLine's. The fatal fight's fields are read only in a fight (engaged on its target): out of one,
+    /// the last fight's are none (PlayerBotDeathDetail's -1).</summary>
+    public static PlayerBotDeathDetail DeathDetail(PlayerBotState state, GamePlayer player, long now,
+        PlayerBotActivity last, int fromBind)
+    {
+        GameLiving target = state.Target;
         bool inFight = state.Engaged && target != null;       // else the fight fields are the last fight's: -1
         Ability quickcast = player.GetAbility(Abilities.Quickcast);                     // #167 F C2 qcLeft=
-        PlayerBotDeathDetail detail = new(last, inFight ? state.EngageHealth : -1,
+        return new(last, inFight ? state.EngageHealth : -1,
             inFight ? (now - state.EngagedSince) / 1000 : -1, target?.HealthPercent ?? -1, target != null && state.FromDefence,
             inFight ? state.FightAdds : -1, state.LifeKills, state.LifeRests,
             state.LastKillTick > state.AliveSince ? (now - state.LastKillTick) / 1000 : -1, PowerPercent(player.MaxMana, player.ManaPercent),
@@ -6288,13 +6307,6 @@ public static class PlayerBotDriver
             inFight ? state.FightBlindSteps : -1,                                         //   pick, blindSteps=
             inFight ? (state.FightRestSkip ? 1 : 0) : -1,                                 // #167 F R2 restSkip=
             inFight ? state.FightCapHold : -1);                                           // #167 F-WD capHold=
-        string head = $"PLAYER_BOT_DEATH bot={player.Name} level={player.Level} at=({player.X},{player.Y},{player.Z}) " +
-                      $"zone={player.CurrentZone?.ID} {fight} attackers={state.Attackers} deathSteps={state.DeathSafetySteps} " +
-                      $"aliveSec={(now - state.AliveSince) / 1000} task={state.Task != null}";
-        if (AwaitsDying(state.Killer, player.IsBeingHandledByReaperService))
-            state.PendingDeath = (head, detail, target);                                   // the next think writes it
-        else
-            Log.Info(DeathLine(head, detail, state.Killer, target));
     }
 
     // #167 st-deathsD's fields: a fight think in Engage (TrackFight) from the bot and its target, the hold as Hold reads
@@ -6408,9 +6420,18 @@ public static class PlayerBotDriver
         state.FightRestSkip = false;                                                     //   this one only, logged or
         state.RecoverBeforePull = OwesRestAfterFight(state.RecoverBeforePull, restSkip, killed);   //   not; not won, owed
         if (!Log.IsInfoEnabled) return;
-        GameLiving target = state.Target;
         SettleControl(state, player, now, force: false);                                // #167 ctlLanded=, when due
-        Log.Info(PlayerBotDriverReport.FormatFight(new(player.Name, player.Level, target.Name, target.EffectiveLevel,
+        Log.Info(PlayerBotDriverReport.FormatFight(FightRecord(state, player, now, killed, brokeOff, restSkip)));
+    }
+
+    /// <summary>#167 F-WD (the review of its revert): the PLAYER_BOT_FIGHT record ReportFight logs for the fight on the
+    /// bot's target, from its state as the fight settles (killed, brokeOff; restSkip, the skip's fight as ReportFight
+    /// took it).</summary>
+    public static PlayerBotFight FightRecord(PlayerBotState state, GamePlayer player, long now, bool killed,
+        bool brokeOff, bool restSkip)
+    {
+        GameLiving target = state.Target;
+        return new(player.Name, player.Level, target.Name, target.EffectiveLevel,
             ConLevels.GetConColor(player.GetConLevel(target)), state.FromDefence, killed, state.EngageHealth, player.HealthPercent,
             state.EngageMana, PowerPercent(player.MaxMana, player.ManaPercent), (now - state.EngagedSince) / 1000, state.FightAdds,
             state.Swings, state.NotVisible, state.FightCasts, state.LifeKills, state.LifeRests, state.EngagePet,
@@ -6434,7 +6455,7 @@ public static class PlayerBotDriver
             state.PickDue,                                                              // #167 F P2
             state.PickSeen, state.PickPathCrowd,                                        // #167 F P4
             state.HuntCrowd, state.HuntTarget, restSkip,                                // #167 F F5, R2
-            state.FightCapHold)));                                                      // #167 F-WD
+            state.FightCapHold);                                                        // #167 F-WD
     }
 
     // APP:585-624, changed: every 10 s, no inventory count, no saves; after 15 minutes with no progress, back to the
