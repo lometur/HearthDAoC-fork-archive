@@ -6019,6 +6019,15 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.DotTicksLeft(2_000, 2_000, 4_000), Is.EqualTo(0), "the expiry first");
     }
 
+    // #167 F-C (the review of F): the can't-finish read counts only the DoT ticks before the bot's time is up
+    // (PendingDotDamage's horizon), so a DoT that lands after the bot dies doesn't keep it fighting.
+    [Test]
+    public void A_dot_counts_for_cant_finish_only_the_ticks_within_the_bots_time()
+    {
+        Assert.That(PlayerBotDriver.DotTicksWithin(20_000, 1_000, 4_000, 5_000), Is.EqualTo(1), "5 s left: one tick");
+        Assert.That(PlayerBotDriver.DotTicksWithin(20_000, 1_000, 4_000, long.MaxValue), Is.EqualTo(5), "no horizon: all");
+    }
+
     // A DoT's ticks end a root and a mez, not a stun (GameLiving.cs:1749-1830): a stun caster casts one wherever, a root
     // caster only where no control is worth it; and no root or mez goes on while its own DoT ticks.
     [TestCase(true, true, true)] [TestCase(false, true, false)] [TestCase(false, false, true)] [TestCase(true, false, true)]

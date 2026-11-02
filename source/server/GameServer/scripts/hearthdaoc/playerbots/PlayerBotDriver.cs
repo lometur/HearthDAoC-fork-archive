@@ -4691,6 +4691,11 @@ public static class PlayerBotDriver
         frequencyMs <= 0 || nextInMs >= expireInMs ? 0
             : (int)((expireInMs - Math.Max(0, nextInMs) + frequencyMs - 1) / frequencyMs);
 
+    /// <summary>#167 F-C: DotTicksLeft within horizonMs (PendingDotDamage: only the ticks before the bot's time is up; the
+    /// review of F, a seam so the horizon is tested).</summary>
+    public static int DotTicksWithin(long expireInMs, long nextInMs, int frequencyMs, long horizonMs) =>
+        DotTicksLeft(Math.Min(expireInMs, horizonMs), nextInMs, frequencyMs);
+
     /// <summary>A nuke's expected damage per millisecond of its cast cycle (#167 E C1): the hit (ExpectedHit) times its land
     /// chance (hitChancePercent: CalculateToHitChance; a resist takes the whole cast, SpellHandler.cs:2482-2500) times its
     /// ticks (1 for a direct hit; a DoT's RealizedTicks), over CastCycleMs. Per cast-second, not per power: per power left
@@ -4850,7 +4855,7 @@ public static class PlayerBotDriver
         foreach (ECSGameSpellEffect effect in target.effectListComponent.GetSpellEffects(eEffect.DamageOverTime))
             if (effect.SpellHandler?.Caster == player && effect.SpellHandler.Spell is Spell spell &&
                 state.NukeHandlers.TryGetValue(spell, out DOL.GS.Spells.SpellHandler handler))
-                pending += DotTicksLeft(Math.Min(effect.ExpireTick - now, horizonMs), effect.NextTick - now, spell.Frequency) *
+                pending += DotTicksWithin(effect.ExpireTick - now, effect.NextTick - now, spell.Frequency, horizonMs) *
                     ExpectedHitOf(handler, spell, player, target);
         return pending;
     }
