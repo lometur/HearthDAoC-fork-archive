@@ -277,6 +277,8 @@ public sealed class PlayerBotState
                                                                  //   start (SprintSeconds; -1: not read)
     public int BreakOffJoined, BreakOffWayAdds = -1;             // #167 F-W: BREAKOFF joined= (KeepChasers' adds after the
                                                                  //   start) and wayAdds= (WayInAddReach of its point)
+    public int BreakOffQcLeft = -1;                              // #167 F-C: BREAKOFF qcLeft=, a caster's Quickcast disable
+                                                                 //   at the start (s, rounded up; -1: none)
     public bool BreakOffRunsOn;                                  // #167 E T2b: running on to its point past Done (RunsOnToClear)
     public bool BackPending, BackOwed, BackMoved;                // #167 C1: PLAYER_BOT_BACK, from a release to its first
     public long BackStepOutMs, BackHoldMs, BackWalkMs;           //   fight: the line due, the replan owed and a camp planned
@@ -453,6 +455,9 @@ public static class PlayerBotDriver
     public const string Refused = "refused";                 // #167 D2: and one that would fire but doesn't (BreakOffRefusal)
     public const string ByAdds = "adds", AtKill = "atkill", FollowUp = "followup", AvoidedName = "avoided",
         CasterLosing = "caster", Spent = "spent";            // #167 D1: BREAKOFF why=, the rule that fired (BreakOffWhy)
+    public const string CantFinish = "cantfinish";           // #167 F-C: and a caster that can't finish (CasterCantFinish)
+    public const int CantFinishCastMs = 3_000;               //   with no spell chosen, a nuke's cast (inf.: the kits'
+                                                             //   caster nukes cast in 2.5-3.0 s)
     public const byte CasterBreakOffTargetPercent = 25;      // #167 D1: a caster losing to one, or spent, with its target
                                                              //   above this breaks off (inf.)
     public const int BreakOffMaxMilliseconds = 45_000;       // #167 D2: still chased then, it fights (inf.); from
@@ -2261,11 +2266,14 @@ public static class PlayerBotDriver
     /// fight after it); below BreakOffHealthPercent, its target (at the kill, the one still on it) above
     /// BreakOffTargetPercent, no control ready for the add (C4's comes first), and only from chasers it outruns (Outruns).
     /// #167 D1: one monster in the one-monster case too (oneMonster, OneMonsterCase); in an ordinary fight, it fights on.
-    /// </summary>
+    /// #167 F-C: the target floor holds for no caster that can't finish (cantFinish): it would swing until it died; a
+    /// target at 10% or less moves at 44% of its speed or less (MaxSpeedCalculator.cs:140-143), so the run shakes it. On
+    /// every arm: such a caster with 2 or more monsters on it and its target at 10% or less breaks off why=adds (and moves
+    /// camp), as one that can't cast should.</summary>
     public static bool BreaksOff(int monstersOnBot, bool addFight, bool oneMonster, byte health, byte targetHealth,
-        bool addControlReady, bool outruns) =>
+        bool addControlReady, bool outruns, bool cantFinish = false) =>
         (monstersOnBot >= 2 || (addFight || oneMonster) && monstersOnBot >= 1) && health < BreakOffHealthPercent &&
-        targetHealth > BreakOffTargetPercent && !addControlReady && outruns;
+        (targetHealth > BreakOffTargetPercent || cantFinish) && !addControlReady && outruns;
 
     /// <summary>The one-monster case (#167 D1): one monster breaks the bot off when it is a name the bot avoids
     /// (avoidedOnBot: a death's or a break-off's, IsAvoided; the avoidance stopped the pull, never a monster that aggroed:
@@ -2275,10 +2283,12 @@ public static class PlayerBotDriver
     /// was above 25% in 33 of them); #167 E-L: or when a bot that is no caster is losing the race to it (losingRace,
     /// LosingRace: 113 non-caster deaths on st-deathsD2 and D2b, 105 with no break-off). A caster keeps D1's arm: its
     /// target at 25% or less is C2's killing nuke's, which the break-off (Think's step before Engage) would pre-empt. Not
-    /// while a hold on its target is ready (holdReady, HoldReady): the hold first.</summary>
+    /// while a hold on its target is ready (holdReady, HoldReady): the hold first. #167 F-C: or a caster that can't finish
+    /// (cantFinish, CasterCantFinish) at any target health: its killing nuke can't come.</summary>
     public static bool OneMonsterCase(PlayerBotRole role, bool avoidedOnBot, bool huntAvoided, byte targetHealth,
-        bool holdReady, bool losingRace) =>
-        !holdReady && (avoidedOnBot && !huntAvoided || role == PlayerBotRole.Caster && targetHealth > CasterBreakOffTargetPercent ||
+        bool holdReady, bool losingRace, bool cantFinish = false) =>
+        !holdReady && (avoidedOnBot && !huntAvoided ||
+                       role == PlayerBotRole.Caster && (targetHealth > CasterBreakOffTargetPercent || cantFinish) ||
                        role != PlayerBotRole.Caster && losingRace);
 
     /// <summary>A caster spent (#167 D1): no damage spell it can pay for (canNuke false), its target held (a root it would
@@ -2286,6 +2296,28 @@ public static class PlayerBotDriver
     /// CasterBreakOffTargetPercent. It breaks off at any health (StartsBreakOff), then rests (FinishBreakOff).</summary>
     public static bool CasterSpent(bool canNuke, bool held, byte targetHealth) =>
         !canNuke && held && targetHealth > CasterBreakOffTargetPercent;
+
+    /// <summary>A caster that can't finish (#167 F-C): hits interrupt it (interrupted: and no Quickcast on), its Quickcast
+    /// is neither ready nor on, and at its loss rate (rate: HealthRate, % a second) its health is gone before the
+    /// Quickcast's disable is over and a nuke is cast after it (quickcastLeftMs, castMs; no Quickcast at all:
+    /// int.MaxValue), unless its own DoTs on the target land its health within that time (dotFinishesWithin, given the
+    /// bot's time left, asked last: it walks the target's effects). In melee such a caster swings (CasterAction's Nuke,
+    /// CombatAction's Swing): batch F's base had 43 caster deaths one nuke short, the Quickcast spent on a control, with no
+    /// break-off (OneMonsterCase's caster arm needs its target above 25%, BreaksOff above 10%). A 1.65 player sees his
+    /// Quickcast's timer and runs.</summary>
+    public static bool CasterCantFinish(bool interrupted, bool quickcastReady, bool quickcastOn, int quickcastLeftMs,
+        byte health, double rate, int castMs, Func<long, bool> dotFinishesWithin)
+    {
+        if (!interrupted || quickcastReady || quickcastOn || rate <= 0) return false;
+        long lifeMs = (long)(health * 1000 / rate);
+        return lifeMs < (long)quickcastLeftMs + castMs && !dotFinishesWithin(lifeMs);
+    }
+
+    /// <summary>A break-off that owes a rest, not a relocation, and bars no camp and avoids no name (#167 D1: a spent
+    /// caster's; #167 F-C: a caster's that couldn't finish): its power or its Quickcast's timer was the problem, not the
+    /// camp. 43 of 50 shaken why=caster runs on batch F's first five legs were followed by RELOCATE reason=brokeoff, a
+    /// median 6,117 units.</summary>
+    public static bool RestsAfterBreakOff(string why) => why is Spent or CantFinish;
 
     /// <summary>A caster's hold on its target ready (#167 D1, OneMonsterCase's holdReady): the target held now, or a control
     /// CasterStep would cast at it now (hasControl: TargetControl's), which in melee with hits interrupting the bot
@@ -2320,27 +2352,30 @@ public static class PlayerBotDriver
 
     /// <summary>A break-off's start once StartsBreakOff scanned (#167 D1; the review of D pinned it): BREAKOFF why=
     /// (BreakOffWhy) for a spent caster at any health (spent), with no monster on it too, else when BreakOffFires holds
-    /// over the monsters on the bot (hitters) with the one-monster case's holdReady (HoldReadyNow); none,
-    /// null.</summary>
+    /// over the monsters on the bot (hitters) with the one-monster case's holdReady (HoldReadyNow) and #167 F-C a caster
+    /// that can't finish (cantFinish, CantFinishNow); none, null.</summary>
     public static string BreakOffStartWhy(PlayerBotState state, PlayerBotRole role, bool spent, byte health, bool holdReady,
-        IReadOnlyList<(byte Health, int Distance, bool Avoided)> hitters, long now, Func<bool> addControlReady)
+        IReadOnlyList<(byte Health, int Distance, bool Avoided)> hitters, long now, Func<bool> addControlReady,
+        bool cantFinish = false)
     {
-        if (!spent && !BreakOffFires(state, role, holdReady, health, hitters, now, addControlReady)) return null;
+        if (!spent && !BreakOffFires(state, role, holdReady, health, hitters, now, addControlReady, cantFinish))
+            return null;
         bool avoidedOnBot = false;
         for (int i = 0; i < hitters.Count; i++) avoidedOnBot |= hitters[i].Avoided;
         return BreakOffWhy(spent, hitters.Count, SecondMonsterCase(state.KilledWithAdds, state.LastKillTick, now),
             state.Engaged && state.FollowsAddKill, avoidedOnBot, state.HuntAvoided,
-            role == PlayerBotRole.Caster && FightTargetHealth(state.Target, hitters) > CasterBreakOffTargetPercent);
+            role == PlayerBotRole.Caster && FightTargetHealth(state.Target, hitters) > CasterBreakOffTargetPercent,
+            cantFinish);                                                                // #167 F-C
     }
 
     /// <summary>BREAKOFF why= (#167 D1): the rule that fired. Spent (CasterSpent); else 2 or more monsters on the bot (adds);
     /// the second-monster case at the kill (atkill) or in the fight after it (followup, D2's FollowsAddKill); one monster
     /// of a name it avoids, not in a camp of them (avoided); a caster losing to one with its target above 25% (caster,
-    /// casterArm); else #167 E-L's race lost to one (race).</summary>
+    /// casterArm); #167 F-C: a caster that can't finish (cantfinish); else #167 E-L's race lost to one (race).</summary>
     public static string BreakOffWhy(bool spent, int monstersOnBot, bool atKill, bool followUp, bool avoidedOnBot,
-        bool huntAvoided, bool casterArm) =>
+        bool huntAvoided, bool casterArm, bool cantFinish = false) =>
         spent ? Spent : monstersOnBot >= 2 ? ByAdds : atKill ? AtKill : followUp ? FollowUp :
-        avoidedOnBot && !huntAvoided ? AvoidedName : casterArm ? CasterLosing : RaceLost;
+        avoidedOnBot && !huntAvoided ? AvoidedName : casterArm ? CasterLosing : cantFinish ? CantFinish : RaceLost;
 
     /// <summary>The dropped FIGHT line's adds= at a break-off (#167 D2, StartsBreakOff): BreaksOffNow returns before Engage
     /// folds the attackers into FightAdds, so the monsters on the bot (onBot, BREAKOFF attackers=) fold in here; with 2 or
@@ -2362,9 +2397,11 @@ public static class PlayerBotDriver
     /// (FightTargetHealth), the second-monster case (SecondMonsterCase; #167 D2: or the fight after it, FollowsAddKill,
     /// while engaged), #167 D1's one-monster case (OneMonsterCase: role and holdReady passed in, the UT fixture has no
     /// CharacterClass) with #167 E-L's race (LosingRace, engaged with its target alive: the race read since the first hit
-    /// is that target's) and C4's add control (addControlReady, asked only once the rest holds: it scans).</summary>
+    /// is that target's) and C4's add control (addControlReady, asked only once the rest holds: it scans). #167 F-C: and
+    /// a caster that can't finish (cantFinish, CasterCantFinish; CantFinishNow).</summary>
     public static bool BreakOffFires(PlayerBotState state, PlayerBotRole role, bool holdReady, byte health,
-        IReadOnlyList<(byte Health, int Distance, bool Avoided)> hitters, long now, Func<bool> addControlReady)
+        IReadOnlyList<(byte Health, int Distance, bool Avoided)> hitters, long now, Func<bool> addControlReady,
+        bool cantFinish = false)
     {
         byte targetHealth = FightTargetHealth(state.Target, hitters);
         bool avoidedOnBot = false;
@@ -2372,9 +2409,12 @@ public static class PlayerBotDriver
         bool addFight = SecondMonsterCase(state.KilledWithAdds, state.LastKillTick, now) || state.Engaged && state.FollowsAddKill;
         bool losingRace = state.Engaged && state.Target?.IsAlive == true &&                                // #167 E-L
             LosingRace(health, targetHealth, state.FightHpAtReach, state.FightTargetHpAtReach);
-        bool oneMonster = OneMonsterCase(role, avoidedOnBot, state.HuntAvoided, targetHealth, holdReady, losingRace);
-        return BreaksOff(hitters.Count, addFight, oneMonster, health, targetHealth, addControlReady: false, outruns: true) &&
-            BreaksOff(hitters.Count, addFight, oneMonster, health, targetHealth, addControlReady(), outruns: true);
+        bool oneMonster = OneMonsterCase(role, avoidedOnBot, state.HuntAvoided, targetHealth, holdReady, losingRace,
+            cantFinish);                                                                // #167 F-C
+        return BreaksOff(hitters.Count, addFight, oneMonster, health, targetHealth, addControlReady: false, outruns: true,
+                cantFinish: cantFinish) &&
+            BreaksOff(hitters.Count, addFight, oneMonster, health, targetHealth, addControlReady(), outruns: true,
+                cantFinish: cantFinish);
     }
 
     /// <summary>Whether the bot outruns its fastest chaser (#167 C2): the sprint's lead on it, sprintSeconds x (SprintSpeed
@@ -2773,10 +2813,11 @@ public static class PlayerBotDriver
     /// <summary>A break-off's start (#167 C2): the camp it ran from and the names of its target and chasers, remembered as
     /// after a death (Remember, DEATHS.md A3; RememberFailedCamp, #167 F4), so it neither pulls them nor plans back
     /// there; on the walk to its anchor, that too (BarOldAnchor, #167 D9). #167 D1: none of it for a spent caster's
-    /// (BreakOffWhy Spent): the power was the problem, not the camp or the names.</summary>
+    /// (BreakOffWhy Spent): the power was the problem, not the camp or the names. #167 F-C: a can't-finish one's too
+    /// (RestsAfterBreakOff).</summary>
     public static void BrokeOffFrom(PlayerBotState state, ushort region, Vector3 at, IEnumerable<string> names, long now)
     {
-        if (state.BreakOffWhy == Spent) return;
+        if (RestsAfterBreakOff(state.BreakOffWhy)) return;
         foreach (string name in names) Remember(state.AvoidUntil, name, now);
         RememberFailedCamp(state.FailedCamps, region, at, now);
         BarOldAnchor(state, BrokeOff, at, now);                                    // #167 D9: and the anchor it walked to
@@ -2799,10 +2840,11 @@ public static class PlayerBotDriver
     /// the bot died (its death's own recovery then, HandleDeath) the relocation owed (AfterBreakOff, owesReplan:
     /// OwesReplan's rule); fought, no new break-off for BreakOffMilliseconds: it fights them out. #167 D1: a spent
     /// caster's owes no relocation but a rest (RecoverBeforePull): it was short of power, not of a camp. #167 E T1, T2b:
-    /// the turn, the holds, the retry, the speeds and the run-on go with the run.</summary>
+    /// the turn, the holds, the retry, the speeds and the run-on go with the run. #167 F-C: a can't-finish one's too
+    /// (RestsAfterBreakOff): its Quickcast's timer was the problem.</summary>
     public static void FinishBreakOff(PlayerBotState state, string outcome, bool owesReplan, long now)
     {
-        bool spent = state.BreakOffWhy == Spent;
+        bool rests = RestsAfterBreakOff(state.BreakOffWhy);
         (state.BreakOffSince, state.BreakOffGoal, state.BreakOffArrived) = (0, null, false);
         (state.BreakOffWhy, state.CaughtSince) = (null, 0);
         (state.BreakOffTurn, state.BreakOffHolds, state.NextBreakOffRetryTick) = (null, 0, 0);   // #167 E T1
@@ -2810,11 +2852,12 @@ public static class PlayerBotDriver
         (state.BreakOffSpeed, state.BreakOffChaserSpeed, state.BreakOffRunsOn) = (-1, -1, false);   // #167 E T2b: the run-on
         state.BreakOffSprintSeconds = -1;                                               // #167 F-O
         (state.BreakOffJoined, state.BreakOffWayAdds) = (0, -1);                        // #167 F-W
+        state.BreakOffQcLeft = -1;                                                      // #167 F-C
         state.BreakOffChasers.Clear();
         state.BreakOffBlocked.Clear();
         if (outcome == Died) return;
         if (outcome == Fought) state.NextBreakOffTick = now + BreakOffMilliseconds;
-        if (spent) state.RecoverBeforePull = true;
+        if (rests) state.RecoverBeforePull = true;
         else AfterBreakOff(state, owesReplan, now);
     }
 
@@ -4228,14 +4271,15 @@ public static class PlayerBotDriver
     }
 
     // #167 E C1: the damage the bot's own DoTs on the target still owe (DotTicksLeft at each one's expected tick; a landed
-    // DoT rolls no resist again).
-    private static double PendingDotDamage(PlayerBotState state, GamePlayer player, GameLiving target, long now)
+    // DoT rolls no resist again). #167 F-C: only the ticks within horizonMs (none given: all).
+    private static double PendingDotDamage(PlayerBotState state, GamePlayer player, GameLiving target, long now,
+        long horizonMs = long.MaxValue)
     {
         double pending = 0;
         foreach (ECSGameSpellEffect effect in target.effectListComponent.GetSpellEffects(eEffect.DamageOverTime))
             if (effect.SpellHandler?.Caster == player && effect.SpellHandler.Spell is Spell spell &&
                 state.NukeHandlers.TryGetValue(spell, out DOL.GS.Spells.SpellHandler handler))
-                pending += DotTicksLeft(effect.ExpireTick - now, effect.NextTick - now, spell.Frequency) *
+                pending += DotTicksLeft(Math.Min(effect.ExpireTick - now, horizonMs), effect.NextTick - now, spell.Frequency) *
                     ExpectedHitOf(handler, spell, player, target);
         return pending;
     }
@@ -5034,7 +5078,8 @@ public static class PlayerBotDriver
     // TargetRefreshMilliseconds, as Incoming's. #167 D1: one monster in the one-monster case (the hitters' names it avoids,
     // HoldReadyNow), and a spent caster at any health (SpentNow: an engaged caster's held target only, its cheap checks
     // first); BREAKOFF why= the rule (BreakOffWhy). #167 D2: one that would fire but doesn't logs why (ReportRefusal).
-    // The review of D: its start in seams (BreakOffScans, BreakOffStartWhy).
+    // The review of D: its start in seams (BreakOffScans, BreakOffStartWhy). #167 F-C: a caster that can't finish
+    // (CantFinishNow) at any target health; BREAKOFF qcLeft=, a caster's Quickcast disable at the start.
     private static bool StartsBreakOff(PlayerBotState state, GamePlayer player, long now)
     {
         if (now < state.NextBreakOffTick) return false;
@@ -5055,8 +5100,9 @@ public static class PlayerBotDriver
         }
         int onBot = chasers.Count;
         bool controlReady = false;
+        bool cantFinish = CantFinishNow(state, player, role, health, now);              // #167 F-C
         string why = BreakOffStartWhy(state, role, spent, health, HoldReadyNow(state, player, role, chasers, now),
-            hitters, now, () => controlReady = AddControlReady(state, player, now));                       // #167 D1
+            hitters, now, () => controlReady = AddControlReady(state, player, now), cantFinish);   // #167 D1
         bool fires = why != null;
         hitters.Clear();
         if (!fires)
@@ -5091,6 +5137,8 @@ public static class PlayerBotDriver
         (state.BreakOffSince, state.BreakOffGoal, state.BreakOffArrived, state.BreakOffSprintOffAt) = (now, goal, false, -1);
         (state.BreakOffSpeed, state.BreakOffChaserSpeed) = (player.MaxSpeed, fastest);   // #167 E T1: before the sprint
         state.BreakOffSprintSeconds = sprint;                                           // #167 F-O: sprint=
+        state.BreakOffQcLeft = role == PlayerBotRole.Caster && player.GetAbility(Abilities.Quickcast) is Ability qc
+            ? QuickcastLeftSeconds(true, player.GetSkillDisabledDuration(qc)) : -1;    // #167 F-C: qcLeft=, C2's rounding
         (state.BreakOffHealth, state.BreakOffEndurance, state.BreakOffAttackers) = (health, player.EndurancePercent, onBot);
         state.BreakOffRate = HealthRate(state.HealthSamples, now, health);              // #167 BREAKOFF rate=
         (state.BreakOffWhy, state.CaughtSince) = (why, 0);                              // #167 D1 why= (BrokeOffFrom reads it)
@@ -5118,6 +5166,25 @@ public static class PlayerBotDriver
             return false;
         KnowSpells(state, player);
         return state.Nukes.Count > 0 && CasterSpent(CanNuke(state, player), held: true, target.HealthPercent);
+    }
+
+    // #167 F-C: an engaged caster that can't finish (CasterCantFinish), read in StartsBreakOff's scan (under
+    // BreakOffHealthPercent, or spent): hits interrupting it with no Quickcast on, its Quickcast not ready
+    // (QuickcastReady), its health at its loss rate (HealthRate) gone before the Quickcast's disable is over and its
+    // nuke cast (state.Spell's; none, CantFinishCastMs); not when its own DoTs land the target's health first
+    // (PendingDotDamage within that time, walked only then). No caster, or no target alive: false.
+    private static bool CantFinishNow(PlayerBotState state, GamePlayer player, PlayerBotRole role, byte health, long now)
+    {
+        if (role != PlayerBotRole.Caster || !state.Engaged || state.Target is not GameLiving target || !target.IsAlive)
+            return false;
+        bool quickcasting = player.effectListComponent.ContainsEffectForEffectType(eEffect.QuickCast);
+        Ability quickcast = player.GetAbility(Abilities.Quickcast);
+        int disabled = quickcast == null ? 0 : player.GetSkillDisabledDuration(quickcast);
+        return CasterCantFinish(player.IsBeingInterruptedByOther && !quickcasting,
+            QuickcastReady(quickcast != null, quickcasting, disabled, state.NextQuickcastTick, player.IsCasting, now),
+            quickcasting, quickcast == null ? int.MaxValue : disabled, health, HealthRate(state.HealthSamples, now, health),
+            state.Spell?.CastTime ?? CantFinishCastMs,
+            lifeMs => PendingDotDamage(state, player, target, now, lifeMs) >= target.Health);
     }
 
     // #167 D1: a damage spell the bot can pay for now, on its recast or not (power is what a spent caster lacks); the
@@ -5354,7 +5421,7 @@ public static class PlayerBotDriver
     // A break-off's end: its line (PLAYER_BOT_BREAKOFF, #167 D1 why=), the state's end (FinishBreakOff: the relocation
     // owed, OwesReplan's rule as after a death; fought, no new break-off for BreakOffMilliseconds), and unless the bot died
     // (the death's own recovery then, HandleDeath) the sprint off. #167 E T1: turn=, holds=, speed= and chaserSpeed=;
-    // #167 F-O: sprint=; #167 F-W: joined= and wayAdds=.
+    // #167 F-O: sprint=; #167 F-W: joined= and wayAdds=; #167 F-C: qcLeft=.
     private static void EndBreakOff(PlayerBotState state, GamePlayer player, long now, string outcome)
     {
         if (Log.IsInfoEnabled)
@@ -5363,7 +5430,8 @@ public static class PlayerBotDriver
                 state.BreakOffWhy, state.BreakOffSprintOffAt < 0 ? -1 : state.BreakOffSprintOffAt / 1000,   // #167 E-S
                 player.EndurancePercent, state.BreakOffTurn ?? "-", state.BreakOffHolds, state.BreakOffSpeed,   // #167 E T1
                 state.BreakOffChaserSpeed, state.BreakOffSprintSeconds,                 // #167 F-O
-                joined: state.BreakOffJoined, wayAdds: state.BreakOffWayAdds));         // #167 F-W
+                joined: state.BreakOffJoined, wayAdds: state.BreakOffWayAdds,           // #167 F-W
+                qcLeft: state.BreakOffQcLeft));                                         // #167 F-C
         FinishBreakOff(state, outcome, OwesReplan(state.Task != null, CanRelocate(state, player)), now);
         if (outcome == Died) return;
         player.Sprint(false);

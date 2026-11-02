@@ -175,26 +175,30 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   blocked takes the next nearest such spot at once, 3 walks in all; then it sits where it is.
 - Losing, it breaks off: below 40% health with 2 or more monsters on it, or with 1 still on it after a kill in a fight
   that had 2 or more on it, within 3 s of that kill or in the whole fight it opens next. One monster breaks it off too
-  when it is one the bot avoids (unless it was sent to a camp of them), when the bot is a caster and its target is above
-  25%, or, for a bot that isn't a caster, when the race since the monster's first hit on it says the bot dies first with
-  its target still above 10% (both sides' loss since that hit, read once the bot has lost 20% health since it, projects
-  the target's health when the bot's runs out; a heal counts as less lost; a caster whose target is at 25% or less
-  fights on for its killing nuke); not while a caster's control at that monster is under way, nor, when that monster is
-  its target, while it is held or the caster would cast a control at it now or once a resisted one may go again (a
-  target held at range is no hold on another monster hitting it). None of these while its target is down to 10% or less.
-  A caster whose held target
+  when it is one the bot avoids (unless it was sent to a camp of them), when the bot is a caster and its target is
+  above 25%, or, at any target health, when it is a caster that can't finish: hits interrupt it, its Quickcast is
+  spent, and at the rate it is losing health it would die before the Quickcast comes back and a nuke is cast, unless
+  its own damage-over-time spells would kill the target first; or, for a bot that isn't a caster, when the race since
+  the monster's first hit on it says the bot dies first with its target still above 10% (both sides' loss since that
+  hit, read once the bot has lost 20% health since it, projects the target's health when the bot's runs out; a heal
+  counts as less lost; a caster whose target is at 25% or less fights on for its killing nuke if it can finish); not
+  while a caster's control at that monster is under way, nor, when that monster is its target, while it is held or the
+  caster would cast a control at it now or once a resisted one may go again (a target held at range is no hold on
+  another monster hitting it). None of these while its target is down to 10% or less, but for a caster that can't
+  finish (so such a caster with 2 or more monsters on it breaks off from those then too). A caster whose held target
   is above 25% with no damage spell it can pay for breaks off at any health, then rests: it takes no camp or names to
-  avoid from that one and doesn't move camp. Only from monsters it can outrun, and only with a sprint whose lead takes
-  it out of the fastest one's 200-unit reach: none faster than its run (191), or none as fast as its sprint (248) when
-  its endurance holds the sprint long enough that the fastest one, which last swung as the sprint's lead passed its
-  reach, is still out of its reach 25 s later, when a monster stops chasing: with no Long Wind or regeneration, 31
-  endurance against a monster of speed 192-193, 36 against 194-195, 41 against 196-197, 51 against 200, 61 against
-  205, 91 against 215, and none against 218 or faster. It doesn't run from one it can't outrun: it fights on. Never from
-  a monster with a snare, stun, mez or damage spell of 1,000 units' range or more. It stops its fight, sprints, and runs
-  1,500-2,500 units straight away from them to a spot clear of other aggressive monsters that it can walk to (one whose
-  straight way passes none of their reach first, if one within 60 degrees of straight away does), or with none, to the
-  spot 1,500 units straight away from them if it can walk there; on again from there while one still chases
-  it. Once the nearest chaser that isn't held is 400 units behind (more for one faster than its run: 25 s of what it
+  avoid from that one and doesn't move camp. A caster that couldn't finish does the same: it takes no camp or names to
+  avoid and rests, then pulls again. Only from monsters it can outrun, and only with a sprint whose lead takes it out
+  of the fastest one's 200-unit reach: none faster than its run (191), or none as fast as its sprint (248) when its
+  endurance holds the sprint long enough that the fastest one, which last swung as the sprint's lead passed its reach,
+  is still out of its reach 25 s later, when a monster stops chasing: with no Long Wind or regeneration, 31 endurance
+  against a monster of speed 192-193, 36 against 194-195, 41 against 196-197, 51 against 200, 61 against 205, 91
+  against 215, and none against 218 or faster. It doesn't run from one it can't outrun: it fights on. Never from a
+  monster with a snare, stun, mez or damage spell of 1,000 units' range or more. It stops its fight, sprints, and runs
+  1,500-2,500 units straight away from them to a spot clear of other aggressive monsters that it can walk to (one
+  whose straight way passes none of their reach first, if one within 60 degrees of straight away does), or with none,
+  to the spot 1,500 units straight away from them if it can walk there; on again from there while one still chases it.
+  Once the nearest chaser that isn't held is 400 units behind (more for one faster than its run: 25 s of what it
   gains), its sprint goes off, and on again when one comes within 300 units with its endurance over 10%. A spot it was
   blocked on it never takes again in that run. A mezzed, stunned or rooted monster still counts as after it. From 3 s
   into the run (time for its sprint to gain on one that started in contact), one not held that stays
@@ -211,20 +215,20 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   units short of it, bars that camp too for 15 minutes.
 - In a close fight (2 or more monsters on it now or earlier in the fight, a defence, the fight after a kill with adds,
   a fight the race since the first hit on it projects it to end under 30% health, or a fight with a yellow or harder
-  target, from its first think) a bot keeps the endurance a sprint away from the fastest monster on it would need, plus
-  5: 31 against a monster no faster than its run, 36 against one of speed 192-193, 41 against 194-195. Its styles, and
-  for a class that isn't a caster or pet class its damage spells (5 endurance a cast), wait while they would take it
-  under that; a cheaper style that leaves it goes instead. Heals don't wait, nor does a lifetap (a Reaver's Siphons, a
-  Valewalker's Cycle of Life): it heals the bot too. Against a monster of speed 196 or more, or one with a snare, stun,
-  mez or damage spell of 1,000 units' range or more, it keeps none, since no sprint it could keep would outrun it. It
-  waits only while waiting can still buy a run: not once its endurance is under what that sprint needs (16 against a
-  monster slower than 148, 21 against 148-181, 26 against 182-191, 31 against 192-193, 36 against 194-195), since
-  endurance doesn't come back in a fight, and not while its target, the only monster on it, is at 10% health or less,
-  since a bot never breaks off from a target that low. With another monster on it, it keeps waiting there, for the run
-  from that one at the kill. In a blue or green fight with one monster it styles as before. The yellow fights cost the
-  style classes a few kills (about 0.15% of all kills over batch F's seven base legs); Reavers, Valewalkers, Skalds,
-  Berserkers and Heroes pay that with no yellow-pull deaths of theirs to save. A caster's or pet class's casts never
-  wait; a Hunter's styles wait as any style class's.
+  target, from its first think) a bot keeps the endurance a sprint away from the fastest monster on it would need,
+  plus 5: 31 against a monster no faster than its run, 36 against one of speed 192-193, 41 against 194-195. Its
+  styles, and for a class that isn't a caster or pet class its damage spells (5 endurance a cast), wait while they
+  would take it under that; a cheaper style that leaves it goes instead. Heals don't wait, nor does a lifetap (a
+  Reaver's Siphons, a Valewalker's Cycle of Life): it heals the bot too. Against a monster of speed 196 or more, or
+  one with a snare, stun, mez or damage spell of 1,000 units' range or more, it keeps none, since no sprint it could
+  keep would outrun it. It waits only while waiting can still buy a run: not once its endurance is under what that
+  sprint needs (16 against a monster slower than 148, 21 against 148-181, 26 against 182-191, 31 against 192-193, 36
+  against 194-195), since endurance doesn't come back in a fight, and not while its target, the only monster on it, is
+  at 10% health or less, since a bot never breaks off from a target that low (a caster that can't finish aside). With
+  another monster on it, it keeps waiting there, for the run from that one at the kill. In a blue or green fight with
+  one monster it styles as before. The yellow fights cost the style classes a few kills (about 0.15% of all kills over
+  batch F's seven base legs); Reavers, Valewalkers, Skalds, Berserkers and Heroes pay that with no yellow-pull deaths
+  of theirs to save. A caster's or pet class's casts never wait; a Hunter's styles wait as any style class's.
 - It releases 10 s after a death, counted from when the server has handled the death, never before: a bow's or a bolt's
   killing hit lands in the bots' own phase of the game loop, and a release asked for then was undone by the server's
   death handling later in the same tick, which left the bot dead for 15 minutes. A release that didn't revive it is
@@ -576,26 +580,29 @@ All start `PLAYER_BOT_`:
   result=dropped`);
 - `BREAKOFF`: one per break-off, when it ends: the bot's `hp=`, `end=` (endurance) and `attackers=` when it broke off,
   `sec=`, the seconds it ran (a run on to its point, done in another monster's reach, counts in it), and `outcome=`:
-  `shook` (none still after it, or from 30 s none within 1,500 units), `fought` (still chased after 45 s, caught with no
-  control to cast, or nowhere to run) or `died`; then `rate=`, the health it lost a second over the 3 s before it broke
-  off, and `why=`, the rule that fired: `adds` (2 or more on it), `atkill` (1 still on it within 3 s of a kill with
-  adds), `followup` (the fight after that kill), `avoided` (one it avoids), `caster` (a caster losing to one), `race` (a
-  bot that isn't a caster losing the race to one) or `spent` (a caster out of power with its target held); then
+  `shook` (none still after it, or from 30 s none within 1,500 units), `fought` (still chased after 45 s, caught with
+  no control to cast, or nowhere to run) or `died`; then `rate=`, the health it lost a second over the 3 s before it
+  broke off, and `why=`, the rule that fired: `adds` (2 or more on it), `atkill` (1 still on it within 3 s of a kill
+  with adds), `followup` (the fight after that kill), `avoided` (one it avoids), `caster` (a caster losing to one),
+  `race` (a bot that isn't a caster losing the race to one), `spent` (a caster out of power with its target held) or
+  `cantfinish` (a caster hit with its Quickcast spent that would die before it came back and a nuke was cast); then
   `sprintOff=`, the seconds into the run its sprint first went off (-1: never), and `endLeft=`, its endurance when the
   run ended; then `turn=`, why a fought one turned: `caught`, `nopoint` (nowhere to run, with a chaser not held within
-  250 units, a hit while it held, or as a caster or pet class with power), `blocked` (the same after a blocked step) or
-  `cap` (45 s), `-` otherwise; `holds=`, its one-second tries that found no point while it held; `speed=` and
+  250 units, a hit while it held, or as a caster or pet class with power), `blocked` (the same after a blocked step)
+  or `cap` (45 s), `-` otherwise; `holds=`, its one-second tries that found no point while it held; `speed=` and
   `chaserSpeed=`, its run speed (191 unencumbered, less when encumbered) and the fastest chaser's when it began (-1
   before they are read); then `sprint=`, the seconds its sprint lasts from its endurance at the start (999: no end; -1
-  before it is read), `joined=`, the monsters that joined its chasers on the run (one that came back counts again), and
-  `wayAdds=`, 1 when its spot's straight way passed another aggressive monster's reach (there was no clear one), 0 when
-  clear, -1 with no spot. A break-off that would fire but doesn't logs once a fight as `outcome=refused` with `sec=0`
-  and the bot's `hp=`, `end=`, `attackers=` and `rate=` then, and `why=`: `control` (an add's control comes first),
-  `speed` (a chaser as fast as its sprint), `sprint` (its sprint too short for the fastest), `ranged` (a chaser that
-  harms from range) or `point` (nowhere to run), with `sprintOff=-1`, `endLeft=` its endurance then and its `speed=`,
-  `chaserSpeed=` and `sprint=` (-1 for `control`); it is no break-off, so leave it out of break-off counts. The fight it
-  dropped (`FIGHT result=dropped breakOff=1`) counts the monsters on the bot then in its `adds=` (never fewer than
-  `attackers=`), and with 2 or more and no add seen before, its `addAt=` and `addHp=` are the break-off's;
+  before it is read), `joined=`, the monsters that joined its chasers on the run (one that came back counts again),
+  and `wayAdds=`, 1 when its spot's straight way passed another aggressive monster's reach (there was no clear one), 0
+  when clear, -1 with no spot, and `qcLeft=`, a caster's Quickcast disable left at the start in whole seconds, rounded
+  up as `DEATH`'s (-1: no caster, or no Quickcast). A break-off that would fire but doesn't logs once a fight as
+  `outcome=refused` with `sec=0` and the bot's `hp=`, `end=`, `attackers=` and `rate=` then, and `why=`: `control` (an
+  add's control comes first), `speed` (a chaser as fast as its sprint), `sprint` (its sprint too short for the
+  fastest), `ranged` (a chaser that harms from range) or `point` (nowhere to run), with `sprintOff=-1`, `endLeft=` its
+  endurance then and its `speed=`, `chaserSpeed=` and `sprint=` (-1 for `control`); it is no break-off, so leave it
+  out of break-off counts. The fight it dropped (`FIGHT result=dropped breakOff=1`) counts the monsters on the bot
+  then in its `adds=` (never fewer than `attackers=`), and with 2 or more and no add seen before, its `addAt=` and
+  `addHp=` are the break-off's;
 - `TURRET`: an Animist's new turret by its target (`step=replant`) or a monster it left because it couldn't plant
   one (`step=skip`), with the target's `con=`, its distance from the turret it had (`toTurret=`) and that turret's
   reach (`reach=`);

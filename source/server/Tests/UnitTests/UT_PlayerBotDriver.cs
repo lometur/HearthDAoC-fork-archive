@@ -1652,6 +1652,103 @@ public sealed class UT_PlayerBotDriver
             Is.EqualTo((true, PlayerBotDriver.BrokeOff)), "any other break-off as before");
     }
 
+    // #167 F-C: a caster that can't finish: hits interrupt it, its Quickcast neither ready nor on, and its health at its
+    // loss rate lasts less than the Quickcast's disable and a nuke's cast; not when its own DoTs land the target's health
+    // within that time. 35% at 3% a second lasts 11,666 ms.
+    [TestCase(true, false, false, 20_000, (byte)35, 3.0, 3_000, false, true)]
+    [TestCase(true, false, false, 8_667, (byte)35, 3.0, 3_000, false, true)]     // 11,667 to wait: 1 ms too long
+    [TestCase(true, false, false, 8_666, (byte)35, 3.0, 3_000, false, false)]    //   11,666: the nuke comes in time
+    [TestCase(true, false, false, 5_000, (byte)35, 3.0, 3_000, false, false)]
+    [TestCase(true, true, false, 0, (byte)35, 3.0, 3_000, false, false)]         // Quickcast ready: CasterAction's
+    [TestCase(true, false, true, 20_000, (byte)35, 3.0, 3_000, false, false)]    //   or on: the cast goes
+    [TestCase(false, false, false, 20_000, (byte)35, 3.0, 3_000, false, false)]  // not interrupted: it casts
+    [TestCase(true, false, false, 20_000, (byte)35, 0.0, 3_000, false, false)]   // no loss read
+    [TestCase(true, false, false, 20_000, (byte)35, -2.0, 3_000, false, false)]  // healing
+    [TestCase(true, false, false, 20_000, (byte)35, 3.0, 3_000, true, false)]    // its DoT finishes the target first
+    [TestCase(true, false, false, int.MaxValue, (byte)35, 1.0, 3_000, false, true)]   // no Quickcast at all
+    public void A_caster_hit_with_its_quickcast_spent_cant_finish(bool interrupted, bool quickcastReady, bool quickcastOn,
+        int quickcastLeftMs, byte health, double rate, int castMs, bool dotFinishes, bool cantFinish) =>
+        Assert.That(PlayerBotDriver.CasterCantFinish(interrupted, quickcastReady, quickcastOn, quickcastLeftMs, health, rate,
+            castMs, _ => dotFinishes), Is.EqualTo(cantFinish));
+
+    // #167 F-C: the DoTs are read last, over the bot's time left; not at all when the nuke comes in time.
+    [Test]
+    public void The_cant_finish_DoT_read_comes_last_with_the_bots_time_left()
+    {
+        long asked = -1;
+        bool Dot(long ms) { asked = ms; return false; }
+        Assert.That(PlayerBotDriver.CasterCantFinish(true, false, false, 20_000, 35, 3.0, 3_000, Dot), Is.True);
+        Assert.That(asked, Is.EqualTo(11_666), "the DoTs within the bot's time left");
+        asked = -1;
+        Assert.That(PlayerBotDriver.CasterCantFinish(true, false, false, 5_000, 35, 3.0, 3_000, Dot), Is.False);
+        Assert.That(asked, Is.EqualTo(-1), "no effect walk when the nuke comes in time");
+    }
+
+    // #167 F-C: a caster that can't finish takes the one-monster case at any target health (the hold still first, a
+    // caster's only), and the 10% floor holds no longer for it.
+    [Test]
+    public void A_caster_that_cant_finish_takes_the_one_monster_case_below_the_floors()
+    {
+        Assert.That(PlayerBotDriver.OneMonsterCase(PlayerBotRole.Caster, false, false, 10, false, false, cantFinish: true),
+            Is.True);
+        Assert.That(PlayerBotDriver.OneMonsterCase(PlayerBotRole.Caster, false, false, 10, true, false, cantFinish: true),
+            Is.False, "the hold first");
+        Assert.That(PlayerBotDriver.OneMonsterCase(PlayerBotRole.Melee, false, false, 10, false, false, cantFinish: true),
+            Is.False, "a caster's only");
+        Assert.That(PlayerBotDriver.BreaksOff(1, false, true, 35, 5, false, true, cantFinish: true), Is.True);
+        Assert.That(PlayerBotDriver.BreaksOff(1, false, true, 35, 5, false, true), Is.False, "the floor as before");
+        Assert.That(PlayerBotDriver.BreaksOff(1, false, true, 40, 5, false, true, cantFinish: true), Is.False, "at 40%");
+        Assert.That(PlayerBotDriver.BreaksOff(1, false, true, 35, 5, false, false, cantFinish: true), Is.False,
+            "only from chasers it outruns");
+    }
+
+    // #167 F-C: BREAKOFF why=cantfinish; D1's caster arm (its target above 25%) keeps why=caster and its relocation.
+    [TestCase(false, 1, false, false, false, false, false, true, "cantfinish")]
+    [TestCase(false, 1, false, false, false, false, true, true, "caster")]
+    [TestCase(false, 2, false, false, false, false, false, true, "adds")]
+    [TestCase(true, 1, false, false, false, false, false, true, "spent")]
+    [TestCase(false, 1, false, false, false, false, false, false, "race")]
+    public void A_cant_finish_break_off_says_so(bool spent, int monstersOnBot, bool atKill, bool followUp,
+        bool avoidedOnBot, bool huntAvoided, bool casterArm, bool cantFinish, string why) =>
+        Assert.That(PlayerBotDriver.BreakOffWhy(spent, monstersOnBot, atKill, followUp, avoidedOnBot, huntAvoided, casterArm,
+            cantFinish), Is.EqualTo(why));
+
+    // #167 F-C where StartsBreakOff applies it (BreakOffStartWhy): one monster, under 40%, no hold ready, at any target
+    // health.
+    [Test]
+    public void A_caster_that_cant_finish_breaks_off_at_any_target_health()
+    {
+        var state = new PlayerBotState(Player(null)) { Engaged = true };
+        string Why(bool holdReady, byte health, byte targetHealth, bool cantFinish) =>
+            PlayerBotDriver.BreakOffStartWhy(state, PlayerBotRole.Caster, false, health, holdReady,
+                [(targetHealth, 150, false)], 25_000, () => false, cantFinish);
+        Assert.That(Why(false, 35, 5, true), Is.EqualTo(PlayerBotDriver.CantFinish), "its target at 5%: under the floor");
+        Assert.That(Why(false, 35, 20, true), Is.EqualTo(PlayerBotDriver.CantFinish), "at 20%: under D1's 25%");
+        Assert.That(Why(false, 35, 60, true), Is.EqualTo(PlayerBotDriver.CasterLosing), "above 25%: D1's arm");
+        Assert.That(Why(false, 35, 5, false), Is.Null, "it can finish: C2b's killing nuke");
+        Assert.That(Why(true, 35, 5, true), Is.Null, "the hold first");
+        Assert.That(Why(false, 40, 5, true), Is.Null, "not under 40%");
+    }
+
+    // #167 F-C: a can't-finish break-off runs, then rests, as a spent caster's: no camp barred, no name avoided, no
+    // relocation.
+    [Test]
+    public void A_cant_finish_break_off_bars_nothing_and_owes_a_rest()
+    {
+        Assert.That((PlayerBotDriver.RestsAfterBreakOff(PlayerBotDriver.Spent),
+            PlayerBotDriver.RestsAfterBreakOff(PlayerBotDriver.CantFinish),
+            PlayerBotDriver.RestsAfterBreakOff(PlayerBotDriver.CasterLosing), PlayerBotDriver.RestsAfterBreakOff(null)),
+            Is.EqualTo((true, true, false, false)));
+        var state = new PlayerBotState(Player(null)) { AnchorRegion = 51, Anchor = new(3_000, 0, 0),
+            BreakOffWhy = PlayerBotDriver.CantFinish, BreakOffSince = 2_000 };
+        state.RoamDestination = state.Anchor;
+        PlayerBotDriver.BrokeOffFrom(state, 51, new Vector3(1_000, 0, 0), ["wolf"], 2_000);
+        Assert.That((PlayerBotDriver.FailedCamps(state.FailedCamps, 51, 2_001).Length,
+            PlayerBotDriver.IsAvoided(state.AvoidUntil, "wolf", 2_001)), Is.EqualTo((0, false)));
+        PlayerBotDriver.FinishBreakOff(state, PlayerBotDriver.Shook, owesReplan: true, 7_000);
+        Assert.That((state.ReplanOwed, state.RecoverBeforePull), Is.EqualTo(((string)null, true)));
+    }
+
     // It outruns a chaser no faster than its run (191, GamePlayer.cs:8250; enable_pve_speed is off in the world DB), or
     // one under its sprint (1.3 x 191 = 248, MaxSpeedCalculator.cs:25) while its next swing comes 25 s or more after its
     // last (StandardMobState.cs:89, :121). The review of 9aacd69: either way the sprint's lead must clear the chaser's
@@ -2454,26 +2551,29 @@ public sealed class UT_PlayerBotDriver
     // they are read); then (#167 F-O) sprint=, the seconds its sprint lasts from its endurance at the start
     // (SprintSeconds; 999: no end; -1: not read), a refusal's too; then (#167 F-W) joined=, the monsters that joined its
     // chasers on the run, and wayAdds=, 1 when its point's straight way passed another monster's reach (no clear one), 0
-    // when clear, -1 with no point.
+    // when clear, -1 with no point; then (#167 F-C) qcLeft=, a caster's Quickcast disable left at the start in whole
+    // seconds, rounded up (QuickcastLeftSeconds, as DEATH qcLeft=; -1: no caster, or no Quickcast).
     [Test]
     public void A_break_off_line_gives_its_start_and_outcome()
     {
         Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 72, 2, 26, "shook", 6.26, "adds", 9, 41),
             Is.EqualTo("PLAYER_BOT_BREAKOFF bot=Pbotaaaaz level=34 hp=38 end=72 attackers=2 sec=26 outcome=shook rate=6.3 " +
-                "why=adds sprintOff=9 endLeft=41 turn=- holds=0 speed=-1 chaserSpeed=-1 sprint=-1 joined=0 wayAdds=-1"));
+                "why=adds sprintOff=9 endLeft=41 turn=- holds=0 speed=-1 chaserSpeed=-1 sprint=-1 joined=0 wayAdds=-1 qcLeft=-1"));
         Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 72, 1, 0, "refused", 3.0, "speed", -1, 72,
                 speed: 191, chaserSpeed: 191),
             Is.EqualTo("PLAYER_BOT_BREAKOFF bot=Pbotaaaaz level=34 hp=38 end=72 attackers=1 sec=0 outcome=refused rate=3.0 " +
-                "why=speed sprintOff=-1 endLeft=72 turn=- holds=0 speed=191 chaserSpeed=191 sprint=-1 joined=0 wayAdds=-1"));
+                "why=speed sprintOff=-1 endLeft=72 turn=- holds=0 speed=191 chaserSpeed=191 sprint=-1 joined=0 wayAdds=-1 " +
+                "qcLeft=-1"));
         Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 72, 2, 12, "fought", 6.26, "adds", 4, 30,
                 "nopoint", 3, 170, 248),
             Is.EqualTo("PLAYER_BOT_BREAKOFF bot=Pbotaaaaz level=34 hp=38 end=72 attackers=2 sec=12 outcome=fought rate=6.3 " +
                 "why=adds sprintOff=4 endLeft=30 turn=nopoint holds=3 speed=170 chaserSpeed=248 sprint=-1 joined=0 " +
-                "wayAdds=-1"));
+                "wayAdds=-1 qcLeft=-1"));
         Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 51, 1, 0, "refused", 3.0, "sprint", -1, 51,
-                speed: 191, chaserSpeed: 200, sprint: 9, joined: 1, wayAdds: 1),
+                speed: 191, chaserSpeed: 200, sprint: 9, joined: 1, wayAdds: 1, qcLeft: 22),
             Is.EqualTo("PLAYER_BOT_BREAKOFF bot=Pbotaaaaz level=34 hp=38 end=51 attackers=1 sec=0 outcome=refused rate=3.0 " +
-                "why=sprint sprintOff=-1 endLeft=51 turn=- holds=0 speed=191 chaserSpeed=200 sprint=9 joined=1 wayAdds=1"));
+                "why=sprint sprintOff=-1 endLeft=51 turn=- holds=0 speed=191 chaserSpeed=200 sprint=9 joined=1 wayAdds=1 " +
+                "qcLeft=22"));
         Assert.That(PlayerBotDriverReport.FormatBreakOff("Pbotaaaaz", 34, 38, 72, 1, 4, "shook", 3.0, "race",
                 sprint: int.MaxValue), Does.Contain(" sprint=999 "), "a sprint that never ends");
     }

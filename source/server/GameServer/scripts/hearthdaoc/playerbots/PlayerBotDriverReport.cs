@@ -317,14 +317,18 @@ public static class PlayerBotDriverReport
     /// at the start (PlayerBotDriver.SprintSeconds; 999: no end; -1: not read), a refusal's too. Then (#167 F-W) joined=,
     /// the monsters that joined its chasers on the run (one that came back counts again), and wayAdds=, 1 when its
     /// point's straight way passed another monster's reach (no clear one), 0 when clear, -1 with no point
-    /// (PlayerBotDriver.WayInAddReach).</summary>
+    /// (PlayerBotDriver.WayInAddReach). Then (#167 F-C) qcLeft=, a caster's Quickcast disable left at the start, whole
+    /// seconds rounded up (PlayerBotDriver.QuickcastLeftSeconds, as DEATH qcLeft=; -1: no caster, or no Quickcast).
+    /// why= is (#167 F-C) cantfinish too: a caster hit with its Quickcast spent that would die before it came back and a
+    /// nuke was cast.</summary>
     public static string FormatBreakOff(string bot, int level, int hp, int end, int attackers, long seconds, string outcome,
         double rate, string why, long sprintOff = -1, int endLeft = -1, string turn = "-", int holds = 0, int speed = -1,
-        int chaserSpeed = -1, int sprint = -1, int joined = 0, int wayAdds = -1) =>
+        int chaserSpeed = -1, int sprint = -1, int joined = 0, int wayAdds = -1, int qcLeft = -1) =>
         string.Create(CultureInfo.InvariantCulture,
             $"PLAYER_BOT_BREAKOFF bot={bot} level={level} hp={hp} end={end} attackers={attackers} sec={seconds} outcome={outcome} " +
             $"rate={FormatRate(rate)} why={why} sprintOff={sprintOff} endLeft={endLeft} turn={turn} holds={holds} " +
-            $"speed={speed} chaserSpeed={chaserSpeed} sprint={Math.Min(sprint, 999)} joined={joined} wayAdds={wayAdds}");
+            $"speed={speed} chaserSpeed={chaserSpeed} sprint={Math.Min(sprint, 999)} joined={joined} wayAdds={wayAdds} " +
+            $"qcLeft={qcLeft}");
 
     /// <summary>PLAYER_BOT_RELEASE (#167 D7), each release the driver asks for (PlayerBotDriver.ReleaseDue): its try in
     /// this death (a release that didn't revive the bot goes again 10 s on) and the milliseconds since the death (the
