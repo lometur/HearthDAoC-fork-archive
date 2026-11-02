@@ -2165,6 +2165,35 @@ public sealed class UT_PlayerBotDriver
             PlayerBotDriver.LongWind, rangedHarm, targetCon), Is.EqualTo((reserve, runNeed, targetAlone)));
     }
 
+    // #167 F-R (the review of F): ReserveNow reads its target's con: a fight with a YELLOW target alone keeps a reserve
+    // from its first read, and FIGHT reserve= keeps it (FightReserve); a BLUE one alone, none.
+    [TestCase(ConColor.YELLOW, true)] [TestCase(ConColor.BLUE, false)]
+    public void The_reserve_now_reads_its_targets_con(ConColor con, bool keeps)
+    {
+        MethodInfo reserveNow = typeof(PlayerBotDriver).GetMethod("ReserveNow", BindingFlags.Static | BindingFlags.NonPublic)!;
+        InTheField(new SplitFloorMesh(), new(840_884, 702_153, 8_784), (region, zone, bot) =>
+        {
+            var probe = (GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC));
+            byte targetLevel = 20;
+            for (; targetLevel < 60; targetLevel++)
+            {
+                typeof(GameObject).GetField("m_level", Hidden)!.SetValue(probe, targetLevel);
+                if (ConLevels.GetConColor(bot.GetConLevel(probe)) == con) break;
+            }
+            GameNPC target = MonsterAt(region, zone, new(840_700, 702_100, 8_700), targetLevel);
+            ((GameLiving)target).movementComponent = target.movementComponent;            // MaxSpeed
+            var state = new PlayerBotState(bot) { Engaged = true };
+            var calculators = (DOL.GS.PropertyCalc.IPropertyCalculator[])typeof(GameLiving)
+                .GetField("m_propertyCalc", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+            var saved = (calculators[(int)eProperty.EnduranceRegenerationAmount], calculators[(int)eProperty.FatigueConsumption]);
+            (calculators[(int)eProperty.EnduranceRegenerationAmount], calculators[(int)eProperty.FatigueConsumption]) =
+                (new Fixed(0), new Fixed(100));
+            try { reserveNow.Invoke(null, [state, bot, target, 10_000L]); }
+            finally { (calculators[(int)eProperty.EnduranceRegenerationAmount], calculators[(int)eProperty.FatigueConsumption]) = saved; }
+            Assert.That((state.Reserve > 0, state.FightReserve), Is.EqualTo((keeps, state.Reserve)));
+        });
+    }
+
     // Where it runs: ahead of straight away from its chasers (a dot product above 0, so never square to them), out of
     // every other monster's reach, the farthest from the nearest chaser; none, null.
     [Test]
@@ -2196,6 +2225,8 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.WayInAddReach(here, point, Add(-750, 300, 200)), Is.True, "300 off the way, reach 400");
         Assert.That(PlayerBotDriver.WayInAddReach(here, point, Add(-750, 500, 200)), Is.False, "500 off it");
         Assert.That(PlayerBotDriver.WayInAddReach(here, point, Add(800, 0, 500)), Is.False, "behind the bot");
+        Assert.That(PlayerBotDriver.WayInAddReach(here, point, Add(300, 0, 200)), Is.False,
+            "behind the bot, its reach over here (the review of F: the row above is out of reach either way)");
         Assert.That(PlayerBotDriver.WayInAddReach(here, point, Add(-2_000, 0, 200)), Is.False, "500 past the point");
         Assert.That(PlayerBotDriver.WayInAddReach(here, point, Add(-1_800, 0, 200)), Is.True, "300 past it: the end's");
         Assert.That(PlayerBotDriver.WayInAddReach(here, here, Add(0, 0, 200)), Is.False, "no way");
@@ -2220,6 +2251,18 @@ public sealed class UT_PlayerBotDriver
         Vector3[] square = [new(-1_500, 0, 0), new(-388, 1_449, 0)];                    // 75 degrees off straight away
         Assert.That(PlayerBotDriver.BreakOffPoint(here, chasers, square, onTheWay), Is.EqualTo(new Vector3(-1_500, 0, 0)),
             "a clear way 75 degrees off is no better than the farthest: the chaser in reach gains on it");
+    }
+
+    // #167 F-W (the review of F): a clear way counts within 60 degrees of straight away (ClearWayCos 0.5): 55 degrees off
+    // yes, 65 no (the 75-degree row above holds for any bound from about 0.26 to 0.70).
+    [Test]
+    public void A_clear_way_counts_within_60_degrees_of_straight_away()
+    {
+        Vector3 here = Vector3.Zero, straight = new(-1_500, 0, 0), at55 = new(-860, 1_229, 0), at65 = new(-634, 1_359, 0);
+        Vector3[] chasers = [new(300, 0, 0)];
+        var onTheWay = new List<(string, Vector3, int)> { ("add", new(-750, -300, 0), 200) };
+        Assert.That(PlayerBotDriver.BreakOffPoint(here, chasers, [straight, at55], onTheWay), Is.EqualTo(at55), "55 degrees");
+        Assert.That(PlayerBotDriver.BreakOffPoint(here, chasers, [straight, at65], onTheWay), Is.EqualTo(straight), "65 degrees");
     }
 
     // The review of 9aacd69: a point on another mesh island (across water, up a cliff) blocked the step at once, and the
