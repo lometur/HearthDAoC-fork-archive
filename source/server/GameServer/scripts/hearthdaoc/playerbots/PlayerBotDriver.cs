@@ -1031,12 +1031,7 @@ public static class PlayerBotDriver
             }
             state.NextSpellChoiceTick = 0;                                              // the next due think chooses
             state.NextCombatChoiceTick = now + Math.Max(900, state.Spell.CastTime + 250);
-            state.FightCasts++;
-            if (IsDamageOverTime(state.Spell)) state.FightDots++;                       // #167 E C1 dots=
-            if (IsPowerTap(state.Spell)) state.FightTaps++;                             // #167 F N1b taps=
-            state.FightQuickcast |= quickcasting;
-            if (quickcasting) state.FightQcNukes++;                                     // #167 F C2 qcNuke=
-            state.FightKillingQuickcast |= quickcasting && state.KillingQuickcast;      // #167 E C2b qcKill=
+            CountCast(state, state.Spell, quickcasting, SkillBase.GetSpellByID);        // casts=, dots=, taps=, qc=
             state.Activity = PlayerBotActivity.Casting;
         }
         else if (action is PlayerBotCombatAction.Quickcast)
@@ -4540,8 +4535,21 @@ public static class PlayerBotDriver
         powerTap.Damage * 100 >= lifetap.Damage * PowerTapDamagePercent;
 
     // #167 F N1b taps=: a cast of a power tap (PayloadKind PowerDrainPet).
-    private static bool IsPowerTap(Spell spell) =>
-        spell != null && PayloadKind(spell, SkillBase.GetSpellByID) is eSpellType.PowerDrainPet;
+    private static bool IsPowerTap(Spell spell, Func<int, Spell> payload) =>
+        spell != null && PayloadKind(spell, payload) is eSpellType.PowerDrainPet;
+
+    /// <summary>A cast begun, counted for FIGHT (Engage's cast path; the review of F: a seam, so taps= is tested with a
+    /// payload the test gives, the cast path's SkillBase.GetSpellByID): casts=, dots= (#167 E C1), taps= (#167 F N1b: a
+    /// power tap by its payload, IsPowerTap), qc= and qcNuke= (#167 F C2), qcKill= (#167 E C2b).</summary>
+    public static void CountCast(PlayerBotState state, Spell spell, bool quickcasting, Func<int, Spell> payload)
+    {
+        state.FightCasts++;
+        if (IsDamageOverTime(spell)) state.FightDots++;                                 // #167 E C1 dots=
+        if (IsPowerTap(spell, payload)) state.FightTaps++;                              // #167 F N1b taps=
+        state.FightQuickcast |= quickcasting;
+        if (quickcasting) state.FightQcNukes++;                                         // #167 F C2 qcNuke=
+        state.FightKillingQuickcast |= quickcasting && state.KillingQuickcast;          // #167 E C2b qcKill=
+    }
 
     // #167 F10b: an Animist's bomber does only its payload (BomberBrain.cs:32-34, its SubSpellID); the bomber's own
     // Damage (50 on every one) is no damage. One whose payload does none (Spreading Vines: a root) is no nuke, nor does it

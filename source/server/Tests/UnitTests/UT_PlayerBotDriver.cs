@@ -6316,6 +6316,23 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.PayloadKind(SpiritVacuum, _ => null), Is.EqualTo(eSpellType.PetSpell));
     }
 
+    // #167 F N1b taps= (the review of F): a cast begun counts as a tap when its payload drains power (CountCast, the cast
+    // path's counters); a lifetap doesn't. The others as before: dots= (#167 E C1), qc= and qcNuke= (#167 F C2), qcKill=
+    // (#167 E C2b).
+    [Test]
+    public void A_cast_counts_as_a_tap_by_its_payload()
+    {
+        Func<int, Spell> payload = id => NecroPayloads.GetValueOrDefault(id);
+        var state = new PlayerBotState(Player(null)) { KillingQuickcast = true };
+        PlayerBotDriver.CountCast(state, SpiritVacuum, false, payload);
+        Assert.That((state.FightCasts, state.FightTaps, state.FightDots, state.FightQcNukes), Is.EqualTo((1, 1, 0, 0)), "a tap");
+        PlayerBotDriver.CountCast(state, TheftOfEnergy, false, payload);
+        Assert.That((state.FightCasts, state.FightTaps), Is.EqualTo((2, 1)), "a lifetap");
+        PlayerBotDriver.CountCast(state, Damage("DamageOverTime", 20, 30), true, payload);
+        Assert.That((state.FightCasts, state.FightTaps, state.FightDots, state.FightQcNukes, state.FightQuickcast,
+            state.FightKillingQuickcast), Is.EqualTo((3, 1, 1, 1, true, true)), "a quickcast DoT");
+    }
+
     // --- the healer's self-heal (DEATHS.md A6) ---
 
     private static readonly SpellLine Mending = new("Rejuvenation", "Rejuvenation", Specs.Rejuvenation, true);
