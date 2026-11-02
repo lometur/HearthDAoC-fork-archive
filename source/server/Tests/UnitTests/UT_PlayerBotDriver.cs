@@ -1219,7 +1219,7 @@ public sealed class UT_PlayerBotDriver
             FightCastsHeld = 2, Reserve = 36, NextReserveTick = 9_000, FightHealCasts = 2, FightHealsLanded = 1,
             PendingHeal = (Heal(20, 400).Item1, 8_000), FightHealHolds = 5, FightHealHoldMax = 3, HealHoldRun = 2,
             FightTaps = 2, FightCtlResisted = 2, FightCtlImmune = 1, ControlFail = (PlayerBotSpellFail.Resisted, 500, 8_500),
-            FightQcControls = 1, FightQcNukes = 2 };
+            FightQcControls = 1, FightQcNukes = 2, FightReserve = 41 };
         state.FightAddWhy[(int)PlayerBotAddWhy.HitNoQc] = 3;
         Assert.That(PlayerBotDriver.OpenFight(state, 10_000, 90, 60, 1_420, 100), Is.True, "the first fight since a release");
         Assert.That((state.BackPending, state.KilledWithAdds, state.ControlTries, state.FightCasts, state.FightAdd),
@@ -1249,6 +1249,7 @@ public sealed class UT_PlayerBotDriver
         Assert.That((state.FightCtlResisted, state.FightCtlImmune, state.ControlFail, state.FightQcControls,
                 state.FightQcNukes), Is.EqualTo((0, 0, default((PlayerBotSpellFail, int, long)), 0, 0)),
             "#167 F C2: ctlResisted=, ctlImmune=, qcCtl= and qcNuke= afresh, no failure message kept");
+        Assert.That(state.FightReserve, Is.Zero, "#167 F-R: reserve= afresh");
         Assert.That(PlayerBotDriver.OpenFight(state, 30_000, 90, 60, 1_420, 100), Is.False, "the next one");
     }
 
@@ -1838,13 +1839,18 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.HealthLeftAtKill(health, targetHealth, hpAtReach, targetHpAtReach), Is.EqualTo(left));
 
     // #167 E-R: the reserve is kept in a close fight only: 2 or more on the bot now or in the fight, a defence or the
-    // fight after an add kill, or the race projecting it under 30 at its target's death.
-    [TestCase(2, 2, false, null, true)] [TestCase(1, 2, false, null, true)] [TestCase(1, 1, true, null, true)]
-    [TestCase(1, 1, false, null, false)] [TestCase(1, 1, false, 29, true)] [TestCase(1, 1, false, 30, false)]
-    [TestCase(0, 0, false, int.MinValue, true)]
-    public void Only_a_close_fight_keeps_the_reserve(int monstersOnBot, int fightAdds, bool defence, int? leftAtKill,
-        bool close) =>
-        Assert.That(PlayerBotDriver.CloseFight(monstersOnBot, fightAdds, defence, leftAtKill), Is.EqualTo(close));
+    // fight after an add kill, or the race projecting it under 30 at its target's death. #167 F-R: or a target yellow or
+    // harder from the fight's first think (the race reads from 20 lost; a yellow pull had styled the run's endurance
+    // away by then). A blue or green pull, or no target alive (GREY), keeps its styles.
+    [TestCase(2, 2, false, null, ConColor.BLUE, true)] [TestCase(1, 2, false, null, ConColor.BLUE, true)]
+    [TestCase(1, 1, true, null, ConColor.BLUE, true)] [TestCase(1, 1, false, null, ConColor.BLUE, false)]
+    [TestCase(1, 1, false, 29, ConColor.BLUE, true)] [TestCase(1, 1, false, 30, ConColor.BLUE, false)]
+    [TestCase(0, 0, false, int.MinValue, ConColor.BLUE, true)]
+    [TestCase(1, 1, false, null, ConColor.YELLOW, true)] [TestCase(1, 1, false, null, ConColor.PURPLE, true)]
+    [TestCase(1, 1, false, null, ConColor.GREEN, false)] [TestCase(0, 0, false, null, ConColor.GREY, false)]
+    public void Only_a_close_fight_or_a_yellow_target_keeps_the_reserve(int monstersOnBot, int fightAdds, bool defence,
+        int? leftAtKill, ConColor targetCon, bool close) =>
+        Assert.That(PlayerBotDriver.CloseFight(monstersOnBot, fightAdds, defence, leftAtKill, targetCon), Is.EqualTo(close));
 
     // #167 E-R, the review's change: the reserve is a fight's only. Engage's cast gate runs on the walk in and the first
     // think in reach, before OpenFight's resets: out of a fight it read the last fight's adds and race, and cached them for
@@ -1901,26 +1907,29 @@ public sealed class UT_PlayerBotDriver
     // 150 chaser, not 21) and TargetAlone always true (a target at 10% or less with an add on the bot released the hold)
     // with every test green: the other R2 test sets the three itself. At regeneration 0, fatigue 100, Long Wind 5.
     // #167 F-O: 36 / 31 against a 192 chaser (5 s of sprint with its reach), none against 200, none against a monster
-    // that harms from range.
-    [TestCase(150, new[] { 150 }, new[] { true }, 1, true, null, false, 31, 21, true)]   // a 150 target alone, a defence
-    [TestCase(150, new[] { 150, 192 }, new[] { true, false }, 2, false, null, false, 36, 31, false)]   // and a 192 add
-    [TestCase(150, new[] { 192 }, new[] { false }, 2, false, null, false, 36, 31, false)]   // the add only, not the target
-    [TestCase(192, new[] { 150 }, new[] { false }, 1, true, null, false, 36, 31, false)]    // the target's speed off the bot
-    [TestCase(150, new[] { 150, 150 }, new[] { true, false }, 1, false, null, false, 31, 21, false)]   // 2 on the bot now
-    [TestCase(150, new[] { 150 }, new[] { true }, 1, false, 29, false, 31, 21, true)]    // the race under 30 at the kill
-    [TestCase(150, new[] { 150 }, new[] { true }, 1, false, null, false, 0, 0, true)]    // no close fight
-    [TestCase(205, new[] { 205 }, new[] { true }, 1, true, null, false, 0, 0, true)]     // 205: no reserve buys a run
-    [TestCase(200, new[] { 200 }, new[] { true }, 1, true, null, false, 0, 0, true)]     // #167 F-O: nor at 200
-    [TestCase(194, new[] { 194 }, new[] { true }, 1, true, null, false, 41, 36, true)]   //   41 / 36 at 194
-    [TestCase(150, new[] { 150 }, new[] { true }, 1, true, null, true, 0, 0, true)]      //   ranged: no run starts
+    // that harms from range. #167 F-R: a yellow target keeps it from the first think, on the bot or at range.
+    [TestCase(150, new[] { 150 }, new[] { true }, 1, true, null, false, ConColor.BLUE, 31, 21, true)]   // a defence
+    [TestCase(150, new[] { 150, 192 }, new[] { true, false }, 2, false, null, false, ConColor.BLUE, 36, 31, false)]
+    [TestCase(150, new[] { 192 }, new[] { false }, 2, false, null, false, ConColor.BLUE, 36, 31, false)]   // the add only
+    [TestCase(192, new[] { 150 }, new[] { false }, 1, true, null, false, ConColor.BLUE, 36, 31, false)]    // target off it
+    [TestCase(150, new[] { 150, 150 }, new[] { true, false }, 1, false, null, false, ConColor.BLUE, 31, 21, false)]
+    [TestCase(150, new[] { 150 }, new[] { true }, 1, false, 29, false, ConColor.BLUE, 31, 21, true)]      // the race
+    [TestCase(150, new[] { 150 }, new[] { true }, 1, false, null, false, ConColor.BLUE, 0, 0, true)]      // no close fight
+    [TestCase(205, new[] { 205 }, new[] { true }, 1, true, null, false, ConColor.BLUE, 0, 0, true)]
+    [TestCase(200, new[] { 200 }, new[] { true }, 1, true, null, false, ConColor.BLUE, 0, 0, true)]       // #167 F-O
+    [TestCase(194, new[] { 194 }, new[] { true }, 1, true, null, false, ConColor.BLUE, 41, 36, true)]
+    [TestCase(150, new[] { 150 }, new[] { true }, 1, true, null, true, ConColor.BLUE, 0, 0, true)]        //   ranged
+    [TestCase(150, new[] { 150 }, new[] { true }, 1, false, null, false, ConColor.YELLOW, 31, 21, true)]  // #167 F-R
+    [TestCase(150, new int[0], new bool[0], 0, false, null, false, ConColor.YELLOW, 31, 21, true)]        //   at range
+    [TestCase(150, new[] { 150 }, new[] { true }, 1, false, null, true, ConColor.ORANGE, 0, 0, true)]     //   ranged
     public void The_reserve_read_takes_the_need_and_the_adds_from_the_monsters_on_the_bot(int targetSpeed, int[] speeds,
-        bool[] isTarget, int fightAdds, bool defence, int? leftAtKill, bool rangedHarm, int reserve, int runNeed,
-        bool targetAlone)
+        bool[] isTarget, int fightAdds, bool defence, int? leftAtKill, bool rangedHarm, ConColor targetCon, int reserve,
+        int runNeed, bool targetAlone)
     {
         var onBot = new List<(int Speed, bool IsTarget)>();
         for (int i = 0; i < speeds.Length; i++) onBot.Add((speeds[i], isTarget[i]));
         Assert.That(PlayerBotDriver.ReserveRead(targetSpeed, onBot, fightAdds, defence, leftAtKill, 0, 100,
-            PlayerBotDriver.LongWind, rangedHarm), Is.EqualTo((reserve, runNeed, targetAlone)));
+            PlayerBotDriver.LongWind, rangedHarm, targetCon), Is.EqualTo((reserve, runNeed, targetAlone)));
     }
 
     // Where it runs: ahead of straight away from its chasers (a dot product above 0, so never square to them), out of
@@ -6231,7 +6240,8 @@ public sealed class UT_PlayerBotDriver
     // heals cast; then (#167 F H2) healHold=, the thinks it held its swing for a heal, and healHoldMax=, its longest hold;
     // then (#167 F N1b) taps=, a Necromancer's power-tap casts; then (#167 F C1) addWhy=, the fight's add step in a word;
     // then (#167 F C2) ctlResisted= and ctlImmune=, of ctlFailed= the controls the server said were resisted or immune,
-    // and qcCtl= and qcNuke=, the casts under Quickcast at a control and of its damage spell.
+    // and qcCtl= and qcNuke=, the casts under Quickcast at a control and of its damage spell; then (#167 F-R) reserve=,
+    // the highest endurance reserve the fight read for a run (0: none).
     [Test]
     public void FightFormat()
     {
@@ -6242,14 +6252,14 @@ public sealed class UT_PlayerBotDriver
                 Walk: PlayerBotWalk.Hunt, KiteNone: (1, 0, 2, 3), Dots: 2, KillingQuickcast: true, TargetMezzes: 1,
                 RaceLeft: 22, EndStart: 85, End: 31, StylesHeld: 3, CastsHeld: 2, Sight: 4, Blind: true, BlindSteps: 2,
                 HealCasts: 1, HealsLanded: 1, HealHolds: 6, HealHoldMax: 4, Taps: 3,
-                AddWhy: PlayerBotAddWhy.Control, CtlResisted: 1, CtlImmune: 0, QcControls: 1, QcNukes: 2)),
+                AddWhy: PlayerBotAddWhy.Control, CtlResisted: 1, CtlImmune: 0, QcControls: 1, QcNukes: 2, Reserve: 36)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbotaaaac level=40 target=\"widow claw\" targetLevel=40 con=YELLOW from=pull result=kill " +
                        "startHp=100 endHp=38 startMana=100 endMana=12 sec=21 adds=1 swings=9 notVisible=2 casts=4 lifeKills=0 rests=0 " +
                        "pet=alive heals=2 qc=1 buffs=3 petCasts=2 waits=5 ctl=2 kites=1 ctlBroken=1 addCtl=1 addAt=6 addHp=71 " +
                        "breakOff=1 engageDist=1450 crowd=1 heldSec=7 ctlLanded=1 ctlFailed=1 hpAtReach=92 tHpAtReach=64 rate=4.3 " +
                        "wouldBreak=38 walk=hunt kiteNone=1:0:2:3 dots=2 qcKill=1 ctlMez=1 raceLeft=22 endStart=85 end=31 " +
                        "styleHeld=3 castHeld=2 sight=4 blind=1 blindSteps=2 healCast=1 healLanded=1 healHold=6 healHoldMax=4 " +
-                       "taps=3 addWhy=ctl ctlResisted=1 ctlImmune=0 qcCtl=1 qcNuke=2"));
+                       "taps=3 addWhy=ctl ctlResisted=1 ctlImmune=0 qcCtl=1 qcNuke=2 reserve=36"));
         Assert.That(PlayerBotDriverReport.FormatFight(new PlayerBotFight("Pbothaaab", 43, "empyrean guardian", 36, ConColor.BLUE, true,
                 false, 64, 51, 100, 100, 7, 2, 3, 0, 0, 3, 1, Rate: -0.04, Walk: PlayerBotWalk.BreakOff)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbothaaab level=43 target=\"empyrean guardian\" targetLevel=36 con=BLUE from=defence " +
@@ -6259,7 +6269,7 @@ public sealed class UT_PlayerBotDriver
                        "tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=breakoff kiteNone=0:0:0:0 dots=0 qcKill=0 ctlMez=0 " +
                        "raceLeft=-999 endStart=-1 end=-1 styleHeld=0 castHeld=0 sight=0 blind=0 blindSteps=0 healCast=0 " +
                        "healLanded=0 healHold=0 healHoldMax=0 taps=0 addWhy=none ctlResisted=0 ctlImmune=0 qcCtl=0 " +
-                       "qcNuke=0"),
+                       "qcNuke=0 reserve=0"),
             "a gain under 0.05 a second: 0.0, not -0.0");
     }
 

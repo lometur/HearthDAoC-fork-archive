@@ -47,7 +47,8 @@ public readonly record struct PlayerBotCrossingWindow(int Seconds, long Took, lo
 /// power-tap casts (Taps); then (#167 F C1) the fight's add step in a word (AddWhy; PlayerBotDriver.FightAddWhy); then
 /// (#167 F C2) of CtlFailed, the controls the server said were resisted (CtlResisted) or immune (CtlImmune), the rest
 /// refused, interrupted or unsaid, and the casts under Quickcast at a control (QcControls) and of Engage's damage spell,
-/// a Theurgist's pet too (QcNukes).</summary>
+/// a Theurgist's pet too (QcNukes); then (#167 F-R) the highest endurance reserve the fight read for a run (Reserve;
+/// PlayerBotDriver.ReserveNow; 0: none).</summary>
 public readonly record struct PlayerBotFight(
     string Bot, int Level, string Target, int TargetLevel, ConColor Con, bool FromDefence, bool Killed,
     byte StartHp, byte EndHp, byte StartMana, byte EndMana, long Seconds, int Adds, int Swings, int NotVisible, int Casts,
@@ -59,7 +60,7 @@ public readonly record struct PlayerBotFight(
     int TargetMezzes = 0, int RaceLeft = -999, int EndStart = -1, int End = -1, int StylesHeld = 0, int CastsHeld = 0,
     int Sight = 0, bool Blind = false, int BlindSteps = 0, int HealCasts = 0, int HealsLanded = 0,
     int HealHolds = 0, int HealHoldMax = 0, int Taps = 0, PlayerBotAddWhy AddWhy = PlayerBotAddWhy.None, int CtlResisted = 0,
-    int CtlImmune = 0, int QcControls = 0, int QcNukes = 0);
+    int CtlImmune = 0, int QcControls = 0, int QcNukes = 0, int Reserve = 0);
 
 /// <summary>What a PLAYER_BOT_DEATH line adds after its first fields (levelmatch/DEATHS.md 2); -1 for none: the fight's
 /// fields (startHp, fightSec, adds, swings, notVisible) out of a fight, targetHp with no target, sinceKillSec with no kill
@@ -257,7 +258,7 @@ public static class PlayerBotDriverReport
         $"end={f.End} styleHeld={f.StylesHeld} castHeld={f.CastsHeld} sight={f.Sight} blind={(f.Blind ? 1 : 0)} " +
         $"blindSteps={f.BlindSteps} healCast={f.HealCasts} healLanded={f.HealsLanded} healHold={f.HealHolds} " +
         $"healHoldMax={f.HealHoldMax} taps={f.Taps} addWhy={FormatAddWhy(f.AddWhy)} ctlResisted={f.CtlResisted} " +
-        $"ctlImmune={f.CtlImmune} qcCtl={f.QcControls} qcNuke={f.QcNukes}");
+        $"ctlImmune={f.CtlImmune} qcCtl={f.QcControls} qcNuke={f.QcNukes} reserve={f.Reserve}");
 
     /// <summary>#167 F C1 addWhy=: none, ctl, pets, noControl, tries, noneTakes, rootContact, targetFirst, hitNoQc,
     /// closeNoQc, los or noAdd.</summary>

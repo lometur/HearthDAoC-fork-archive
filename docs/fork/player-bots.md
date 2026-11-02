@@ -209,17 +209,21 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   a new camp from where it ran to before it looks for a new target. A break-off on the walk to its camp, more than 1,400
   units short of it, bars that camp too for 15 minutes.
 - In a close fight (2 or more monsters on it now or earlier in the fight, a defence, the fight after a kill with adds,
-  or a fight the race since the first hit on it projects it to end under 30% health) a bot keeps the endurance a sprint
-  away from the fastest monster on it would need, plus 5: 31 against a monster no faster than its run, 36 against one
-  of speed 192-193, 41 against 194-195. Its styles, and for a class that isn't a caster or pet class its damage spells
-  (5 endurance a cast), wait while they would take it under that; a cheaper style that leaves it goes instead. Heals
-  don't wait, nor does a lifetap (a Reaver's Siphons, a Valewalker's Cycle of Life): it heals the bot too. Against a
-  monster of speed 196 or more, or one with a snare, stun, mez or damage spell of 1,000 units' range or more, it keeps
-  none, since no sprint it could keep would outrun it. It waits only while waiting can still buy a run: not once its
-  endurance is under what that sprint needs (16 against a monster slower than 148, 21 against 148-181, 26 against
-  182-191, 31 against 192-193, 36 against 194-195), since endurance doesn't come back in a fight, and not while its target, the only monster on it, is
-  at 10% health or less, since a bot never breaks off from a target that low. With another monster on it, it keeps
-  waiting there, for the run from that one at the kill. Out of a close fight it styles as before.
+  a fight the race since the first hit on it projects it to end under 30% health, or a fight with a yellow or harder
+  target, from its first think) a bot keeps the endurance a sprint away from the fastest monster on it would need, plus
+  5: 31 against a monster no faster than its run, 36 against one of speed 192-193, 41 against 194-195. Its styles, and
+  for a class that isn't a caster or pet class its damage spells (5 endurance a cast), wait while they would take it
+  under that; a cheaper style that leaves it goes instead. Heals don't wait, nor does a lifetap (a Reaver's Siphons, a
+  Valewalker's Cycle of Life): it heals the bot too. Against a monster of speed 196 or more, or one with a snare, stun,
+  mez or damage spell of 1,000 units' range or more, it keeps none, since no sprint it could keep would outrun it. It
+  waits only while waiting can still buy a run: not once its endurance is under what that sprint needs (16 against a
+  monster slower than 148, 21 against 148-181, 26 against 182-191, 31 against 192-193, 36 against 194-195), since
+  endurance doesn't come back in a fight, and not while its target, the only monster on it, is at 10% health or less,
+  since a bot never breaks off from a target that low. With another monster on it, it keeps waiting there, for the run
+  from that one at the kill. In a blue or green fight with one monster it styles as before. The yellow fights cost the
+  style classes a few kills (about 0.15% of all kills over batch F's seven base legs); Reavers, Valewalkers, Skalds,
+  Berserkers and Heroes pay that with no yellow-pull deaths of theirs to save. A caster's or pet class's casts never
+  wait; a Hunter's styles wait as any style class's.
 - It releases 10 s after a death, counted from when the server has handled the death, never before: a bow's or a bolt's
   killing hit lands in the bots' own phase of the game loop, and a release asked for then was undone by the server's
   death handling later in the same tick, which left the bot dead for 15 minutes. A release that didn't revive it is
@@ -559,7 +563,8 @@ All start `PLAYER_BOT_`:
   counts as immune; read from the control's own message only: as its cast finishes, or for an instant control in the
   tick it was cast), the rest refused, interrupted or unsaid, then `qcCtl=` and `qcNuke=`, its casts under Quickcast at
   a control and of its damage spell (-1 each on `DEATH` out of a fight); `DEATH` ends with `qcLeft=`, the seconds
-  before Quickcast is ready again, at any death (-1 without it).
+  before Quickcast is ready again, at any death (-1 without it). `FIGHT` then gives `reserve=`, the highest endurance
+  reserve the fight held for a run (0: none).
   `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `walkout`, `rest`, `kite`, `turret`
   or `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
   after a break-off its `reason=` is `brokeoff`. Either ends with `barred=old` when the death or the break-off came on

@@ -310,6 +310,8 @@ public sealed class PlayerBotState
     public int RunNeed;                                          // #167 E fix R2: read with the reserve, the run's need
     public bool TargetAlone;                                     //   (EscapeEndurance) and no monster on the bot but its
                                                                  //   target (HoldingReserve)
+    public int FightReserve;                                     // #167 F-R: FIGHT reserve=, the fight's highest reserve
+                                                                 //   read (ReserveNow)
     public int FightBuffHitters;                                 // #167 D12: the live monsters on the bot when the fight's
                                                                  //   buff was last weighed (FightBuffCheck)
 }
@@ -477,6 +479,12 @@ public static class PlayerBotDriver
                                                              //   costs buy no run). A race projecting the bot under 30
                                                              //   at its target's death is close (HealthLeftAtKill). A
                                                              //   cast costs 5 (SpellHandler.cs:1244-1250, :1442-1445)
+    public const ConColor ReserveCon = ConColor.YELLOW;      // #167 F-R: a fight with a target of this con or harder
+                                                             //   keeps the run's reserve from its first think
+                                                             //   (CloseFight): on batch F's seven base legs 29 refusals
+                                                             //   why=sprint at chasers of 195 or less with no run since
+                                                             //   the rest began such a pull at the reserve or more, 25
+                                                             //   dead within 60 s (f-design/breakoffs, its review r5)
     public const int SprintOffGap = 400, SprintOnGap = 300;  // #167 E-S: a break-off's sprint goes off with the nearest
                                                              //   free chaser this far behind and 25 s of its speed over the
                                                              //   run's more (it can't close to its reach while it chases),
@@ -2008,7 +2016,8 @@ public static class PlayerBotDriver
         state.FightTargetMezzes = 0;                                                // #167 E C4 ctlMez=
         state.FightRaceLeft = NoRace;                                               // #167 E-L raceLeft=
         (state.FightStylesHeld, state.FightCastsHeld) = (0, 0);                     // #167 E-R styleHeld=, castHeld=,
-        (state.Reserve, state.NextReserveTick) = (0, 0);                            //   and a fresh reserve read
+        (state.Reserve, state.NextReserveTick, state.FightReserve) = (0, 0, 0);     //   and a fresh reserve read;
+                                                                                    // #167 F-R reserve=
         state.TargetHeldBreaks = false;                                             // #167 C3
         state.FightAddControls = 0;                                                 // #167 C4
         (state.FightAdd, state.EngageDistance) = ((-1, -1), distance);              // #167 FIGHT addAt=, engageDist=
@@ -2531,25 +2540,28 @@ public static class PlayerBotDriver
     /// <summary>A close fight (#167 E-R), the one that keeps a run's reserve: 2 or more monsters on the bot now or in the
     /// fight (fightAdds, FIGHT adds=), a defence or the fight after an add kill (defence), or the race projecting the
     /// bot under CloseRacePercent at its target's death (healthLeftAtKill; none read yet, no). 14% of st-deathsD's
-    /// style-class fights on straight-line races, about 18% with hits in chunks (the review); an ordinary pull keeps its
-    /// styles.</summary>
-    public static bool CloseFight(int monstersOnBot, int fightAdds, bool defence, int? healthLeftAtKill) =>
-        monstersOnBot >= 2 || fightAdds >= 2 || defence || healthLeftAtKill < CloseRacePercent;
+    /// style-class fights on straight-line races, about 18% with hits in chunks (the review). #167 F-R: or its target
+    /// ReserveCon or harder (targetCon; GREY with none alive): the race reads only from 20 lost, and a yellow pull styled
+    /// the run's endurance away before it (batch F's base: 29 refusals why=sprint, 25 dead within 60 s, began such a
+    /// pull with the endurance to keep). A blue or green pull keeps its styles.</summary>
+    public static bool CloseFight(int monstersOnBot, int fightAdds, bool defence, int? healthLeftAtKill, ConColor targetCon) =>
+        monstersOnBot >= 2 || fightAdds >= 2 || defence || healthLeftAtKill < CloseRacePercent || targetCon >= ReserveCon;
 
     /// <summary>ReserveNow's read (#167 E-R; #167 E fix R2, its review's seam), over the monsters attacking the bot
     /// (onBot: each one's speed and whether it is the bot's target) and its target's speed (targetSpeed, on the bot or
     /// not; 0 with none alive): the close fight's reserve (CloseFight on onBot's count, EscapeReserve against the
     /// fastest), the run's need against that fastest chaser itself (RunNeed: EscapeEndurance, not EscapeReserve's 191
     /// floor; 0 with no reserve) and whether no monster but the target is on the bot (TargetAlone), HoldingReserve's
-    /// terms. #167 F-O: none when one of them harms from range (rangedHarm, RangedHarm): no run starts from it.</summary>
+    /// terms. #167 F-O: none when one of them harms from range (rangedHarm, RangedHarm): no run starts from it. #167 F-R:
+    /// and its target's con (targetCon, CloseFight).</summary>
     public static (int Reserve, int RunNeed, bool TargetAlone) ReserveRead(int targetSpeed,
         IReadOnlyList<(int Speed, bool IsTarget)> onBot, int fightAdds, bool defence, int? leftAtKill, int regeneration,
-        int fatigue, int longWind, bool rangedHarm)
+        int fatigue, int longWind, bool rangedHarm, ConColor targetCon)
     {
         int others = 0, fastest = targetSpeed;
         for (int i = 0; i < onBot.Count; i++)
             (others, fastest) = (onBot[i].IsTarget ? others : others + 1, Math.Max(fastest, onBot[i].Speed));
-        int reserve = !rangedHarm && CloseFight(onBot.Count, fightAdds, defence, leftAtKill)
+        int reserve = !rangedHarm && CloseFight(onBot.Count, fightAdds, defence, leftAtKill, targetCon)
             ? EscapeReserve(fastest, regeneration, fatigue, longWind)
             : 0;
         return (reserve, reserve > 0 ? EscapeEndurance(fastest, regeneration, fatigue, longWind) : 0, others == 0);
@@ -4265,11 +4277,13 @@ public static class PlayerBotDriver
     // runs on the walk in and the first think in reach, before OpenFight's resets) and a close one (CloseFight): 2 or
     // more monsters attacking it now (AttackerTracker's few, IsAttacking: no world scan) or in this fight (FightAdds), a
     // defence or the fight after an add kill, or the race since the first hit on it projecting it under
-    // CloseRacePercent at its target's death (HealthLeftAtKill); else 0. Against the fastest of them and its target.
+    // CloseRacePercent at its target's death (HealthLeftAtKill), or (#167 F-R) its target ReserveCon or harder; else 0.
+    // Against the fastest of them and its target; none (#167 F-O) when one of them harms from range.
     // Read at most once a StyleMilliseconds (Reserve, NextReserveTick), the style choice's own pace. #167 E fix R2: held
     // only while holding can still buy a run (HoldingReserve), on every call against the endurance and the target's health
     // now, on the read's need (RunNeed: EscapeEndurance against that fastest monster) and whether its target is the only
     // monster on the bot (TargetAlone). The read itself is ReserveRead's (the fix's review: a seam its rows reach).
+    // #167 F-R: the fight's highest read is FIGHT reserve= (FightReserve).
     private static int ReserveNow(PlayerBotState state, GamePlayer player, GameLiving target, long now)
     {
         if (!state.Engaged) return 0;
@@ -4291,7 +4305,9 @@ public static class PlayerBotDriver
             (state.Reserve, state.RunNeed, state.TargetAlone) = ReserveRead(targetAlive ? target.MaxSpeed : 0, onBot,
                 state.FightAdds, state.FromDefence || state.FollowsAddKill, left,
                 player.GetModified(eProperty.EnduranceRegenerationAmount), player.GetModified(eProperty.FatigueConsumption),
-                LongWindCost(player), ranged);
+                LongWindCost(player), ranged,
+                targetAlive ? ConLevels.GetConColor(player.GetConLevel(target)) : ConColor.GREY);   // #167 F-R
+            state.FightReserve = Math.Max(state.FightReserve, state.Reserve);           // #167 F-R: FIGHT reserve=
         }
         return HoldingReserve(state.Reserve, state.RunNeed, player.Endurance, targetAlive ? target.HealthPercent : (byte)100,
             state.TargetAlone);
@@ -5567,7 +5583,8 @@ public static class PlayerBotDriver
             state.FightHealHolds, state.FightHealHoldMax,                              // #167 F H2
             state.FightTaps,                                                            // #167 F N1b
             FightAddWhy(state.FightAdd.At, state.FightAddControls, state.FightAddWhy),   // #167 F C1
-            state.FightCtlResisted, state.FightCtlImmune, state.FightQcControls, state.FightQcNukes)));   // #167 F C2
+            state.FightCtlResisted, state.FightCtlImmune, state.FightQcControls, state.FightQcNukes,   // #167 F C2
+            state.FightReserve)));                                                      // #167 F-R
     }
 
     // APP:585-624, changed: every 10 s, no inventory count, no saves; after 15 minutes with no progress, back to the
