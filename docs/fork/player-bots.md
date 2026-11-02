@@ -174,7 +174,10 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   so after 30 s of searches with no pull it plans a new camp, which leaves out for 10 minutes the camps within 1,400
   units of the pulls it refused. With no camp to go to it hunts where it is, its limits off there for 5 minutes, as
   they are at such a barred camp when only that is left to take. It searches again every 2 s as it walks in, so a pick
-  whose crowd rises past its limit on the walk in is dropped. For a new target more than 1,000 units away a melee or
+  whose crowd rises past its limit on the walk in is dropped. While its searches find no pull it can take, it stands
+  where it is until it plans its new camp (after 30 s; 60 s at most), but first steps out of the reach of every monster
+  round it that would aggro, to the nearest clear spot, as after a release; it checks that again 2 s after each step
+  out. For a new target more than 1,000 units away a melee or
   archer bot also counts those potential adds along the navmesh corridor it will walk, not the straight line, at most
   once every 4 s; that count is only logged (`pathCrowd=`): it refuses nothing for it yet. A melee, archer or caster
   bot's pick also knows its own kills come back: the spawn spot of one of its last 5 kills that would aggro, from 50 s
@@ -569,8 +572,9 @@ All start `PLAYER_BOT_`:
   `tHpAtReach=` (the bot's and its target's health at the first attack on the bot, a miss or block too; -1 if none),
   `rate=` (the health lost a second over the last 3 s; a gain is negative), `wouldBreak=` (the bot's health when a
   break-off projected from that rate would have fired, under 40% or under 6 s of the loss; logged only, -1 if never) and
-  `walk=` (the walk on the think before the fight began: `none`, `hunt`, `anchor`, `roam`, `clear`, `rest`, `kite`,
-  `breakoff` or `walkout`, the walk out toward the camp planned under the release's immunity). Out of a fight `DEATH`
+  `walk=` (the walk on the think before the fight began: `none`, `hunt`, `anchor`, `roam`, `clear` (the step out of
+  reach after a release, at login, or while it stands for a new camp), `rest`, `kite`, `breakoff` or `walkout`, the
+  walk out toward the camp planned under the release's immunity). Out of a fight `DEATH`
   gives -1 for the fight's fields, `rate=` at the death and the walk on its last think alive; it gives `end=`
   (endurance). Both then give `kiteNone=range:clear:mesh:fit`, the fight's steps back that found no point, by why:
   `range` (the bot already stood at its spell's reach), `clear` (no point out of the other monsters' reach), `mesh`
@@ -615,11 +619,15 @@ All start `PLAYER_BOT_`:
   defence after a defence keeps the first one's; -1 and "" otherwise, and on `DEATH` with no target). A turn on a
   chaser after a break-off replaced none, so it reads -1: its pick's `crowd=` is on the break-off's `FIGHT
   result=dropped breakOff=1` line. `DEATH` then gives the fatal fight's `blindSteps=` as `FIGHT` gives it (-1 out of
-  a fight). Both end with `restSkip=`: 1 when the fight began on the rest its kill skipped (the first fight after the
+  a fight). Both then give `restSkip=`: 1 when the fight began on the rest its kill skipped (the first fight after the
   skip, with no sit between), else 0; -1 on `DEATH` out of a fight (a death on a break-off's run reads -1: its fight's
-  `FIGHT result=dropped breakOff=1` line carries the 1).
-  `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `walkout`, `rest`, `kite`, `turret`
-  or `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
+  `FIGHT result=dropped breakOff=1` line carries the 1). Both then end with `capHold=`, the seconds its capped clock had
+  run when the fight began (its searches had found no pull it could take; a pull's own search stops that clock, so a
+  pull reads -1), and `holdStep=`, the steps out of reach that hold took (-1 with no capped clock); on `DEATH` the fatal
+  fight's, -1 each out of a fight.
+  `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `holdclear` (the step out while it
+  stands for a new camp), `walkout`, `rest`, `kite`, `turret` or `breakoff`. `RELOCATE` after a death (`reason=died`)
+  ends with `sinceRelease=`, the milliseconds since the release;
   after a break-off its `reason=` is `brokeoff`. Either ends with `barred=old` when the death or the break-off came on
   the walk to the camp it had, which the plan then leaves out. Any `RELOCATE` then ends with `capKill=`, the lowest con
   that killed the bot in the last 5 minutes, yellow or harder (a blue or green killer logs none), while there is one.
@@ -629,7 +637,8 @@ All start `PLAYER_BOT_`:
   leaves out, while there are any. `lifted=1` ends a line whose camp lies among those spots, and a line with no camp
   after a last search that only refused crowded pulls: the bot's crowd limits are then off there for 5 minutes. Any
   `RELOCATE` then ends with `overSkipped=`, the camps that fit but were left out for an aggressive monster over the cap
-  in reach (each once, over the plan's passes), while there are any. A break-off drops its fight (`FIGHT
+  in reach (each once, over the plan's passes), while there are any. A capped plan's line then ends with `holdStep=`,
+  the steps out of reach its hold took (0: it stood clear at every check). A break-off drops its fight (`FIGHT
   result=dropped`);
 - `LIFT`: the same lift where no `RELOCATE` line is written, as the bot hunts where it is: its `reason=` and `why=`,
   `norelocate` (it may not relocate, as the lever test's bots, or stands in no zone) or `offmesh` (it stands off the

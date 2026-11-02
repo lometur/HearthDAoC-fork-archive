@@ -262,6 +262,10 @@ public sealed class PlayerBotState
     public bool AfterRelease;                                    //   every monster's reach it steps to, the ring test's
     public Vector3? ClearSpot;                                   //   next scan and a blocked step's pause
     public long NextReachTick, StepOutBlockedUntil;
+    public Vector3? HoldSpot;                                    // #167 F-WD: the capped hold's step out of reach
+    public long NextHoldReachTick, HoldStepBlockedUntil;         //   (HoldStepsClear): its spot, its ring test's next and
+    public int HoldSteps;                                        //   a blocked step's pause; its steps out since the
+    public int FightCapHold = -1, FightHoldSteps = -1;           //   capped clock began; FIGHT capHold=, holdStep=
     public GameNPC Incoming;                                     // #167 F7: the nearest monster coming at it (Incoming),
     public long NextIncomingTick;                                //   scanned every 2 s; the last search's potential adds
     public readonly List<GameNPC> SearchAdds = new();            //   (FindWithin), and the rest spot read from them once
@@ -724,25 +728,35 @@ public static class PlayerBotDriver
         RefreshTarget(state, player, now);                                               // 14
         if (state.Target == null)                                                        // 15
         {
-            RelocateIfOutgrown(state, player, now);
-            if (state.ReplanOwed != null && !Holding(state.ReplanSince, now)) EndReplan(state, player);   // #167 F4, C2
-            if (Recovering(state, player, now) ||                                        //    the back-off, the illness
-                HoldsForRelocation(CanRelocate(state, player), state.CappedSince, state.ReplanSince,
-                    state.RoamDestination == state.Anchor, now))
-            {
-                state.Mover.Stop(now);                                                   //    capped, or owed a relocation:
-                state.Activity = PlayerBotActivity.Roaming;                              //    no walk into the camp; it
-                state.BackHoldMs += TickMilliseconds;                                    //    cannot hunt (no target);
-            }                                                                            //    #167 C1: BACK hold=
-            else
-            {
-                Roam(state, player, now);
-                state.BackWalkMs += TickMilliseconds;                                    //    #167 C1: BACK walk=
-            }
-            ReportIdle(state, player, now);
+            IdleStep(state, player, now);
             return;
         }
         EngageTarget(state, player, now);                                                // 16
+    }
+
+    // Step 15, no target: the relocation due (RelocateIfOutgrown) and a replan's end, then the hold or the roam, and the
+    // idle clock (ReportIdle). #167 F-WD (the review): one step a test runs, as EngageTarget (16) is: the hold's step out
+    // of reach (HoldStepsClear) put back to the stand passed every test while it lay in Think.
+    private static void IdleStep(PlayerBotState state, GamePlayer player, long now)
+    {
+        RelocateIfOutgrown(state, player, now);
+        if (state.ReplanOwed != null && !Holding(state.ReplanSince, now)) EndReplan(state, player);   // #167 F4, C2
+        if (Recovering(state, player, now) ||                                            //    the back-off, the illness
+            HoldsForRelocation(CanRelocate(state, player), state.CappedSince, state.ReplanSince,
+                state.RoamDestination == state.Anchor, now))
+        {
+            if (!HoldStepsClear(state, player, now))                                     //    #167 F-WD: capped, out of
+                state.Mover.Stop(now);                                                   //    reach first; capped, or owed
+            state.Activity = PlayerBotActivity.Roaming;                                  //    a relocation: no walk into
+            state.BackHoldMs += TickMilliseconds;                                        //    the camp; it cannot hunt (no
+        }                                                                                //    target); #167 C1: BACK hold=
+        else
+        {
+            state.HoldSpot = null;                                                       //    #167 F-WD: no hold, no spot
+            Roam(state, player, now);
+            state.BackWalkMs += TickMilliseconds;                                        //    #167 C1: BACK walk=
+        }
+        ReportIdle(state, player, now);
     }
 
     // Step 16: the fight with the target (Engage), then its idle clock (SettleIdleClock). #167 E fix round 3, the review
@@ -1755,7 +1769,10 @@ public static class PlayerBotDriver
         if (best != null || radius >= SearchRadius)
         {
             (bool passed, bool crowdPassedOver, bool clearRefused) = CrowdSearchEnd(best != null, refused.Count, passedOver);
-            state.CappedSince = CappedClock(state.CappedSince, best != null, passed, now);   // #167 F P1: a refusal too
+            long since = CappedClock(state.CappedSince, best != null, passed, now);      // #167 F P1: a refusal too
+            if (since != state.CappedSince)                                             // #167 F-WD: a hold's step out
+                (state.HoldSpot, state.HoldSteps, state.NextHoldReachTick) = (null, 0, 0);   //   afresh with its clock
+            state.CappedSince = since;
             state.SafestPassedOver = best == null ? safestOver : null;                  // FallbackInPlace's
             state.CrowdPassedOver = crowdPassedOver;                                    // #167 F P1: FallBackInPlace's,
             if (clearRefused) state.CrowdRefused.Clear();                               //   and the capped plan's bar
@@ -2104,19 +2121,21 @@ public static class PlayerBotDriver
     public static string RelocateLine(string bot, int level, Vector3 from, Vector3 to, int distance, string monster,
         int monsterLevel, ushort zone, string reason, ConColor? fallback, long sinceReleaseMs, bool barredOld,
         ConColor? capKill, bool recent = false, bool near = false, int crowdRefused = 0, bool lifted = false,
-        int overSkipped = 0) =>
+        int overSkipped = 0, int holdSteps = -1) =>
         $"PLAYER_BOT_RELOCATE bot={bot} level={level} from=({from.X:0},{from.Y:0}) to=({to.X:0},{to.Y:0},{to.Z:0}) " +
         $"distance={distance} monster=\"{monster}\" monsterLevel={monsterLevel} zone={zone} reason={reason} " +
         $"fallback={fallback?.ToString() ?? "-"}" +
-        RelocateSuffix(reason, sinceReleaseMs, barredOld, capKill, recent, near, crowdRefused, lifted, overSkipped);
+        RelocateSuffix(reason, sinceReleaseMs, barredOld, capKill, recent, near, crowdRefused, lifted, overSkipped,
+            holdSteps);
 
     /// <summary>PLAYER_BOT_RELOCATE when no camp checked had a corridor (or none was found): checked= of them. #167 F
     /// P1: lifted=1 when the fallback in place that follows lifted the crowd limits (FallBackInPlace).</summary>
     public static string RelocateNoneLine(string bot, int level, int candidates, ushort zone, string reason,
         long sinceReleaseMs, bool barredOld, ConColor? capKill, bool recent = false, int crowdRefused = 0,
-        bool lifted = false, int overSkipped = 0) =>
+        bool lifted = false, int overSkipped = 0, int holdSteps = -1) =>
         $"PLAYER_BOT_RELOCATE bot={bot} level={level} none checked={candidates} zone={zone} reason={reason}" +
-        RelocateSuffix(reason, sinceReleaseMs, barredOld, capKill, recent, false, crowdRefused, lifted, overSkipped);
+        RelocateSuffix(reason, sinceReleaseMs, barredOld, capKill, recent, false, crowdRefused, lifted, overSkipped,
+            holdSteps);
 
     /// <summary>#167 F P1 (the review: every lift logged): PLAYER_BOT_LIFT, a fallback in place that lifted the crowd
     /// limits where RelocateIfOutgrown writes no RELOCATE line (why=norelocate: it can't move its leash, or no zone to
@@ -2130,13 +2149,14 @@ public static class PlayerBotDriver
     // the bot in the last 5 minutes, YELLOW or harder (RememberKillerCon), while it keeps one (PlanCaps). #167 E W1: then
     // recent=1 and near=1. #167 F P1: then crowdRefused=, the crowd bars' spots a capped plan barred, and lifted=1 on a
     // camp it took anyway (InCrowdBarred) or a fallback in place that lifted the limits. #167 F P3: then overSkipped=, the
-    // fit spots skipped for an over-cap aggressive monster in reach (each once).
+    // fit spots skipped for an over-cap aggressive monster in reach (each once). #167 F-WD: then holdStep= on a capped
+    // plan, the steps out of reach its hold took (HoldStepsClear; 0: it stood clear at every ring test).
     private static string RelocateSuffix(string reason, long sinceReleaseMs, bool barredOld, ConColor? capKill,
-        bool recent, bool near, int crowdRefused = 0, bool lifted = false, int overSkipped = 0) =>
+        bool recent, bool near, int crowdRefused = 0, bool lifted = false, int overSkipped = 0, int holdSteps = -1) =>
         (reason == Died ? $" sinceRelease={sinceReleaseMs}" : "") + (barredOld ? " barred=old" : "") +
         (capKill is ConColor kill ? $" capKill={kill}" : "") + (recent ? " recent=1" : "") + (near ? " near=1" : "") +
         (crowdRefused > 0 ? $" crowdRefused={crowdRefused}" : "") + (lifted ? " lifted=1" : "") +
-        (overSkipped > 0 ? $" overSkipped={overSkipped}" : "");
+        (overSkipped > 0 ? $" overSkipped={overSkipped}" : "") + (holdSteps >= 0 ? $" holdStep={holdSteps}" : "");
 
     /// <summary>The capped clock after a search of the wider ring (or one that found a target): set at the first that
     /// passed a monster over for the cap and found none, kept while that lasts, 0 once a search finds a target or
@@ -2161,6 +2181,24 @@ public static class PlayerBotDriver
 
     /// <summary>A hold begun at since (0: none) and not yet MaxHoldMilliseconds old.</summary>
     public static bool Holding(long since, long now) => since != 0 && now - since < MaxHoldMilliseconds;
+
+    /// <summary>#167 F-WD: whether the hold steps out of reach (HoldStepsClear): only the capped hold (its clock running
+    /// and under MaxHoldMilliseconds, Holding), not the recovery after a release (StepsOutOfReach steps out then, and its
+    /// replan hold stands: AfterRelease), and not while it sits.</summary>
+    public static bool HoldStepsOut(long cappedSince, bool afterRelease, bool sitting, long now) =>
+        Holding(cappedSince, now) && !afterRelease && !sitting;
+
+    /// <summary>#167 F-WD: the hold's spot after a step toward it: none once arrived (the next ring test, 2 s on, says
+    /// whether it stands clear) or blocked (StepOutPauseMilliseconds' pause first); the same while it walks or
+    /// waits.</summary>
+    public static Vector3? HoldSpotAfter(PlayerBotStepResult step, Vector3 spot) =>
+        step is PlayerBotStepResult.Arrived or PlayerBotStepResult.Blocked ? null : spot;
+
+    /// <summary>#167 F-WD: FIGHT capHold= and holdStep= at a fight's first think (OpenFight): the seconds the capped
+    /// clock had run (a defence or a monster coming at the bot leaves it running; a pull's own search stopped it) and
+    /// the steps out of reach its hold took (HoldStepsClear); no capped clock, -1 each.</summary>
+    public static (int CapHold, int HoldSteps) CapHoldAtFight(long cappedSince, int holdSteps, long now) =>
+        cappedSince == 0 ? (-1, -1) : ((int)((now - cappedSince) / 1000), holdSteps);
 
     /// <summary>Whether a death owes a replan before the walk back (#167 F4): on no task, a leash it can move
     /// (CanRelocate: no lever spot bot, in its anchor's region), wherever it died (#167 C1b). Only a death within its
@@ -2241,6 +2279,8 @@ public static class PlayerBotDriver
         state.FightQuickcast = false;
         state.PetOrderTick = now;                                                   // #167 F10c
         state.FightWalk = state.LastWalk;                                           // #167 st-deathsD's fields: walk=,
+        (state.FightCapHold, state.FightHoldSteps) = CapHoldAtFight(state.CappedSince, state.HoldSteps, now);   // F-WD
+        state.HoldSpot = null;                                                      //   the hold's walk out ends
         (state.FightHeldMs, state.FightCtlLanded, state.FightCtlFailed) = (0, 0, 0);   //   the think before's, and the
         (state.FightHpAtReach, state.FightTargetHpAtReach, state.WouldBreakHp) = (-1, -1, -1);   //   counts afresh
         state.PendingControl = default;                                             //   (a cast still awaited: neither)
@@ -5316,7 +5356,8 @@ public static class PlayerBotDriver
         bool lifted = spots.Length == 0 && FallBack(state, player, reason, now);   // no camp in the zone: none to try next
         if (Log.IsInfoEnabled)                                                     //   time either; #167 F P1: a lift
             Log.Info(RelocateNoneLine(player.Name, player.Level, spots.Length, zone.ID, reason, now - state.ReleasedAt,
-                barredOld, killerCon, afterDeath, crowdRefused, lifted, overSkipped.Count));
+                barredOld, killerCon, afterDeath, crowdRefused, lifted, overSkipped.Count,
+                reason == Capped ? state.HoldSteps : -1));                       // #167 F-WD holdStep=
 
         // The first of a camp's spots it has a corridor to (one without is rejected, RelocateRejected): RELOCATE, PlanCamp.
         // #167 F P1: a spot the crowd bar barred (only the fallback takes one) lifts the limits there (InCrowdBarred).
@@ -5337,7 +5378,8 @@ public static class PlayerBotDriver
                 if (Log.IsInfoEnabled)
                     Log.Info(RelocateLine(player.Name, player.Level, state.Anchor, spot, (int)Vector3.Distance(here, spot),
                         npc.Name, npc.EffectiveLevel, campZone.ID, reason, campFallback, now - state.ReleasedAt, barredOld,
-                        killerCon, afterDeath, nearCamp, crowdRefused, liftedCamp, overSkipped.Count));
+                        killerCon, afterDeath, nearCamp, crowdRefused, liftedCamp, overSkipped.Count,
+                        reason == Capped ? state.HoldSteps : -1));               // #167 F-WD holdStep=
                 PlanCamp(state, spot, campFallback, campStale, reason, liftUntil);   // and BACK replan=moved (#167 C1)
                 return true;
             }
@@ -5498,6 +5540,41 @@ public static class PlayerBotDriver
             default:
                 return false;                                                           // Replan, Wait: step 15
         }
+    }
+
+    // #167 F-WD: the capped hold's step out of reach. Since F P1 a crowd refusal starts the capped clock too, so step 15
+    // holds a melee or archer bot where its search refused the camp's pulls, until its capped plan 30 s on. In
+    // st-deathsF/Fb their first fights after a login or a rest (no relocation since) that were a defence 4-60 s on were
+    // 40 against 18.3 per two base legs (pairs 14-22), the login ones a median 2-5 s after the first refusal (inf.: it
+    // held in reach). While the capped clock holds it (HoldStepsOut), the step out's ring test as after a release
+    // (ClearSpotNear, StepOutRings), at once and then TargetRefreshMilliseconds after each arrival: in the reach of a
+    // monster round it that would aggro (its aggro range and AddMargin), a walk to the nearest clear spot on the navmesh,
+    // and the hold there; clear, it stands as before. A blocked step stands it StepOutPauseMilliseconds (BLOCKED
+    // walk=holdclear). Its steps count for FIGHT holdStep= and the capped RELOCATE's (HoldSteps, afresh with the capped
+    // clock; a fight's first think ends the walk out, OpenFight). True while it walks.
+    private static bool HoldStepsClear(PlayerBotState state, GamePlayer player, long now)
+    {
+        if (!HoldStepsOut(state.CappedSince, state.AfterRelease, player.IsSitting, now))
+        {
+            state.HoldSpot = null;
+            return false;
+        }
+        if (state.HoldSpot == null && now >= state.NextHoldReachTick)
+        {
+            state.NextHoldReachTick = now + TargetRefreshMilliseconds;
+            state.HoldSpot = now < state.HoldStepBlockedUntil ? null : ClearSpotNear(player, StepOutRings);
+            if (state.HoldSpot != null) state.HoldSteps++;
+        }
+        if (state.HoldSpot is not Vector3 spot) return false;
+        state.Walk = PlayerBotWalk.Clear;                                               // #167 walk=
+        PlayerBotStepResult step = state.Mover.StepToward(spot, 20, now);
+        if (step is PlayerBotStepResult.Blocked)
+        {
+            ReportBlocked(state, player, "holdclear", spot, now);
+            state.HoldStepBlockedUntil = now + StepOutPauseMilliseconds;
+        }
+        state.HoldSpot = HoldSpotAfter(step, spot);
+        return step is not PlayerBotStepResult.Blocked;
     }
 
     // #167 D4: the walk out's end for this release (WalkOutOver): its point dropped, and the ring test at once (its 2-s
@@ -6257,7 +6334,8 @@ public static class PlayerBotDriver
             target != null ? state.PickSeen : "-", target != null ? state.PickPathCrowd : -1,   //   seen= and pathCrowd=
             target != null ? state.HuntCrowd : -1, target != null ? state.HuntTarget : null,   // #167 F F5: the hunt
             inFight ? state.FightBlindSteps : -1,                                         //   pick, blindSteps=
-            inFight ? (state.FightRestSkip ? 1 : 0) : -1);                                // #167 F R2 restSkip=
+            inFight ? (state.FightRestSkip ? 1 : 0) : -1,                                 // #167 F R2 restSkip=
+            inFight ? state.FightCapHold : -1, inFight ? state.FightHoldSteps : -1);      // #167 F-WD capHold=, holdStep=
         string head = $"PLAYER_BOT_DEATH bot={player.Name} level={player.Level} at=({player.X},{player.Y},{player.Z}) " +
                       $"zone={player.CurrentZone?.ID} {fight} attackers={state.Attackers} deathSteps={state.DeathSafetySteps} " +
                       $"aliveSec={(now - state.AliveSince) / 1000} task={state.Task != null}";
@@ -6403,7 +6481,8 @@ public static class PlayerBotDriver
             state.PickOver,                                                             // #167 F P1b
             state.PickDue,                                                              // #167 F P2
             state.PickSeen, state.PickPathCrowd,                                        // #167 F P4
-            state.HuntCrowd, state.HuntTarget, restSkip)));                             // #167 F F5, R2
+            state.HuntCrowd, state.HuntTarget, restSkip,                                // #167 F F5, R2
+            state.FightCapHold, state.FightHoldSteps)));                                // #167 F-WD
     }
 
     // APP:585-624, changed: every 10 s, no inventory count, no saves; after 15 minutes with no progress, back to the
