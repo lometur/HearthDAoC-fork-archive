@@ -165,9 +165,13 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   passed over, so after 30 s of searches with no pull it plans a new camp, which leaves out for 10 minutes the camps
   within 1,400 units of the pulls it refused. With no camp to go to it hunts where it is, its limits off there for 5
   minutes, as they are at such a barred camp when only that is left to take. It searches again every 2 s as it walks
-  in, so a pick whose crowd rises past its limit on the walk in is dropped. After deaths it moves to an easier camp.
-  It avoids what killed it for 15 minutes. Training dummies are no monsters: it neither plans camps at them nor pulls
-  them.
+  in, so a pick whose crowd rises past its limit on the walk in is dropped. A melee, archer or caster bot's pick also
+  knows its own kills come back: the spawn spot of one of its last 5 kills that would aggro, from 50 s to 150 s after
+  the kill while that monster is still dead, counts as a potential add by the target or where the bot would stand (not
+  on its walk in: it often stands on that spot), so the 2,600-unit ring takes no such target and the 5,000-unit ring
+  ranks it as more crowded; it never refuses a pull for one, nor counts one in `crowd=`. After deaths it moves to
+  an easier camp. It avoids what killed it for 15 minutes. Training dummies are no monsters: it neither plans camps at
+  them nor pulls them.
 - It swings and casts only at a target in sight, by the navmesh's line; a target hitting it in contact (within 250
   units) counts as in sight though that line says not, as a player sees what hits it. A target out of sight that
   fights neither it nor its pet, nor has the bot as its target (coming at it round an obstacle), is walked toward 300
@@ -580,7 +584,8 @@ All start `PLAYER_BOT_`:
   it (-1 with no target). `FIGHT` then gives `reserve=`, the highest endurance reserve the fight held for a run (0:
   none), and `lifted=` (1: a melee or archer bot's pick made while its crowd limits were off). Both then give `over=`,
   of the pick's `crowd=` the aggressive monsters over the bot's cap (-1 for a defence or a monster coming at it, and on
-  `DEATH` with no target).
+  `DEATH` with no target), and `due=`, its own kills' spawn spots coming due by the target or where it would stand at
+  the pick (-1 as `over=`, and for a healer or pet class, which reads none).
   `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `walkout`, `rest`, `kite`, `turret`
   or `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
   after a break-off its `reason=` is `brokeoff`. Either ends with `barred=old` when the death or the break-off came on

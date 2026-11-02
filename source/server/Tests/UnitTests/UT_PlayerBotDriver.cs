@@ -2700,6 +2700,112 @@ public sealed class UT_PlayerBotDriver
             Is.EqualTo(Enumerable.Repeat((new Vector3(100, 200, 30), reach), remembered)));
     }
 
+    // --- #167 F P2: the pick reads its own kills' respawns coming due, 50-150 s after the kill ---
+
+    // A remembered kill's spot is due while its monster is not alive and 50-150 s have passed since the kill (the add
+    // peak is 78-90 s; BATCH-F: the window from the kill, no read of the respawn timer, which a 1.65 player can't see).
+    [TestCase(100_000L, 149_999L, false, false)] [TestCase(100_000L, 150_000L, false, true)]
+    [TestCase(100_000L, 250_000L, false, true)] [TestCase(100_000L, 250_001L, false, false)]
+    [TestCase(100_000L, 180_000L, true, false)]
+    public void A_kills_spot_is_due_50_to_150_s_after_the_kill_while_its_monster_is_dead(long killedAt, long now,
+        bool alive, bool due) =>
+        Assert.That(PlayerBotDriver.DueAfterKill(killedAt, now, alive), Is.EqualTo(due));
+
+    // The bot watches its last 5 kills' monsters for 10 minutes; the same monster killed again replaces its entry (the
+    // review: one object per monster, as an interpolated string is a new one each time).
+    [Test]
+    public void A_bot_watches_its_last_five_kills_respawns_for_ten_minutes()
+    {
+        var kills = new List<(string Npc, Vector3 At, int Reach, long KilledAt)>();
+        string[] m = Enumerable.Range(0, 10).Select(i => $"m{i}").ToArray();
+        for (int i = 0; i < 6; i++) PlayerBotDriver.RememberRespawn(kills, m[i], new Vector3(i, 0, 0), 500, i * 10_000L);
+        Assert.That(kills.Select(kill => kill.Npc), Is.EqualTo(new[] { "m1", "m2", "m3", "m4", "m5" }));
+        PlayerBotDriver.RememberRespawn(kills, m[3], new Vector3(3, 0, 0), 500, 70_000);
+        Assert.That(kills.Select(kill => kill.Npc), Is.EqualTo(new[] { "m1", "m2", "m4", "m5", "m3" }));
+        Assert.That(kills[^1].KilledAt, Is.EqualTo(70_000L), "its kill time");
+        PlayerBotDriver.RememberRespawn(kills, m[9], new Vector3(9, 0, 0), 500, 655_000);
+        Assert.That(kills.Select(kill => kill.Npc), Is.EqualTo(new[] { "m3", "m9" }), "the kills at 10-50 s are 10 minutes old");
+    }
+
+    // A due respawn counts once when its reach covers the target (0,0) or the stand point (-1,500,0); the walk from the
+    // bot doesn't count.
+    [TestCase(300f, 1)] [TestCase(701f, 0)] [TestCase(-1_800f, 1)] [TestCase(-3_000f, 0)]
+    public void A_due_respawn_counts_by_the_target_or_the_stand_point(float x, int crowd) =>
+        Assert.That(PlayerBotDriver.CrowdingAt(Vector3.Zero, new Vector3(-1_500, 0, 0),
+            new List<(string, Vector3, int)> { ("respawn", new(x, 0, 0), 500) }), Is.EqualTo(crowd));
+
+    // The near ring takes no target a due respawn reaches (the base legs: an add 78-90 s after the bot's own kill 416
+    // times against about 235 in control windows; 38 first fights fatal). The bot stands 1,000 from the respawn, beside
+    // the camp: today it takes the nearer, better target.
+    [Test]
+    public void A_due_respawn_sends_the_near_ring_to_another_target()
+    {
+        Vector3 bot = new(0, -1_000, 0);
+        var candidates = new List<(string, Vector3, int)> { ("by the respawn", Vector3.Zero, 100), ("clear", new(0, -3_000, 0), 900) };
+        var due = new List<(string, Vector3, int)> { ("killed", new(300, 0, 0), 500) };
+        Assert.That(PlayerBotDriver.PickUncrowded(candidates, [], true, bot, 150, out int crowd, due: due), Is.EqualTo("clear"));
+        Assert.That(crowd, Is.EqualTo(0));
+        Assert.That(PlayerBotDriver.PickUncrowded(candidates, [], true, bot, 150, out _), Is.EqualTo("by the respawn"),
+            "no due respawn: as before");
+    }
+
+    // The bot standing on its last kill's spawn spot (it fought there): the walk in from it doesn't count the respawn, or
+    // every candidate would; and a due respawn never refuses a pull (the limits read the live adds only).
+    [Test]
+    public void A_bot_on_its_kills_spawn_spot_still_picks_and_a_due_respawn_refuses_nothing()
+    {
+        Vector3 bot = new(0, -1_000, 0);
+        var due = new List<(string, Vector3, int)> { ("killed", bot, 500) };
+        var away = new List<(string, Vector3, int)> { ("away", new(0, 2_000, 0), 100) };
+        Assert.That(PlayerBotDriver.PickUncrowded(away, [], true, bot, 150, out _, due: due), Is.EqualTo("away"));
+        var near = new List<(string, Vector3, int)> { ("near", new(0, -900, 0), 100) };
+        Assert.That(PlayerBotDriver.PickUncrowded(near, [], false, bot, 150, out int crowd, [0], due: due), Is.EqualTo("near"),
+            "YELLOW, limit 0: the respawn ranks it, never refuses it");
+        Assert.That(crowd, Is.EqualTo(0), "crowd= is the live adds'");
+    }
+
+    // In the wider ring a due respawn adds to the least-crowded ranking: a candidate with one live add beats one with a
+    // live add and a due respawn by it, though that one scores better.
+    [Test]
+    public void A_due_respawn_ranks_the_wider_ring()
+    {
+        Vector3 bot = new(0, -1_000, 0);
+        var candidates = new List<(string, Vector3, int)> { ("by the respawn", Vector3.Zero, 100), ("other", new(0, -3_000, 0), 900) };
+        var adds = new List<(string, Vector3, int)> { Add("by it", -300), ("by the other", new(300, -3_000, 0), 500) };
+        var due = new List<(string, Vector3, int)> { ("killed", new(300, 0, 0), 500) };
+        Assert.That(PlayerBotDriver.PickUncrowded(candidates, adds, false, bot, 150, out int crowd, due: due),
+            Is.EqualTo("other"));
+        Assert.That(crowd, Is.EqualTo(1));
+        Assert.That(PlayerBotDriver.PickUncrowded(candidates, adds, false, bot, 150, out _), Is.EqualTo("by the respawn"),
+            "no due respawn: the better score");
+    }
+
+    // Melee, archers and casters read due respawns; healers and pet classes don't (the base legs' respawn-add deaths:
+    // melee 18, archer 9, caster 7, healer 3, pet 1).
+    [TestCase(PlayerBotRole.Melee, true)] [TestCase(PlayerBotRole.Archer, true)] [TestCase(PlayerBotRole.Caster, true)]
+    [TestCase(PlayerBotRole.Healer, false)] [TestCase(PlayerBotRole.Pet, false)]
+    public void Melee_archers_and_casters_read_their_kills_respawns(PlayerBotRole role, bool reads) =>
+        Assert.That(PlayerBotDriver.ReadsDueRespawns(role), Is.EqualTo(reads));
+
+    // A kill keeps its monster, spawn spot, reach and kill time for the pick (RecentRespawns), as C7 keeps the spot; a
+    // target that would not aggro, or a fight the bot never had, none. Another region drops them.
+    [TestCase(true, 500, 1)] [TestCase(true, 0, 0)] [TestCase(false, 500, 0)]
+    public void A_kill_remembers_its_monster_for_the_pick(bool engaged, int reach, int remembered)
+    {
+        MethodInfo settle = typeof(PlayerBotDriver).GetMethod("SettleTarget", BindingFlags.Static | BindingFlags.NonPublic);
+        var target = (GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC));   // health 0: dead
+        var state = new PlayerBotState(Player(null))
+        {
+            Target = target, Engaged = engaged, TargetSpawn = new(100, 200, 30), TargetRespawnReach = reach,
+        };
+        settle!.Invoke(null, [state, Player(null)]);
+        Assert.That(state.RecentRespawns.Select(kill => (kill.Npc, kill.At, kill.Reach)),
+            Is.EqualTo(Enumerable.Repeat((target, new Vector3(100, 200, 30), reach), remembered)));
+        Assert.That(state.RecentRespawns.Select(kill => kill.KilledAt), Is.All.EqualTo(GameLoop.GameLoopTime));
+        PlayerBotDriver.ResetOnRegionChange(state, 7);
+        Assert.That(state.RecentRespawns, Is.Empty);
+    }
+
     // Runs r1-r1h (2026-10-21): on the switchback stairs by Master Lorik the two corners at their foot (Z 1795) counted as
     // reached from the stairs 37 units above, so the bot made for the next corner, under the stairs, along the stair
     // surface: it climbed back to the top and stalled there until the errand failed after 15 minutes.
@@ -6577,7 +6683,8 @@ public sealed class UT_PlayerBotDriver
     // and qcCtl= and qcNuke=, the casts under Quickcast at a control and of its damage spell; then (#167 F-R) reserve=,
     // the highest endurance reserve the fight read for a run (0: none); then (#167 F P1) lifted=, 1 for a melee or
     // archer bot's pull made with its crowd limits lifted; then (#167 F P1b) over=, the adds over the bot's cap among
-    // the rings' pick's crowd (-1: another pick).
+    // the rings' pick's crowd (-1: another pick); then (#167 F P2) due=, the bot's own kills' spots coming due by the
+    // target or its stand point (-1: unread, a healer's or pet class's pick, or another pick).
     [Test]
     public void FightFormat()
     {
@@ -6589,14 +6696,14 @@ public sealed class UT_PlayerBotDriver
                 RaceLeft: 22, EndStart: 85, End: 31, StylesHeld: 3, CastsHeld: 2, Sight: 4, Blind: true, BlindSteps: 2,
                 HealCasts: 1, HealsLanded: 1, HealHolds: 6, HealHoldMax: 4, Taps: 3,
                 AddWhy: PlayerBotAddWhy.Control, CtlResisted: 1, CtlImmune: 0, QcControls: 1, QcNukes: 2, Reserve: 36, Lifted: true,
-                Over: 1)),
+                Over: 1, Due: 1)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbotaaaac level=40 target=\"widow claw\" targetLevel=40 con=YELLOW from=pull result=kill " +
                        "startHp=100 endHp=38 startMana=100 endMana=12 sec=21 adds=1 swings=9 notVisible=2 casts=4 lifeKills=0 rests=0 " +
                        "pet=alive heals=2 qc=1 buffs=3 petCasts=2 waits=5 ctl=2 kites=1 ctlBroken=1 addCtl=1 addAt=6 addHp=71 " +
                        "breakOff=1 engageDist=1450 crowd=1 heldSec=7 ctlLanded=1 ctlFailed=1 hpAtReach=92 tHpAtReach=64 rate=4.3 " +
                        "wouldBreak=38 walk=hunt kiteNone=1:0:2:3 dots=2 qcKill=1 ctlMez=1 raceLeft=22 endStart=85 end=31 " +
                        "styleHeld=3 castHeld=2 sight=4 blind=1 blindSteps=2 healCast=1 healLanded=1 healHold=6 healHoldMax=4 " +
-                       "taps=3 addWhy=ctl ctlResisted=1 ctlImmune=0 qcCtl=1 qcNuke=2 reserve=36 lifted=1 over=1"));
+                       "taps=3 addWhy=ctl ctlResisted=1 ctlImmune=0 qcCtl=1 qcNuke=2 reserve=36 lifted=1 over=1 due=1"));
         Assert.That(PlayerBotDriverReport.FormatFight(new PlayerBotFight("Pbothaaab", 43, "empyrean guardian", 36, ConColor.BLUE, true,
                 false, 64, 51, 100, 100, 7, 2, 3, 0, 0, 3, 1, Rate: -0.04, Walk: PlayerBotWalk.BreakOff)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbothaaab level=43 target=\"empyrean guardian\" targetLevel=36 con=BLUE from=defence " +
@@ -6606,7 +6713,7 @@ public sealed class UT_PlayerBotDriver
                        "tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=breakoff kiteNone=0:0:0:0 dots=0 qcKill=0 ctlMez=0 " +
                        "raceLeft=-999 endStart=-1 end=-1 styleHeld=0 castHeld=0 sight=0 blind=0 blindSteps=0 healCast=0 " +
                        "healLanded=0 healHold=0 healHoldMax=0 taps=0 addWhy=none ctlResisted=0 ctlImmune=0 qcCtl=0 " +
-                       "qcNuke=0 reserve=0 lifted=0 over=-1"),
+                       "qcNuke=0 reserve=0 lifted=0 over=-1 due=-1"),
             "a gain under 0.05 a second: 0.0, not -0.0");
     }
 
@@ -7605,7 +7712,7 @@ public sealed class UT_PlayerBotDriver
     // (#167 F N1b) taps= (-1 each out of a fight), and (#167 F C1) addWhy= (-1 out of a fight); then (#167 F C2) FIGHT's
     // ctlResisted=, ctlImmune=, qcCtl= and qcNuke= (-1 each out of a fight) and qcLeft=, the seconds before Quickcast is
     // ready again, at any death (-1 without it); then (#167 F P1) crowd=, FIGHT's: the rings' pick's crowding of its
-    // target (-1: no target, or another pick), and (#167 F P1b) over=, FIGHT's too.
+    // target (-1: no target, or another pick), and (#167 F P1b) over= and (#167 F P2) due=, FIGHT's too.
     [Test]
     public void DeathDetailFormat()
     {
@@ -7616,14 +7723,14 @@ public sealed class UT_PlayerBotDriver
                 WouldBreak: 52, Walk: PlayerBotWalk.Anchor, Endurance: 64, KiteNone: (0, 2, 1, 0), Dots: 1, KillingQuickcast: 1,
                 TargetMezzes: 1, RaceLeft: 35, StylesHeld: 3, CastsHeld: 1, Heals: 2, HealCasts: 1, HealsLanded: 0,
                 HealHolds: 4, HealHoldMax: 3, Taps: 2, AddWhy: PlayerBotAddWhy.Control, CtlResisted: 0, CtlImmune: 0,
-                QcControls: 1, QcNukes: 0, QcLeft: 22, Crowd: 3, Over: 1)),
+                QcControls: 1, QcNukes: 0, QcLeft: 22, Crowd: 3, Over: 1, Due: 1)),
             Is.EqualTo("activity=Fighting startHp=62 fightSec=14 targetHp=71 from=pull adds=2 lifeKills=3 rests=0 sinceKillSec=40 " +
                        "mana=100 swings=6 notVisible=1 killer=\"widow claw\" killerLevel=40 killerIsTarget=True fromBind=748 " +
                        "avoided=2 again=True sinceRelease=42 ill=True ctl=2 kites=1 casts=4 qc=1 waits=3 ctlBroken=1 addCtl=1 " +
                        "addAt=6 addHp=71 breakOff=0 engageDist=1450 heldSec=5 ctlLanded=1 ctlFailed=0 hpAtReach=88 tHpAtReach=90 " +
                        "rate=12.5 wouldBreak=52 walk=anchor end=64 kiteNone=0:2:1:0 dots=1 qcKill=1 ctlMez=1 raceLeft=35 " +
                        "styleHeld=3 castHeld=1 heals=2 healCast=1 healLanded=0 healHold=4 healHoldMax=3 taps=2 " +
-                       "addWhy=ctl ctlResisted=0 ctlImmune=0 qcCtl=1 qcNuke=0 qcLeft=22 crowd=3 over=1"));
+                       "addWhy=ctl ctlResisted=0 ctlImmune=0 qcCtl=1 qcNuke=0 qcLeft=22 crowd=3 over=1 due=1"));
         // Out of a fight, no target, no kill this life, no killer named by the Dying event, the bind in another region.
         Assert.That(PlayerBotDriverReport.FormatDeathDetail(new PlayerBotDeathDetail(PlayerBotActivity.Hunting, -1, -1, -1, true,
                 -1, 0, 2, -1, 37, -1, -1, null, 0, false, -1, BreakOff: true, Rate: 3, Walk: PlayerBotWalk.Clear, Endurance: 100)),
@@ -7634,7 +7741,7 @@ public sealed class UT_PlayerBotDriver
                        "rate=3.0 wouldBreak=-1 walk=clear end=100 kiteNone=-1:-1:-1:-1 dots=-1 qcKill=-1 ctlMez=-1 " +
                        "raceLeft=-999 styleHeld=-1 castHeld=-1 heals=-1 healCast=-1 healLanded=-1 healHold=-1 " +
                        "healHoldMax=-1 taps=-1 addWhy=-1 ctlResisted=-1 ctlImmune=-1 qcCtl=-1 qcNuke=-1 qcLeft=-1 crowd=-1 " +
-                       "over=-1"),
+                       "over=-1 due=-1"),
             "died on a break-off's run: out of a fight (the dropped one's FIGHT has it)");
     }
 
@@ -7672,7 +7779,7 @@ public sealed class UT_PlayerBotDriver
             "qc=-1 waits=-1 ctlBroken=-1 addCtl=-1 addAt=-1 addHp=-1 breakOff=0 engageDist=-1 heldSec=-1 ctlLanded=-1 ctlFailed=-1 " +
             "hpAtReach=-1 tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=none end=-1 kiteNone=-1:-1:-1:-1 dots=-1 qcKill=-1 " +
             "ctlMez=-1 raceLeft=-999 styleHeld=-1 castHeld=-1 heals=-1 healCast=-1 healLanded=-1 healHold=-1 healHoldMax=-1 " +
-            "taps=-1 addWhy=-1 ctlResisted=-1 ctlImmune=-1 qcCtl=-1 qcNuke=-1 qcLeft=-1 crowd=-1 over=-1"));
+            "taps=-1 addWhy=-1 ctlResisted=-1 ctlImmune=-1 qcCtl=-1 qcNuke=-1 qcLeft=-1 crowd=-1 over=-1 due=-1"));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, add, target),
             Does.Contain(" killer=\"a wolf\" killerLevel=38 killerIsTarget=False fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False "));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, null, null),

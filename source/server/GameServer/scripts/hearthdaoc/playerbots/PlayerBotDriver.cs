@@ -298,6 +298,9 @@ public sealed class PlayerBotState
     public Vector3 TargetSpawn;                                  // #167 C7: the target's spawn spot and the reach it aggroes
     public int TargetRespawnReach;                               //   from (RespawnOf, at the pick), and the last kills'
     public readonly List<(Vector3 At, int Reach, long KilledAt)> RecentKills = new();   //   (RememberKill): rested out of
+    public readonly List<(GameNPC Npc, Vector3 At, int Reach, long KilledAt)> RecentRespawns = new();   // #167 F P2: the
+    public int PickDue = -1;                                     //   last kills' monsters, due at the pick 50-150 s after the
+                                                                 //   kill (DueAfterKill), and FIGHT due=
     public (int At, int Hp) FightAdd = (-1, -1);                 // #167 FIGHT and DEATH addAt= and addHp= (FirstAdd), the
     public int EngageDistance = -1, PickCrowd = -1;              //   distance at the first think in reach, the pick's
                                                                  //   crowding (crowd=, FindWithin's; -1 for another pick);
@@ -408,6 +411,10 @@ public static class PlayerBotDriver
     public const int RestSpotTries = 3;                       // #167 D10: rest walks per rest, each blocked one the next (inf.)
     public const int RespawnWatchMilliseconds = 150_000;      // #167 C7: a kill's spawn spot counts this long (inf.: the
     public const int RecentKillCount = 3;                     //   usual respawn is 80 s), the last 3 kills'
+    public const int RespawnDueFromMilliseconds = 50_000;     // #167 F P2: a kill's spot due at the pick from 50 s to 150 s
+    public const int RespawnDueToMilliseconds = 150_000;      //   after the kill (the add peak is 78-90 s; DueAfterKill);
+    public const int RespawnDueWatchMilliseconds = 600_000;   //   the kills' monsters kept this long, the last 5
+    public const int RespawnDueCount = 5;                     //   (RememberRespawn)
     public const int CrowdLiftMilliseconds = 300_000;         // #167 F P1: the crowd limits off this long where no clean
                                                               //   camp is left (TakeCamp, FallBackInPlace)
     public const int CrowdBarMilliseconds = 600_000;          //   a capped plan's crowd bar kept this long (the review:
@@ -522,6 +529,7 @@ public static class PlayerBotDriver
     [ThreadStatic] private static List<int> _limits;                                           // #167 F P1: FindWithin's
     [ThreadStatic] private static List<GameNPC> _refused;                                      //   limits and refusals,
     [ThreadStatic] private static HashSet<GameNPC> _overCap;                                   //   and P1b's adds over the cap
+    [ThreadStatic] private static List<(GameNPC Npc, Vector3 At, int AggroRange)> _due;        // #167 F P2: FindWithin's
 
     public static IEnumerable<PlayerBotState> States => _states.Values;
     public static bool IsDriven(GamePlayer player) => player != null && _states.ContainsKey(player);
@@ -799,7 +807,8 @@ public static class PlayerBotDriver
         state.CrowdPassedOver = false;
         state.CrowdLiftedUntil = 0;
         state.CrowdBars.Clear();
-    }
+        state.RecentRespawns.Clear();                                                    // #167 F P2: another region's
+    }                                                                                    //   spawn spots mean nothing here
 
     // A task owns the bot's position while it runs: no leash then.
     private static bool Leashed(PlayerBotState state, GamePlayer player) =>
@@ -1536,7 +1545,12 @@ public static class PlayerBotDriver
                 player.StopCurrentSpellcast();
             if (PlayerBotDriverReport.Kill(state.Target)) state.Kills++;
             if (state.TargetRespawnReach > 0)                     // #167 C7: rested out of (WalksToRestSpot)
+            {
                 RememberKill(state.RecentKills, state.TargetSpawn, state.TargetRespawnReach, GameLoop.GameLoopTime);
+                if (state.Target is GameNPC killed)               // #167 F P2: due at the pick 50-150 s on (DueAfterKill)
+                    RememberRespawn(state.RecentRespawns, killed, state.TargetSpawn, state.TargetRespawnReach,
+                        GameLoop.GameLoopTime);
+            }
         }
         SettleIdleClockAtTargetEnd(state, dead);
         state.KilledWithAdds = state.Engaged && dead && state.FightAdds >= 2;   // #167 C2: the second-monster case
@@ -1588,7 +1602,7 @@ public static class PlayerBotDriver
         state.Target = found;
         state.FromDefence = found != null && IsAttacking(player, found);                  // FIGHT and DEATH from=
         (state.PickCrowd, state.PickLifted) = (reading.Crowd, reading.Lifted);            //   crowd= (#167), lifted= (F P1)
-        state.PickOver = reading.Over;                                                     //   over= (F P1b)
+        (state.PickOver, state.PickDue) = (reading.Over, reading.Due);                     //   over= (F P1b), due= (P2)
         (state.TargetSpawn, state.TargetRespawnReach) = found?.Brain is StandardMobBrain brain   // #167 C7: its respawn
             ? RespawnOf(found, brain.AggroLevel, brain.AggroRange, player.IsObjectGreyCon(found)) : default;
         state.Engaged = false;
@@ -1660,16 +1674,23 @@ public static class PlayerBotDriver
         }
         Vector3 from = new(player.X, player.Y, player.Z);
         int stop = PullStop(state, player);
+        List<(GameNPC Npc, Vector3 At, int AggroRange)> due = _due ??= new();           // #167 F P2: its kills' spots
+        bool readsDue = ReadsDueRespawns(role);                                         //   coming due, 50-150 s after
+        if (readsDue)                                                                   //   the kill
+            foreach ((GameNPC dead, Vector3 spawn, int reach, long killedAt) in state.RecentRespawns)
+                if (DueAfterKill(killedAt, now, dead.IsAlive)) due.Add((dead, spawn, reach));
         GameNPC best = PickUncrowded(candidates, adds, uncrowdedOnly: radius < SearchRadius, from, stop,   // #167 C5: the
-            out int crowd, limited ? limits : null, overCap, refused);          //   walk in too; crowd= its count; #167 F
-        reading = best == null ? PlayerBotPickReading.None                      //   P1: the limits, P1b: over the cap
-            : ReadPick(best, from, stop, adds, overCap, crowd, CrowdLifted(role, state.CrowdLiftedUntil, now));
+            out int crowd, limited ? limits : null, overCap, refused, due);     //   walk in too; crowd= its count; #167 F
+        reading = best == null ? PlayerBotPickReading.None                      //   P1: the limits, P1b: over the cap,
+            : ReadPick(best, from, stop, adds, overCap, crowd, CrowdLifted(role, state.CrowdLiftedUntil, now),   //   P2:
+                readsDue ? due : null);                                         //   the due ones rank
         state.SearchAdds.Clear();                                                       // #167 F7: the rest spot's, read
         foreach ((GameNPC add, _, _) in adds) state.SearchAdds.Add(add);                //   live (WalksToRestSpot)
         candidates.Clear();                                                             // no other monster held past the
         adds.Clear();                                                                   //   search
         limits.Clear();
         overCap.Clear();
+        due.Clear();
         if (best != null || radius >= SearchRadius)
         {
             (bool passed, bool crowdPassedOver, bool clearRefused) = CrowdSearchEnd(best != null, refused.Count, passedOver);
@@ -1684,12 +1705,15 @@ public static class PlayerBotDriver
     }
 
     // #167 F: the pick's reading of the target it took (PlayerBotPickReading): its live crowding (PickUncrowded's), and
-    // (P1b) the over-cap adds among it, read once for the one taken; lifted= (P1).
+    // (P1b) the over-cap adds among it, read once for the one taken; lifted= (P1); (P2) its kills' spots coming due by
+    // it or its stand point (null: a role that reads none, due=-1).
     private static PlayerBotPickReading ReadPick(GameNPC best, Vector3 from, int stop,
-        List<(GameNPC Npc, Vector3 At, int AggroRange)> adds, HashSet<GameNPC> overCap, int crowd, bool lifted)
+        List<(GameNPC Npc, Vector3 At, int AggroRange)> adds, HashSet<GameNPC> overCap, int crowd, bool lifted,
+        List<(GameNPC Npc, Vector3 At, int AggroRange)> due)
     {
-        Vector3 at = new(best.X, best.Y, best.Z);
-        return new(crowd, CrowdingAlong(best, at, from, StandPoint(from, at, stop), adds, overCap).Over, -1, -1, lifted);
+        Vector3 at = new(best.X, best.Y, best.Z), stand = StandPoint(from, at, stop);
+        return new(crowd, CrowdingAlong(best, at, from, stand, adds, overCap).Over,
+            due == null ? -1 : CrowdingAt(at, stand, due), -1, lifted);
     }
 
     // The adds rule's view of a monster (IsExperienceTarget) near a candidate: its aggro range when it would join that
@@ -2967,6 +2991,50 @@ public static class PlayerBotDriver
             if (now - killedAt < RespawnWatchMilliseconds) yield return (at, reach);
     }
 
+    /// <summary>#167 F P2 (BATCH-F: the window from the kill, not the live timer): a remembered kill's spot counts at the
+    /// pick while its monster is not alive and RespawnDueFromMilliseconds to RespawnDueToMilliseconds have passed since
+    /// the kill. The base legs' adds 78-90 s after one of the bot's own kills: 416, against about 235 in control windows
+    /// (the 4-s gap histogram peaks at 84-87 s); the world's usual RespawnInterval is 80 s (GameNPC.cs:1084-1087). No
+    /// read of IsRespawning or RespawnRemainingMilliseconds: a 1.65 player sees neither, only the time since its kill
+    /// (and the timer read could race the respawn, the review). An alive one is the live scan's (AddReach).</summary>
+    public static bool DueAfterKill(long killedAt, long now, bool alive) =>
+        !alive && now - killedAt >= RespawnDueFromMilliseconds && now - killedAt <= RespawnDueToMilliseconds;
+
+    /// <summary>#167 F P2: a kill's monster and its respawn (RespawnOf's spot and reach: an aggressive kill's only) with its
+    /// kill time, kept RespawnDueWatchMilliseconds, the last RespawnDueCount; the same monster killed again replaces its
+    /// old entry (RespawnTimerCallback puts the same object back at its spawn point, so a held one stays valid). Past
+    /// RespawnDueToMilliseconds none counts (DueAfterKill), so the count is what bounds it. RecentKills (C7's rest spot)
+    /// is left as it was.</summary>
+    public static void RememberRespawn<T>(List<(T Npc, Vector3 At, int Reach, long KilledAt)> kills, T npc, Vector3 at,
+        int reach, long now) where T : class
+    {
+        kills.RemoveAll(kill => now - kill.KilledAt >= RespawnDueWatchMilliseconds || ReferenceEquals(kill.Npc, npc));
+        if (kills.Count >= RespawnDueCount) kills.RemoveRange(0, kills.Count - RespawnDueCount + 1);
+        kills.Add((npc, at, reach, now));
+    }
+
+    /// <summary>#167 F P2: the due respawns whose reach (aggro range + AddMargin) covers the target at `at` or the stand
+    /// point, each once. Not the walk in from the bot: it often stands on the spawn spot of the kill it just made, and
+    /// every candidate would count it.</summary>
+    public static int CrowdingAt<T>(Vector3 at, Vector3 stand, IReadOnlyList<(T Npc, Vector3 At, int AggroRange)> due)
+        where T : class
+    {
+        int crowd = 0;
+        for (int i = 0; i < due.Count; i++)
+        {
+            float reach = due[i].AggroRange + AddMargin;
+            if (Vector3.DistanceSquared(due[i].At, at) <= reach * reach ||
+                Vector3.DistanceSquared(due[i].At, stand) <= reach * reach)
+                crowd++;
+        }
+        return crowd;
+    }
+
+    /// <summary>#167 F P2: the roles whose pick reads due respawns: melee, archers and casters, not healers and pets (the
+    /// base legs' respawn-add deaths: melee 18, archer 9, caster 7, healer 3, pet 1; the ranking costs walk time on every
+    /// pick that reads one).</summary>
+    public static bool ReadsDueRespawns(PlayerBotRole role) => role is not (PlayerBotRole.Healer or PlayerBotRole.Pet);
+
     /// <summary>Whether a spot is in the reach of a potential add (the adds rule's ring, Crowding's: its aggro range +
     /// AddMargin) (#167 F4, F7).</summary>
     public static bool InAddReach<T>(Vector3 at, IReadOnlyList<(T Npc, Vector3 At, int AggroRange)> adds) where T : class
@@ -3966,27 +4034,32 @@ public static class PlayerBotDriver
     /// its camp). One the "nothing beats a clear better one" line skips is never refused: that happens only once a clear
     /// target is in hand, and refused is read only when the pick takes none. #167 F P1b: with a finite limit, so is one
     /// with an add over the bot's cap among its crowd (overCap: defence-first deaths with an attacker over the cap, 83 of
-    /// 124).</summary>
+    /// 124). #167 F P2: due (its kills' spots coming due, DueAfterKill) adds to the near ring's clear test and the ranking
+    /// (CrowdingAt: by the target or the stand point), never to a limit; crowd stays the live adds' count.</summary>
     public static T PickUncrowded<T>(IReadOnlyList<(T Npc, Vector3 At, int Score)> candidates,
         IReadOnlyList<(T Npc, Vector3 At, int AggroRange)> adds, bool uncrowdedOnly, Vector3 from, int stop, out int crowd,
-        IReadOnlyList<int> maxCrowd = null, ISet<T> overCap = null, ICollection<T> refused = null) where T : class
+        IReadOnlyList<int> maxCrowd = null, ISet<T> overCap = null, ICollection<T> refused = null,
+        IReadOnlyList<(T Npc, Vector3 At, int AggroRange)> due = null) where T : class
     {
         T best = null;
-        int bestCrowd = int.MaxValue, bestScore = int.MaxValue;
+        int bestCrowd = int.MaxValue, bestScore = int.MaxValue, bestLive = -1;
         for (int i = 0; i < candidates.Count; i++)
         {
             (T npc, Vector3 at, int score) = candidates[i];
             if (bestCrowd == 0 && score >= bestScore) continue;                         // nothing beats a clear better one
-            (int count, int over) = CrowdingAlong(npc, at, from, StandPoint(from, at, stop), adds, overCap);
-            if (maxCrowd != null && maxCrowd[i] != int.MaxValue && (count > maxCrowd[i] || over > 0))   // over: P1b
+            Vector3 stand = StandPoint(from, at, stop);
+            (int live, int over) = CrowdingAlong(npc, at, from, stand, adds, overCap);
+            if (maxCrowd != null && maxCrowd[i] != int.MaxValue && (live > maxCrowd[i] || over > 0))   // over: P1b
             {
                 refused?.Add(npc);                                                      // #167 F P1, P1b
                 continue;
             }
+            int count = live + (due == null || due.Count == 0 ? 0 : CrowdingAt(at, stand, due));   // #167 F P2
             if (uncrowdedOnly && count > 0) continue;
-            if (count < bestCrowd || count == bestCrowd && score < bestScore) (best, bestCrowd, bestScore) = (npc, count, score);
+            if (count < bestCrowd || count == bestCrowd && score < bestScore)
+                (best, bestCrowd, bestScore, bestLive) = (npc, count, score, live);
         }
-        crowd = best == null ? -1 : bestCrowd;
+        crowd = best == null ? -1 : bestLive;
         return best;
     }
 
@@ -5753,7 +5826,8 @@ public static class PlayerBotDriver
             inFight ? state.FightQcControls : -1, inFight ? state.FightQcNukes : -1,     //   ctlImmune=, qcCtl=, qcNuke=,
             QuickcastLeftSeconds(quickcast != null,                                       //   qcLeft= at any death
                 quickcast == null ? 0 : player.GetSkillDisabledDuration(quickcast)),
-            target != null ? state.PickCrowd : -1, target != null ? state.PickOver : -1);  // #167 F P1 crowd=, P1b
+            target != null ? state.PickCrowd : -1, target != null ? state.PickOver : -1,   // #167 F P1 crowd=, P1b
+            target != null ? state.PickDue : -1);                                         //   over=, P2 due=
         string head = $"PLAYER_BOT_DEATH bot={player.Name} level={player.Level} at=({player.X},{player.Y},{player.Z}) " +
                       $"zone={player.CurrentZone?.ID} {fight} attackers={state.Attackers} deathSteps={state.DeathSafetySteps} " +
                       $"aliveSec={(now - state.AliveSince) / 1000} task={state.Task != null}";
@@ -5893,7 +5967,8 @@ public static class PlayerBotDriver
             state.FightCtlResisted, state.FightCtlImmune, state.FightQcControls, state.FightQcNukes,   // #167 F C2
             state.FightReserve,                                                         // #167 F-R
             state.PickLifted,                                                           // #167 F P1
-            state.PickOver)));                                                          // #167 F P1b
+            state.PickOver,                                                             // #167 F P1b
+            state.PickDue)));                                                           // #167 F P2
     }
 
     // APP:585-624, changed: every 10 s, no inventory count, no saves; after 15 minutes with no progress, back to the
