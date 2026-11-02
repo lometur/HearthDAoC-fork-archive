@@ -1216,7 +1216,10 @@ public sealed class UT_PlayerBotDriver
             FightCtlFailed = 1, FightHpAtReach = 50, FightTargetHpAtReach = 40, WouldBreakHp = 30,
             PendingControl = (Control(500, "root", "SpeedDecrease", 10, 99), Player(null), 8_000), FightBuffHitters = 2,
             FightDots = 2, FightKillingQuickcast = true, FightTargetMezzes = 1, FightRaceLeft = 22, FightStylesHeld = 3,
-            FightCastsHeld = 2, Reserve = 36, NextReserveTick = 9_000 };
+            FightCastsHeld = 2, Reserve = 36, NextReserveTick = 9_000, FightHealCasts = 2, FightHealsLanded = 1,
+            PendingHeal = (Heal(20, 400).Item1, 8_000), FightHealHolds = 5, FightHealHoldMax = 3, HealHoldRun = 2,
+            FightTaps = 2 };
+        state.FightAddWhy[(int)PlayerBotAddWhy.HitNoQc] = 3;
         Assert.That(PlayerBotDriver.OpenFight(state, 10_000, 90, 60, 1_420, 100), Is.True, "the first fight since a release");
         Assert.That((state.BackPending, state.KilledWithAdds, state.ControlTries, state.FightCasts, state.FightAdd),
             Is.EqualTo((false, false, 0, 0, (-1, -1))));
@@ -1236,6 +1239,12 @@ public sealed class UT_PlayerBotDriver
         Assert.That(state.FightRaceLeft, Is.EqualTo(PlayerBotDriver.NoRace), "#167 E-L: raceLeft= afresh");
         Assert.That((state.FightStylesHeld, state.FightCastsHeld, state.Reserve, state.NextReserveTick),
             Is.EqualTo((0, 0, 0, 0L)), "#167 E-R: styleHeld= and castHeld= afresh, and a fresh reserve read");
+        Assert.That((state.FightHealCasts, state.FightHealsLanded, state.PendingHeal.Spell), Is.EqualTo((0, 0, (Spell)null)),
+            "#167 F H1: healCast= and healLanded= afresh, no heal request awaited");
+        Assert.That((state.FightHealHolds, state.FightHealHoldMax, state.HealHoldRun), Is.EqualTo((0, 0, 0)),
+            "#167 F H2: healHold= and healHoldMax= afresh");
+        Assert.That(state.FightTaps, Is.Zero, "#167 F N1b: taps= afresh");
+        Assert.That(state.FightAddWhy, Is.All.Zero, "#167 F C1: addWhy='s counts afresh");
         Assert.That(PlayerBotDriver.OpenFight(state, 30_000, 90, 60, 1_420, 100), Is.False, "the next one");
     }
 
