@@ -5771,6 +5771,20 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriverReport.FormatAddWhy(PlayerBotAddWhy.RootInContact), Is.EqualTo("rootContact"));
     }
 
+    // #167 F C1 addWhy= (the review of F): the add step's whys count only once the fight has seen an add (CountAddWhy),
+    // so a fight with no add says none.
+    [Test]
+    public void A_fights_add_whys_count_only_after_an_add()
+    {
+        MethodInfo count = typeof(PlayerBotDriver).GetMethod("CountAddWhy", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var state = new PlayerBotState(Player(null)) { FightAdd = (-1, -1) };
+        count.Invoke(null, [state, PlayerBotAddWhy.NoAdd]);
+        Assert.That(state.FightAddWhy, Is.All.Zero, "no add seen yet");
+        state.FightAdd = (4, 70);
+        count.Invoke(null, [state, PlayerBotAddWhy.NoAdd]);
+        Assert.That(state.FightAddWhy[(int)PlayerBotAddWhy.NoAdd], Is.EqualTo(1));
+    }
+
     // The verifier's correction: CheckBeginCast and CheckEndCast need the spell's target in the front 180 degrees
     // (SpellHandler.cs:725, :939), and Engage faced the target every think before its IsCasting return. While a cast at
     // the add is under way the bot faces the add.
@@ -8430,6 +8444,19 @@ public sealed class UT_PlayerBotDriver
     public void A_failure_message_counts_for_its_own_control(PlayerBotSpellFail kind, int id, long at, int controlId,
         long askedAt, PlayerBotSpellFail counted) =>
         Assert.That(PlayerBotDriver.ControlFailFor(kind, id, at, controlId, askedAt), Is.EqualTo(counted));
+
+    // #167 F C2 (the review of F): SettleControl counts a failed control by its own message: resisted or immune
+    // (ctlResisted=, ctlImmune=, both of ctlFailed=), other neither.
+    [TestCase(PlayerBotSpellFail.Resisted, 1, 0)] [TestCase(PlayerBotSpellFail.Immune, 0, 1)]
+    [TestCase(PlayerBotSpellFail.Other, 0, 0)]
+    public void A_failed_control_counts_as_its_message_says(PlayerBotSpellFail kind, int resisted, int immune)
+    {
+        MethodInfo settle = typeof(PlayerBotDriver).GetMethod("SettleControl", BindingFlags.Static | BindingFlags.NonPublic)!;
+        Spell root = Control(500, "root", "SpeedDecrease", 10, 99);
+        var state = new PlayerBotState(Player(null)) { PendingControl = (root, LiveMonster(60), 8_000), ControlFail = (kind, 500, 8_500) };
+        settle.Invoke(null, [state, Player(null), 20_000L, true]);
+        Assert.That((state.FightCtlFailed, state.FightCtlResisted, state.FightCtlImmune), Is.EqualTo((1, resisted, immune)));
+    }
 
     // #167 F C2 (the review's): a message is the bot's own control's while its casting component finishes that very
     // spell (CastState Finished, SpellHandler.cs:1087-1147: its effect lands or is resisted in FinishSpellCast), or, for
