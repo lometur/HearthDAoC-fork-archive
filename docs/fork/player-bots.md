@@ -550,7 +550,12 @@ All start `PLAYER_BOT_`:
   interrupt it, no Quickcast ready), `closeNoQc` (the add reaches it before the cast ends, no Quickcast ready), `los`
   (no sight to the add) or `noAdd` (none counted, or the add gone or held); on a dropped fight's line too, -1 on
   `DEATH` out of a fight. "Counted most" leans away from `los`: a sight refusal counts once (the add step then waits
-  out the sight check), the others at every look.
+  out the sight check), the others at every look. Both then give `ctlResisted=` and `ctlImmune=`, of `ctlFailed=` the
+  controls the server named resisted or immune in its message to the bot (an enraged monster's refusal of a mez
+  counts as immune; read from the control's own message only: as its cast finishes, or for an instant control in the
+  tick it was cast), the rest refused, interrupted or unsaid, then `qcCtl=` and `qcNuke=`, its casts under Quickcast at
+  a control and of its damage spell (-1 each on `DEATH` out of a fight); `DEATH` ends with `qcLeft=`, the seconds
+  before Quickcast is ready again, at any death (-1 without it).
   `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `walkout`, `rest`, `kite`, `turret`
   or `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
   after a break-off its `reason=` is `brokeoff`. Either ends with `barred=old` when the death or the break-off came on

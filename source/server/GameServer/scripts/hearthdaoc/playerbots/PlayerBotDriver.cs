@@ -49,6 +49,9 @@ public enum PlayerBotHealStep { None, Cast, Hold, Blocked }
 /// FightAddWhy): none (no add), Control (a control cast at one), Pets (a Theurgist's pets), else the refusal.</summary>
 public enum PlayerBotAddWhy { None, Control, Pets, NoControl, Tries, NoneTakes, RootInContact, TargetFirst, HitNoQc, CloseNoQc, Los, NoAdd }
 
+/// <summary>A control's failure as the server told the caster (#167 F C2; PlayerBotDriver.SpellFailKind).</summary>
+public enum PlayerBotSpellFail { Other, Resisted, Immune }
+
 /// <summary>An Animist's step before a pull (PlayerBotDriver.AnimistStepFor, #167 E CY3).</summary>
 public enum PlayerBotAnimistStep { Pull, Walk, Replant, Wait, Skip }
 
@@ -226,6 +229,10 @@ public sealed class PlayerBotState
     public int FightTaps;                                        // #167 F N1b: FIGHT and DEATH taps=, power-tap casts
     public readonly int[] FightAddWhy = new int[(int)PlayerBotAddWhy.NoAdd + 1];   // #167 F C1: the add step's looks with
                                                                                    //   an add seen, by why (FightAddWhy)
+    public int FightCtlResisted, FightCtlImmune;                 // #167 F C2: FIGHT and DEATH ctlResisted= and ctlImmune=,
+    public (PlayerBotSpellFail Kind, int SpellId, long At) ControlFail;   //   of ctlFailed=, from the control's own message
+    public int FightQcControls, FightQcNukes;                    //   (OnSpellMessage); qcCtl= and qcNuke=, casts under
+                                                                 //   Quickcast by kind
     public int EngageBuffs, FightPetCasts, FightWaits;           // #167 FIGHT buffs=, petCasts= and waits=
     public long SitSince;                                        // #167 PLAYER_BOT_REST: when the bot sat down, 0 standing
     public (string Head, PlayerBotDeathDetail Detail, GameObject Target)? PendingDeath;   // a DEATH line awaiting Dying (AwaitsDying)
@@ -946,6 +953,7 @@ public static class PlayerBotDriver
             if (IsDamageOverTime(state.Spell)) state.FightDots++;                       // #167 E C1 dots=
             if (IsPowerTap(state.Spell)) state.FightTaps++;                             // #167 F N1b taps=
             state.FightQuickcast |= quickcasting;
+            if (quickcasting) state.FightQcNukes++;                                     // #167 F C2 qcNuke=
             state.FightKillingQuickcast |= quickcasting && state.KillingQuickcast;      // #167 E C2b qcKill=
             state.Activity = PlayerBotActivity.Casting;
         }
@@ -2016,6 +2024,8 @@ public static class PlayerBotDriver
         (state.FightHeldMs, state.FightCtlLanded, state.FightCtlFailed) = (0, 0, 0);   //   the think before's, and the
         (state.FightHpAtReach, state.FightTargetHpAtReach, state.WouldBreakHp) = (-1, -1, -1);   //   counts afresh
         state.PendingControl = default;                                             //   (a cast still awaited: neither)
+        (state.FightCtlResisted, state.FightCtlImmune, state.ControlFail) = (0, 0, default);   // #167 F C2
+        (state.FightQcControls, state.FightQcNukes) = (0, 0);
         bool back = state.BackPending;                                              // #167 C1: the first since a release
         state.BackPending = false;
         return back;
@@ -5364,6 +5374,7 @@ public static class PlayerBotDriver
         int fromBind = player.CurrentRegionID == player.BindRegion ? (int)Vector3.Distance(new(player.X, player.Y, player.Z),
             new(player.BindXpos, player.BindYpos, player.BindZpos)) : -1;
         bool inFight = state.Engaged && target != null;       // else the fight fields are the last fight's: -1
+        Ability quickcast = player.GetAbility(Abilities.Quickcast);                     // #167 F C2 qcLeft=
         PlayerBotDeathDetail detail = new(last, inFight ? state.EngageHealth : -1,
             inFight ? (now - state.EngagedSince) / 1000 : -1, target?.HealthPercent ?? -1, target != null && state.FromDefence,
             inFight ? state.FightAdds : -1, state.LifeKills, state.LifeRests,
@@ -5392,7 +5403,11 @@ public static class PlayerBotDriver
             inFight ? state.FightHealsLanded : -1,                                        //   and healLanded=,
             inFight ? state.FightHealHolds : -1, inFight ? state.FightHealHoldMax : -1,   // #167 F H2
             inFight ? state.FightTaps : -1,                                               // #167 F N1b taps=
-            inFight ? FightAddWhy(state.FightAdd.At, state.FightAddControls, state.FightAddWhy) : null);   // #167 F C1
+            inFight ? FightAddWhy(state.FightAdd.At, state.FightAddControls, state.FightAddWhy) : null,   // #167 F C1
+            inFight ? state.FightCtlResisted : -1, inFight ? state.FightCtlImmune : -1,  // #167 F C2 ctlResisted=,
+            inFight ? state.FightQcControls : -1, inFight ? state.FightQcNukes : -1,     //   ctlImmune=, qcCtl=, qcNuke=,
+            QuickcastLeftSeconds(quickcast != null,                                       //   qcLeft= at any death
+                quickcast == null ? 0 : player.GetSkillDisabledDuration(quickcast)));
         string head = $"PLAYER_BOT_DEATH bot={player.Name} level={player.Level} at=({player.X},{player.Y},{player.Z}) " +
                       $"zone={player.CurrentZone?.ID} {fight} attackers={state.Attackers} deathSteps={state.DeathSafetySteps} " +
                       $"aliveSec={(now - state.AliveSince) / 1000} task={state.Task != null}";
@@ -5415,20 +5430,76 @@ public static class PlayerBotDriver
     // #167 ctlLanded= and ctlFailed=: the control cast awaited (AwaitControl) once it could have ended (ControlResolves),
     // or at once when another is cast (force). Its target dead by then counts neither way; so does one still under way
     // when the fight ends (OpenFight drops it).
+    // #167 F C2: a failed one counts as resisted or immune when its own message said so (ControlFail, OnSpellMessage).
     private static void SettleControl(PlayerBotState state, GamePlayer player, long now, bool force)
     {
         if (state.PendingControl.Spell is not Spell spell) return;
         (_, GameLiving target, long at) = state.PendingControl;
         if (!force && !ControlResolves(now, at, spell.CastTime, player.IsCasting)) return;
         state.PendingControl = default;
+        (PlayerBotSpellFail failKind, int failId, long failAt) = state.ControlFail;    // #167 F C2: its message, if any
+        state.ControlFail = default;
         if (target?.IsAlive != true) return;
         if (ControlLanded(target.effectListComponent.GetSpellEffects().Where(effect => effect.SpellHandler?.Spell != null)
                 .Select(effect => (effect.SpellHandler.Spell.ID, effect.SpellHandler.Caster == player, effect.StartTick)),
                 spell.ID, at))
             state.FightCtlLanded++;
         else
+        {
             state.FightCtlFailed++;
+            PlayerBotSpellFail kind = ControlFailFor(failKind, failId, failAt, spell.ID, at);
+            if (kind is PlayerBotSpellFail.Resisted) state.FightCtlResisted++;
+            else if (kind is PlayerBotSpellFail.Immune) state.FightCtlImmune++;
+        }
     }
+
+    /// <summary>#167 F C2: a CT_SpellResisted line's kind for the caster: its target resisted ("X resists the effect!
+    /// (12.3%)", SpellHandler.cs:2547; the target's own "You resist the effect!" and a pet owner's "Your X resists the
+    /// effect!" have no chance in brackets), was immune ("Your target is immune to this effect!", CCSpellHandler.cs:19,
+    /// :173, :288, SpellHandler.cs:541) or enraged ("Your target is enraged and resists the spell!", CCSpellHandler.cs:176:
+    /// a mez at a monster under 75%, as immune), else other.</summary>
+    public static PlayerBotSpellFail SpellFailKind(string message) =>
+        message == null ? PlayerBotSpellFail.Other
+        : message.Contains(" resists the effect! (", StringComparison.Ordinal) ? PlayerBotSpellFail.Resisted
+        : message.StartsWith("Your target is immune to this effect", StringComparison.Ordinal) ||
+          message.StartsWith("Your target is enraged and resists", StringComparison.Ordinal) ? PlayerBotSpellFail.Immune
+        : PlayerBotSpellFail.Other;
+
+    /// <summary>#167 F C2: the stored kind counts for the control settled when it names that spell and came after its
+    /// request; else other.</summary>
+    public static PlayerBotSpellFail ControlFailFor(PlayerBotSpellFail kind, int spellId, long at, int controlId,
+        long askedAt) =>
+        spellId == controlId && at >= askedAt ? kind : PlayerBotSpellFail.Other;
+
+    /// <summary>#167 F C2 (the review's): whether a CT_SpellResisted line is the bot's own control's: while its casting
+    /// component finishes that very spell (handlerFinished: CastState Finished, set just before FinishSpellCast in the
+    /// same Tick, SpellHandler.cs:1087-1147, where the control's effect lands or is resisted), or, for an instant
+    /// control (controlInstant), which never becomes the casting component's handler (CastingComponent.cs:389-390,
+    /// :456-457: it ticks at once), in the tick it was asked in (askedAt, the think's now: it ticks in that tick's Casting
+    /// phase). A bolt's resist landing from a timer while the control still casts is not.</summary>
+    public static bool MessageIsForControl(int handlerSpellId, bool handlerFinished, int controlId, bool controlInstant,
+        long askedAt, long now) =>
+        handlerFinished && handlerSpellId == controlId || controlInstant && askedAt == now;
+
+    /// <summary>#167 F C2: a CT_SpellResisted line to a driven bot (HeadlessPacketLib.SendMessage), kept as its own
+    /// control's resist or immunity while a control is awaited (PendingControl) and the line is that control's
+    /// (MessageIsForControl). Never throws: a bot the driver doesn't drive, or none awaited, is ignored.</summary>
+    public static void OnSpellMessage(GamePlayer player, string message)
+    {
+        if (StateOf(player) is not PlayerBotState state || state.PendingControl.Spell is not Spell control) return;
+        DOL.GS.Spells.SpellHandler handler = player.castingComponent?.SpellHandler;
+        long now = GameLoop.GameLoopTime;
+        if (!MessageIsForControl(handler?.Spell?.ID ?? 0, handler?.CastState is eCastState.Finished, control.ID,
+                control.IsInstantCast, state.PendingControl.At, now))
+            return;
+        PlayerBotSpellFail kind = SpellFailKind(message);
+        if (kind is not PlayerBotSpellFail.Other) state.ControlFail = (kind, control.ID, now);
+    }
+
+    /// <summary>#167 F C2 qcLeft=: Quickcast's remaining disable at a death in whole seconds, rounded up; -1 without the
+    /// ability.</summary>
+    public static int QuickcastLeftSeconds(bool hasQuickcast, int disabledMilliseconds) =>
+        !hasQuickcast ? -1 : (Math.Max(0, disabledMilliseconds) + 999) / 1000;
 
     // #167 ctlLanded=: a control cast asked for (CasterStep's at the target, AddAct's at an add), awaited; one still
     // awaited settles now.
@@ -5472,7 +5543,8 @@ public static class PlayerBotDriver
             state.FightHealCasts, state.FightHealsLanded,                               // #167 F H1
             state.FightHealHolds, state.FightHealHoldMax,                              // #167 F H2
             state.FightTaps,                                                            // #167 F N1b
-            FightAddWhy(state.FightAdd.At, state.FightAddControls, state.FightAddWhy))));   // #167 F C1
+            FightAddWhy(state.FightAdd.At, state.FightAddControls, state.FightAddWhy),   // #167 F C1
+            state.FightCtlResisted, state.FightCtlImmune, state.FightQcControls, state.FightQcNukes)));   // #167 F C2
     }
 
     // APP:585-624, changed: every 10 s, no inventory count, no saves; after 15 minutes with no progress, back to the
@@ -5655,6 +5727,7 @@ public static class PlayerBotDriver
                 state.FightControls++;
                 if (control.SpellType is eSpellType.Mesmerize) state.FightTargetMezzes++;   // #167 E C4 ctlMez=
                 state.FightQuickcast |= quickcasting;
+                if (quickcasting) state.FightQcControls++;                              // #167 F C2 qcCtl=
                 state.NextCombatChoiceTick = now + Math.Max(900, control.CastTime + 250);
                 state.Activity = PlayerBotActivity.Casting;
                 return true;
@@ -5782,6 +5855,7 @@ public static class PlayerBotDriver
             state.FightAddControls++;
             AwaitControl(state, player, spell, add, now);                               // #167 ctlLanded=
             state.FightQuickcast |= quickcasting;
+            if (quickcasting) state.FightQcControls++;                                  // #167 F C2 qcCtl=
         }
         state.NextCombatChoiceTick = now + Math.Max(900, spell.CastTime + 250);
         return true;

@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Numerics;
 using System.Reflection;
@@ -161,6 +162,38 @@ public sealed class UT_HeadlessClient
         Assert.DoesNotThrow(() => lib.SendChangeGroundTarget(1, 2, 3));
         Assert.DoesNotThrow(() => lib.SendRawMessage("x", eChatType.CT_System, eChatLoc.CL_SystemWindow));
         Assert.That(lib.SendLosCheckRequest(null, null, null), Is.False); // not Playing (PacketLib168.cs:1588-1589)
+    }
+
+    // #167 F C2: the server's chat to the bot (GamePlayer.MessageToSelf -> Out.SendMessage, GamePlayer.cs:7655-7658) was
+    // BotDummyPacketLib's no-op; a CT_SpellResisted line now reaches the driver (PlayerBotDriver.OnSpellMessage), which
+    // keeps it as the bot's own control's: an instant control asked for this tick, resisted. Another chat type, or a bot
+    // the driver doesn't drive, changes nothing and never throws.
+    [Test]
+    public void A_spell_resist_line_reaches_the_driver_as_the_bots_own_controls()
+    {
+        var states = (ConcurrentDictionary<GamePlayer, PlayerBotState>)typeof(PlayerBotDriver)
+            .GetField("_states", HiddenStatic)!.GetValue(null)!;
+        HeadlessClient client = InWorldClient(out GamePlayer player);
+        IPacketLib lib = client.Out;
+        var state = (PlayerBotState)RuntimeHelpers.GetUninitializedObject(typeof(PlayerBotState));
+        Spell shout = new(new DbSpell { SpellID = 101, Name = "Stunning Shout", Type = "Stun", Target = "Enemy", CastTime = 0,
+            Duration = 6, Range = 1000 }, 10);
+        const string resisted = "The fomorian geddon resists the effect! (12.3%)";
+        try
+        {
+            Assert.DoesNotThrow(() => lib.SendMessage(resisted, eChatType.CT_SpellResisted, eChatLoc.CL_SystemWindow),
+                "not driven");
+            states[player] = state;
+            state.PendingControl = (shout, null, GameLoop.GameLoopTime);
+            lib.SendMessage(resisted, eChatType.CT_System, eChatLoc.CL_SystemWindow);
+            Assert.That(state.ControlFail.Kind, Is.EqualTo(PlayerBotSpellFail.Other), "another chat type: dropped");
+            lib.SendMessage(resisted, eChatType.CT_SpellResisted, eChatLoc.CL_SystemWindow);
+            Assert.That(state.ControlFail, Is.EqualTo((PlayerBotSpellFail.Resisted, 101, GameLoop.GameLoopTime)));
+        }
+        finally
+        {
+            states.TryRemove(player, out _);
+        }
     }
 
     // G1 (levelmatch/DESIGN.md 1.4, 2.6): BotDummyPacketLib's no-ops left a bot its login skill lists after a level-up or
