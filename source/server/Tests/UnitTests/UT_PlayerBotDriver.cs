@@ -2906,6 +2906,30 @@ public sealed class UT_PlayerBotDriver
         bool alive, bool due) =>
         Assert.That(PlayerBotDriver.DueAfterKill(killedAt, now, alive), Is.EqualTo(due));
 
+    // The review of F: FindWithin reads a kill's monster alive (dead.IsAlive): alive again it counts live, not also as a
+    // due respawn; dead still, it is due. The wider ring (SearchRadius): in the near one a due spot alone refuses the pick.
+    [Test]
+    public void A_kill_alive_again_is_no_due_respawn_in_FindWithin()
+    {
+        MethodInfo find = typeof(PlayerBotDriver).GetMethod("FindWithin", BindingFlags.Static | BindingFlags.NonPublic)!;
+        InTheField(new SplitFloorMesh(), new(840_884, 702_153, 8_784), (region, zone, bot) =>
+        {
+            GameNPC candidate = MonsterAt(region, zone, new(840_700, 702_100, 8_700), 39);
+            GameNPC killed = LiveMonster();                                              // alive again, elsewhere
+            var state = new PlayerBotState(bot) { NukesLevel = 39, Nukes = [] };
+            state.RecentRespawns.Add((killed, new Vector3(840_650, 702_100, 8_700), 400, 10_000 - 85_000));
+            int Due()
+            {
+                object[] args = [state, bot, PlayerBotDriver.SearchRadius, 10_000L, PlayerBotPickReading.None];
+                Assert.That(find.Invoke(null, args), Is.SameAs(candidate));
+                return ((PlayerBotPickReading)args[4]).Due;
+            }
+            Assert.That(Due(), Is.Zero, "alive again");
+            typeof(GameObject).GetField("m_health", Hidden)!.SetValue(killed, 0);
+            Assert.That(Due(), Is.EqualTo(1), "dead still");
+        });
+    }
+
     // The bot watches its last 5 kills' monsters for 10 minutes; the same monster killed again replaces its entry (the
     // review: one object per monster, as an interpolated string is a new one each time).
     [Test]
@@ -4167,6 +4191,29 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.CrowdingAlong("boar", Vector3.Zero, Aside, Aside, adds, overCap), Is.EqualTo((1, 1)));
     }
 
+    // The review of F: FindWithin's over-cap set holds adds over the cap, not at it: a melee bot's BLUE candidate with one
+    // aggressive add at the cap's con in reach is taken in the wider ring (crowd 1, BLUE's limit 1), over= 0.
+    [Test]
+    public void An_add_at_the_cap_is_not_over_it_in_FindWithin()
+    {
+        MethodInfo find = typeof(PlayerBotDriver).GetMethod("FindWithin", BindingFlags.Static | BindingFlags.NonPublic)!;
+        MethodInfo capOf = typeof(PlayerBotDriver).GetMethod("Cap", BindingFlags.Static | BindingFlags.NonPublic)!;
+        InTheField(new SplitFloorMesh(), new(840_884, 702_153, 8_784), (region, zone, bot) =>
+        {
+            var state = new PlayerBotState(bot) { NukesLevel = 39, Nukes = [] };
+            var cap = (ConColor)capOf.Invoke(null, [state, 10_000L])!;
+            GameNPC candidate = MonsterAt(region, zone, new(840_700, 702_100, 8_700), LevelFor(bot, ConColor.BLUE));
+            GameNPC add = MonsterAt(region, zone, new(840_600, 702_100, 8_700), LevelFor(bot, cap));
+            ((DOL.AI.Brain.StandardMobBrain)add.Brain).AggroLevel = 100;
+            ((DOL.AI.Brain.StandardMobBrain)add.Brain).AggroRange = 400;
+            typeof(GameObject).GetField("m_name", Hidden)!.SetValue(add, "wolf");      // an add, never a pick
+            state.AvoidUntil["wolf"] = 10_000_000;
+            object[] args = [state, bot, PlayerBotDriver.SearchRadius, 10_000L, PlayerBotPickReading.None];
+            Assert.That(find.Invoke(null, args), Is.SameAs(candidate), $"cap {cap}");
+            Assert.That(((PlayerBotPickReading)args[4]).Over, Is.Zero);
+        });
+    }
+
     // FIGHT and DEATH over=: of the crowd it counts, the adds over the cap (overCap), the reach's own test (an add out of
     // reach is none, nor is the candidate itself); with no overCap, 0.
     [Test]
@@ -4194,6 +4241,17 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.CrowdingAlongPath("target", target, route, adds, null), Is.EqualTo((1, 0)));
         Assert.That(PlayerBotDriver.CrowdingAlongPath("target", target, route, adds, new HashSet<string> { "wolf" }),
             Is.EqualTo((1, 1)));
+    }
+
+    // The review of F: the corridor count also counts an add whose reach covers the target off the route, and never the
+    // target itself.
+    [Test]
+    public void The_corridor_count_reads_the_targets_reach_and_skips_the_target()
+    {
+        Vector3 target = new(2_150, 0, 0), stand = new(2_000, 0, 0);
+        Vector3[] route = [Vector3.Zero, new(1_000, 1_500, 0), stand];
+        var adds = new List<(string, Vector3, int)> { ("target", target, 300), ("wolf", new(2_600, 0, 0), 300) };
+        Assert.That(PlayerBotDriver.CrowdingAlongPath("target", target, route, adds, null), Is.EqualTo((1, 0)));
     }
 
     // A melee or archer bot the limits hold checks a new target's walk of over 1,000 along its corridor, at most once
@@ -7459,6 +7517,28 @@ public sealed class UT_PlayerBotDriver
         Assert.That((PlayerBotDriver.BlindSkipped(state, npc, 100_000), PlayerBotDriver.BlindSkipped(state, npc, 900_000)),
             Is.EqualTo((true, false)));
         Assert.That(PlayerBotDriver.UnreachableMarked(state, npc, 100_000), Is.False, "self-defence still takes it");
+    }
+
+    // The review of F: Engage's blocked walk to a target already blocked within 5 minutes makes it the pick's skip for 15
+    // minutes (P5's only call site); a first block marks it unreachable only (LeaveUnreachable's 30 s).
+    [TestCase(false)] [TestCase(true)]
+    public void A_second_blocked_walk_within_five_minutes_skips_the_pick_in_EngageTarget(bool blockedBefore)
+    {
+        MethodInfo engage = typeof(PlayerBotDriver).GetMethod("EngageTarget", BindingFlags.Static | BindingFlags.NonPublic)!;
+        InTheField(new SplitFloorMesh(), new(840_884, 702_153, 8_784), (region, zone, bot) =>
+        {
+            GameNPC crackler = MonsterAt(region, zone, new(840_323, 702_066, 8_343), 39);
+            var state = new PlayerBotState(bot)
+            {
+                Target = crackler, Engaged = true, BlindStop = 419, RoamingSince = 5_000,
+                NukesLevel = 39, Nukes = [], NextSpellChoiceTick = long.MaxValue,
+            };
+            if (blockedBefore) state.TargetBlocks.Add((crackler, 10_000 - 113_000));
+            engage.Invoke(null, [state, bot, 10_000L]);
+            Assert.That(state.Mover.LastBlock, Does.StartWith("No complete walkable path"));
+            Assert.That((PlayerBotDriver.UnreachableMarked(state, crackler, 10_000),
+                PlayerBotDriver.BlindSkipped(state, crackler, 10_000 + 600_000)), Is.EqualTo((true, blockedBefore)));
+        });
     }
 
     // Another region's blocked walks mean nothing here.
