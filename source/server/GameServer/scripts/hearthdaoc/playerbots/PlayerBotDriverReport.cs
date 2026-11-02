@@ -60,8 +60,7 @@ public readonly record struct PlayerBotCrossingWindow(int Seconds, long Took, lo
 /// HuntTarget; PlayerBotDriver.HuntReplaced): -1 and none for a rings' pick, or with none replaced; then (#167 F R2)
 /// whether the fight began on the rest its kill skipped (RestSkip: the first fight after the skip, with no sit between;
 /// PlayerBotDriver.SkipsRestAfterKill); then (#167 F-WD) the seconds the capped clock had run when the fight began
-/// (CapHold; PlayerBotDriver.CapHoldAtFight; -1: none) and the steps out of reach its hold took (HoldSteps;
-/// PlayerBotDriver.HoldStepsClear; -1: no capped clock).</summary>
+/// (CapHold; PlayerBotDriver.CapHoldAtFight; -1: none).</summary>
 public readonly record struct PlayerBotFight(
     string Bot, int Level, string Target, int TargetLevel, ConColor Con, bool FromDefence, bool Killed,
     byte StartHp, byte EndHp, byte StartMana, byte EndMana, long Seconds, int Adds, int Swings, int NotVisible, int Casts,
@@ -75,7 +74,7 @@ public readonly record struct PlayerBotFight(
     int HealHolds = 0, int HealHoldMax = 0, int Taps = 0, PlayerBotAddWhy AddWhy = PlayerBotAddWhy.None, int CtlResisted = 0,
     int CtlImmune = 0, int QcControls = 0, int QcNukes = 0, int Reserve = 0, bool Lifted = false, int Over = -1,
     int Due = -1, string Seen = "-", int PathCrowd = -1, int HuntCrowd = -1, string HuntTarget = null,
-    bool RestSkip = false, int CapHold = -1, int HoldSteps = -1);
+    bool RestSkip = false, int CapHold = -1);
 
 /// <summary>What a PLAYER_BOT_DEATH line adds after its first fields (levelmatch/DEATHS.md 2); -1 for none: the fight's
 /// fields (startHp, fightSec, adds, swings, notVisible) out of a fight, targetHp with no target, sinceKillSec with no kill
@@ -96,7 +95,7 @@ public readonly record struct PlayerBotFight(
 /// pick's crowding of the target (-1: no target, or another pick), and (#167 F P1b) FIGHT's Over and (#167 F P2)
 /// Due, and (#167 F P4) FIGHT's Seen and PathCrowd; then (#167 F F5) FIGHT's HuntCrowd and HuntTarget (with a target;
 /// -1 and none without) and the fatal fight's BlindSteps (-1 out of a fight); then (#167 F R2) FIGHT's RestSkip, 1 or
-/// 0 (-1 out of a fight); then (#167 F-WD) FIGHT's CapHold and HoldSteps (-1 each out of a fight).</summary>
+/// 0 (-1 out of a fight); then (#167 F-WD) FIGHT's CapHold (-1 out of a fight).</summary>
 public readonly record struct PlayerBotDeathDetail(
     PlayerBotActivity Activity, int StartHp, long FightSeconds, int TargetHp, bool FromDefence, int Adds, int LifeKills,
     int Rests, long SinceKillSeconds, byte Mana, int Swings, int NotVisible, string Killer, int KillerLevel,
@@ -110,7 +109,7 @@ public readonly record struct PlayerBotDeathDetail(
     int HealHolds = -1, int HealHoldMax = -1, int Taps = -1, PlayerBotAddWhy? AddWhy = null, int CtlResisted = -1,
     int CtlImmune = -1, int QcControls = -1, int QcNukes = -1, int QcLeft = -1, int Crowd = -1, int Over = -1,
     int Due = -1, string Seen = "-", int PathCrowd = -1, int HuntCrowd = -1, string HuntTarget = null,
-    int BlindSteps = -1, int RestSkip = -1, int CapHold = -1, int HoldSteps = -1);
+    int BlindSteps = -1, int RestSkip = -1, int CapHold = -1);
 
 /// <summary>#167 F: what the rings' pick read for the target it took (PlayerBotDriver.FindWithin): FIGHT crowd= (the live
 /// potential adds CrowdingAlong counted), over= (those over the bot's cap, P1b), due= (its kills' respawns due, P2) and
@@ -291,7 +290,7 @@ public static class PlayerBotDriverReport
         $"healHoldMax={f.HealHoldMax} taps={f.Taps} addWhy={FormatAddWhy(f.AddWhy)} ctlResisted={f.CtlResisted} " +
         $"ctlImmune={f.CtlImmune} qcCtl={f.QcControls} qcNuke={f.QcNukes} reserve={f.Reserve} lifted={(f.Lifted ? 1 : 0)} " +
         $"over={f.Over} due={f.Due} seen={f.Seen ?? "-"} pathCrowd={f.PathCrowd} huntCrowd={f.HuntCrowd} " +
-        $"huntTarget=\"{f.HuntTarget}\" restSkip={(f.RestSkip ? 1 : 0)} capHold={f.CapHold} holdStep={f.HoldSteps}");
+        $"huntTarget=\"{f.HuntTarget}\" restSkip={(f.RestSkip ? 1 : 0)} capHold={f.CapHold}");
 
     /// <summary>#167 F C1 addWhy=: none, ctl, pets, noControl, tries, noneTakes, rootContact, targetFirst, hitNoQc,
     /// closeNoQc, los or noAdd.</summary>
@@ -389,7 +388,7 @@ public static class PlayerBotDriverReport
         $"addWhy={(d.AddWhy is { } why ? FormatAddWhy(why) : "-1")} ctlResisted={d.CtlResisted} ctlImmune={d.CtlImmune} " +
         $"qcCtl={d.QcControls} qcNuke={d.QcNukes} qcLeft={d.QcLeft} crowd={d.Crowd} over={d.Over} due={d.Due} " +
         $"seen={d.Seen ?? "-"} pathCrowd={d.PathCrowd} huntCrowd={d.HuntCrowd} huntTarget=\"{d.HuntTarget}\" " +
-        $"blindSteps={d.BlindSteps} restSkip={d.RestSkip} capHold={d.CapHold} holdStep={d.HoldSteps}");
+        $"blindSteps={d.BlindSteps} restSkip={d.RestSkip} capHold={d.CapHold}");
 
     /// <summary>#188: PLAYER_BOT_CROSSING win=, the window's changes of island over all bots, then its ring points
     /// dropped: the totals (a bot's own CROSSING bot= lines are samples, at most one a minute;

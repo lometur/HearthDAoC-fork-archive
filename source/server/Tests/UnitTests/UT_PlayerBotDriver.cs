@@ -4521,230 +4521,53 @@ public sealed class UT_PlayerBotDriver
         });
     }
 
-    // #167 F-WD: only the capped hold steps out of reach (its clock running, under 60 s), not the recovery after a
-    // release (StepsOutOfReach's), nor a sitting bot.
-    [TestCase(5_000L, false, false, 6_000L, true)] [TestCase(0L, false, false, 6_000L, false)]
-    [TestCase(5_000L, true, false, 6_000L, false)] [TestCase(5_000L, false, true, 6_000L, false)]
-    [TestCase(5_000L, false, false, 64_999L, true)] [TestCase(5_000L, false, false, 65_000L, false)]
-    public void Only_the_capped_hold_steps_out_of_reach(long cappedSince, bool afterRelease, bool sitting, long now,
-        bool steps) =>
-        Assert.That(PlayerBotDriver.HoldStepsOut(cappedSince, afterRelease, sitting, now), Is.EqualTo(steps));
+    // #167 F-WD: FIGHT capHold=: the seconds the capped clock had run; none, -1.
+    [TestCase(0L, 20_000L, -1)] [TestCase(5_000L, 17_500L, 12)] [TestCase(5_000L, 65_000L, 60)]
+    public void A_fight_reads_the_capped_clock(long cappedSince, long now, int capHold) =>
+        Assert.That(PlayerBotDriver.CapHoldAtFight(cappedSince, now), Is.EqualTo(capHold));
 
-    // #167 F-WD: the hold's spot goes once the bot arrives or is blocked; it stays while it walks or waits.
-    [TestCase(PlayerBotStepResult.Arrived, false)] [TestCase(PlayerBotStepResult.Blocked, false)]
-    [TestCase(PlayerBotStepResult.Moving, true)] [TestCase(PlayerBotStepResult.Waiting, true)]
-    public void The_holds_spot_goes_once_arrived_or_blocked(PlayerBotStepResult step, bool kept) =>
-        Assert.That(PlayerBotDriver.HoldSpotAfter(step, new Vector3(1, 2, 3)),
-            Is.EqualTo(kept ? new Vector3(1, 2, 3) : (Vector3?)null));
-
-    // #167 F-WD: FIGHT capHold= and holdStep=: the capped clock's seconds and the hold's steps out; none, -1 each.
-    [TestCase(0L, 3, 20_000L, -1, -1)] [TestCase(5_000L, 0, 17_500L, 12, 0)] [TestCase(5_000L, 2, 65_000L, 60, 2)]
-    public void A_fight_reads_the_capped_clock_and_the_holds_steps(long cappedSince, int holdSteps, long now,
-        int capHold, int steps) =>
-        Assert.That(PlayerBotDriver.CapHoldAtFight(cappedSince, holdSteps, now), Is.EqualTo((capHold, steps)));
-
-    // #167 F-WD: OpenFight reads the capped clock and the hold's steps (a defence that came at a held bot); with no
-    // capped clock (a pull's search stopped it), -1 each; and (R3) the fight ends the hold's walk out (HoldSpot).
+    // #167 F-WD: OpenFight reads the capped clock (a defence that came at a held bot); with no capped clock (a pull's
+    // search stopped it), -1.
     [Test]
-    public void A_fight_opened_during_a_capped_hold_logs_its_clock_and_steps_in_OpenFight()
+    public void A_fight_opened_during_a_capped_hold_logs_its_clock_in_OpenFight()
     {
-        var state = new PlayerBotState(Player(null)) { CappedSince = 5_000, HoldSteps = 1, HoldSpot = new Vector3(1, 1, 1) };
+        var state = new PlayerBotState(Player(null)) { CappedSince = 5_000 };
         PlayerBotDriver.OpenFight(state, 17_500, 100, 100, 300, 100);
-        Assert.That((state.FightCapHold, state.FightHoldSteps, state.HoldSpot), Is.EqualTo((12, 1, (Vector3?)null)),
-            "a fight on the walk out ends it: no stale spot after");
-        var pulled = new PlayerBotState(Player(null)) { CappedSince = 0, HoldSteps = 2 };
+        Assert.That(state.FightCapHold, Is.EqualTo(12));
+        var pulled = new PlayerBotState(Player(null)) { CappedSince = 0 };
         PlayerBotDriver.OpenFight(pulled, 17_500, 100, 100, 300, 100);
-        Assert.That((pulled.FightCapHold, pulled.FightHoldSteps), Is.EqualTo((-1, -1)));
+        Assert.That(pulled.FightCapHold, Is.EqualTo(-1));
     }
 
-    // #167 F-WD: a capped clock begun afresh (FindWithin's refusal) starts the hold's step-out count, spot, ring test
-    // and blocked pause afresh (a pause from the last hold doesn't stand the bot in the new hold's reach).
+    // #167 F-WD (the review): step 15 (IdleStep): one with no capped clock roams (BACK walk=); a capped bot stands
+    // where it is (Mover.Stop: a walking bot stops; BACK hold=), in an aggressive monster's reach too: the step out of
+    // reach F-WD tried is gone (its legs, st-deathsF2/F2b: 4 capped plans with a step out against 8 or more, 17 of
+    // about 19 holds that stepped still ended in a defence). A BLUE wolf, aggro range 400, 300 units off the bot on its
+    // pocket.
     [Test]
-    public void A_capped_clock_begun_afresh_starts_the_holds_steps_afresh_in_FindWithin()
-    {
-        MethodInfo find = typeof(PlayerBotDriver).GetMethod("FindWithin", BindingFlags.Static | BindingFlags.NonPublic)!;
-        InTheField(new SplitFloorMesh(), new(840_884, 702_153, 8_784), (region, zone, bot) =>
-        {
-            MonsterAt(region, zone, new(840_700, 702_100, 8_700), LevelFor(bot, ConColor.BLUE));
-            foreach (float y in new[] { 702_000f, 702_200f })
-            {
-                GameNPC add = MonsterAt(region, zone, new(840_650, y, 8_700), LevelFor(bot, ConColor.BLUE));
-                ((DOL.AI.Brain.StandardMobBrain)add.Brain).AggroLevel = 100;
-                ((DOL.AI.Brain.StandardMobBrain)add.Brain).AggroRange = 400;
-                typeof(GameObject).GetField("m_name", Hidden)!.SetValue(add, "wolf");
-            }
-            var state = new PlayerBotState(bot) { NukesLevel = 39, Nukes = [], HoldSteps = 3,
-                HoldSpot = new Vector3(1, 1, 1), NextHoldReachTick = 9_000, HoldStepBlockedUntil = 15_000 };
-            state.AvoidUntil["wolf"] = 10_000_000;
-            find.Invoke(null, [state, bot, PlayerBotDriver.SearchRadius, 10_000L, PlayerBotPickReading.None]);
-            Assert.That((state.CappedSince, state.HoldSteps, state.HoldSpot, state.NextHoldReachTick,
-                state.HoldStepBlockedUntil), Is.EqualTo((10_000L, 0, (Vector3?)null, 0L, 0L)));
-        });
-    }
-
-    // #167 F-WD: a capped clock still running (FindWithin's next refusal: the same clock) keeps the hold's step-out
-    // count, spot and ring test; only a clock begun afresh starts them afresh.
-    [Test]
-    public void A_capped_clock_still_running_keeps_the_holds_steps_in_FindWithin()
-    {
-        MethodInfo find = typeof(PlayerBotDriver).GetMethod("FindWithin", BindingFlags.Static | BindingFlags.NonPublic)!;
-        InTheField(new SplitFloorMesh(), new(840_884, 702_153, 8_784), (region, zone, bot) =>
-        {
-            MonsterAt(region, zone, new(840_700, 702_100, 8_700), LevelFor(bot, ConColor.BLUE));
-            foreach (float y in new[] { 702_000f, 702_200f })
-            {
-                GameNPC add = MonsterAt(region, zone, new(840_650, y, 8_700), LevelFor(bot, ConColor.BLUE));
-                ((DOL.AI.Brain.StandardMobBrain)add.Brain).AggroLevel = 100;
-                ((DOL.AI.Brain.StandardMobBrain)add.Brain).AggroRange = 400;
-                typeof(GameObject).GetField("m_name", Hidden)!.SetValue(add, "wolf");
-            }
-            var state = new PlayerBotState(bot) { NukesLevel = 39, Nukes = [], CappedSince = 4_000, HoldSteps = 3,
-                HoldSpot = new Vector3(1, 1, 1), NextHoldReachTick = 9_000 };
-            state.AvoidUntil["wolf"] = 10_000_000;
-            find.Invoke(null, [state, bot, PlayerBotDriver.SearchRadius, 10_000L, PlayerBotPickReading.None]);
-            Assert.That((state.CappedSince, state.HoldSteps, state.HoldSpot, state.NextHoldReachTick),
-                Is.EqualTo((4_000L, 3, (Vector3?)new Vector3(1, 1, 1), 9_000L)));
-        });
-    }
-
-    // #167 F-WD (the review): step 15 (IdleStep): a capped bot in an aggressive monster's reach steps out of it first
-    // (HoldStepsClear: walk=clear, its step counted), a capped one standing clear stands (no walk, no step), and one with
-    // no capped clock roams. A BLUE wolf, aggro range 400, 300 units off the bot on its pocket.
-    [Test]
-    public void A_capped_bot_in_reach_steps_out_one_clear_stands_and_one_uncapped_roams_in_IdleStep()
+    public void A_capped_bot_stands_in_reach_and_one_uncapped_roams_in_IdleStep()
     {
         MethodInfo idle = typeof(PlayerBotDriver).GetMethod("IdleStep", BindingFlags.Static | BindingFlags.NonPublic)!;
         InTheField(new SplitFloorMesh(), OnPocket, (region, zone, bot) =>
         {
-            GameNPC wolf = MonsterAt(region, zone, new(OnPocket.X + 300, OnPocket.Y, OnPocket.Z), LevelFor(bot, ConColor.BLUE));
+            GameNPC wolf = MonsterAt(region, zone, new(OnPocket.X + 300, OnPocket.Y, OnPocket.Z),
+                LevelFor(bot, ConColor.BLUE));
             var brain = (DOL.AI.Brain.StandardMobBrain)wolf.Brain;
             (brain.AggroLevel, brain.AggroRange) = (100, 400);
-            var capped = new PlayerBotState(bot) { CappedSince = 5_000 };
-            idle.Invoke(null, [capped, bot, 10_000L]);
-            Assert.That((capped.HoldSpot.HasValue, capped.Walk, capped.HoldSteps, capped.BackHoldMs),
-                Is.EqualTo((true, PlayerBotWalk.Clear, 1, (long)PlayerBotDriver.TickMilliseconds)), "in reach: it steps out");
-            brain.AggroLevel = 0;                                                        // no potential add: it stands clear
-            var clear = new PlayerBotState(bot) { CappedSince = 5_000 };
-            idle.Invoke(null, [clear, bot, 10_000L]);
-            Assert.That((clear.HoldSpot.HasValue, clear.Walk, clear.HoldSteps), Is.EqualTo((false, PlayerBotWalk.None, 0)),
-                "clear: it stands");
             var free = new PlayerBotState(bot);
             idle.Invoke(null, [free, bot, 10_000L]);
-            Assert.That((free.HoldSpot.HasValue, free.Walk, free.BackWalkMs), Is.EqualTo((false, PlayerBotWalk.Roam,
-                (long)PlayerBotDriver.TickMilliseconds)), "no capped clock: it roams");
-        });
-    }
-
-    // #167 F-WD: step 15's walk out is a walk: IdleStep stops the bot only when HoldStepsClear doesn't walk it (a stop
-    // after each step sends its stop every think), and the roam, no hold, drops a hold's spot left over.
-    [Test]
-    public void A_capped_bots_step_out_is_not_stopped_and_a_roam_drops_the_holds_spot_in_IdleStep()
-    {
-        MethodInfo idle = typeof(PlayerBotDriver).GetMethod("IdleStep", BindingFlags.Static | BindingFlags.NonPublic)!;
-        InTheField(new SplitFloorMesh(), OnPocket, (region, zone, bot) =>
-        {
-            GameNPC wolf = MonsterAt(region, zone, new(OnPocket.X + 300, OnPocket.Y, OnPocket.Z), LevelFor(bot, ConColor.BLUE));
-            var brain = (DOL.AI.Brain.StandardMobBrain)wolf.Brain;
-            (brain.AggroLevel, brain.AggroRange) = (100, 400);
+            Assert.That((free.Walk, free.BackWalkMs, free.BackHoldMs),
+                Is.EqualTo((PlayerBotWalk.Roam, (long)PlayerBotDriver.TickMilliseconds, 0L)),
+                "no capped clock: it roams");
+            bot.CurrentSpeed = 191;                                                      // a walk under way
+            Vector3 here = new(bot.X, bot.Y, bot.Z);
             var capped = new PlayerBotState(bot) { CappedSince = 5_000 };
             idle.Invoke(null, [capped, bot, 10_000L]);
-            Assert.That((capped.HoldSpot.HasValue, bot.CurrentSpeed > 0), Is.EqualTo((true, true)), "it walks out");
-            var free = new PlayerBotState(bot) { HoldSpot = new Vector3(1, 1, 1) };
-            idle.Invoke(null, [free, bot, 10_000L]);
-            Assert.That(free.HoldSpot, Is.Null, "no hold: no spot left");
-        });
-    }
-
-    // #167 F-WD: a capped bot held in an aggressive monster's reach steps out of it to a clear spot (as a released one
-    // does), and counts the step; one with no capped clock, or after a release (StepsOutOfReach's), does not.
-    [Test]
-    public void A_capped_hold_in_an_adds_reach_steps_out_of_it_in_HoldStepsClear()
-    {
-        MethodInfo hold = typeof(PlayerBotDriver).GetMethod("HoldStepsClear", BindingFlags.Static | BindingFlags.NonPublic)!;
-        InTheField(new SplitFloorMesh(), OnPocket, (region, zone, bot) =>
-        {
-            Vector3 at = new(OnPocket.X + 300, OnPocket.Y, OnPocket.Z);
-            GameNPC add = MonsterAt(region, zone, at, LevelFor(bot, ConColor.BLUE));
-            ((DOL.AI.Brain.StandardMobBrain)add.Brain).AggroLevel = 100;
-            ((DOL.AI.Brain.StandardMobBrain)add.Brain).AggroRange = 400;
-            bool Step(PlayerBotState state, long now) => (bool)hold.Invoke(null, [state, bot, now])!;
-            Vector3 Here() => new(bot.X, bot.Y, bot.Z);
-
-            var idle = new PlayerBotState(bot);
-            Assert.That((Step(idle, 10_000), idle.HoldSpot, Here()), Is.EqualTo((false, (Vector3?)null, OnPocket)),
-                "no capped clock: it stands");
-            var released = new PlayerBotState(bot) { CappedSince = 5_000, AfterRelease = true };
-            Assert.That((Step(released, 10_000), released.HoldSpot), Is.EqualTo((false, (Vector3?)null)),
-                "after a release: StepsOutOfReach's");
-
-            var state = new PlayerBotState(bot) { CappedSince = 5_000 };
-            Assert.That(Step(state, 10_000), Is.True, "in the wolf's reach (400 + 200): it steps out");
-            Assert.That(state.HoldSpot, Is.Not.Null);
-            Assert.That(Vector3.Distance(state.HoldSpot!.Value, at), Is.GreaterThan(400f + PlayerBotDriver.AddMargin),
-                "to a clear spot");
-            Assert.That((state.HoldSteps, state.Walk, state.NextHoldReachTick),
-                Is.EqualTo((1, PlayerBotWalk.Clear, 12_000L)));
-            Assert.That(Vector3.Distance(Here(), at), Is.GreaterThanOrEqualTo(300f), "not toward it");
-        });
-    }
-
-    // #167 F-WD: SplitFloorMesh with no corridor anywhere: a step out's walk is blocked at once.
-    private sealed class NoWayMesh : SplitFloorMesh
-    {
-        public override PathfindingResult GetPathStraight(Zone zone, Vector3 start, Vector3 end, EDtPolyFlags[] filters,
-            Span<WrappedPathfindingNode> destination) => new(PathfindingStatus.NoPathFound, 0);
-    }
-
-    // #167 F-WD: the hold's ring test: no hold, no spot kept; none while it walks to its spot; 2 s after an arrival
-    // (NextHoldReachTick), not before; none during a blocked step's pause (StepOutPauseMilliseconds), and a blocked step
-    // stands the bot (false: IdleStep stops it), drops its spot and starts that pause.
-    [Test]
-    public void A_capped_holds_ring_test_waits_for_its_walk_its_2_s_and_a_blocked_pause_in_HoldStepsClear()
-    {
-        MethodInfo hold = typeof(PlayerBotDriver).GetMethod("HoldStepsClear", BindingFlags.Static | BindingFlags.NonPublic)!;
-        void Field(IPathfindingMgr mesh, Action<FieldBot, Func<PlayerBotState, long, bool>> body) =>
-            InTheField(mesh, OnPocket, (region, zone, bot) =>
-            {
-                GameNPC add = MonsterAt(region, zone, new(OnPocket.X + 300, OnPocket.Y, OnPocket.Z), LevelFor(bot, ConColor.BLUE));
-                ((DOL.AI.Brain.StandardMobBrain)add.Brain).AggroLevel = 100;
-                ((DOL.AI.Brain.StandardMobBrain)add.Brain).AggroRange = 400;
-                body(bot, (state, now) => (bool)hold.Invoke(null, [state, bot, now])!);
-            });
-
-        Field(new SplitFloorMesh(), (bot, Step) =>
-        {
-            var ended = new PlayerBotState(bot) { HoldSpot = new Vector3(1, 1, 1) };
-            Assert.That((Step(ended, 10_000), ended.HoldSpot), Is.EqualTo((false, (Vector3?)null)), "no hold: no spot");
-
-            var walking = new PlayerBotState(bot) { CappedSince = 5_000 };
-            Assert.That(Step(walking, 10_000), Is.True);
-            Vector3? spot = walking.HoldSpot;
-            Assert.That((Step(walking, 12_000), walking.HoldSteps, walking.HoldSpot), Is.EqualTo((true, 1, spot)),
-                "on its walk: no ring test");
-
-            var arrived = new PlayerBotState(bot) { CappedSince = 5_000, HoldSteps = 1, NextHoldReachTick = 12_000 };
-            Assert.That((Step(arrived, 11_999), arrived.HoldSteps, arrived.HoldSpot), Is.EqualTo((false, 1, (Vector3?)null)),
-                "under 2 s since its arrival");
-            Assert.That((Step(arrived, 12_000), arrived.HoldSteps, arrived.NextHoldReachTick), Is.EqualTo((true, 2, 14_000L)),
-                "2 s on: in reach again, a step out");
-
-            var there = new PlayerBotState(bot)
-                { CappedSince = 5_000, HoldSteps = 1, HoldSpot = new Vector3(bot.X, bot.Y, bot.Z) };
-            Assert.That((Step(there, 16_000), there.HoldSpot, there.NextHoldReachTick),
-                Is.EqualTo((true, (Vector3?)null, 18_000L)), "an arrival: the next ring test 2 s after it");
-            Assert.That((Step(there, 17_999), there.HoldSteps), Is.EqualTo((false, 1)), "under 2 s since it arrived");
-
-            var paused = new PlayerBotState(bot) { CappedSince = 5_000, HoldStepBlockedUntil = 20_000 };
-            Assert.That((Step(paused, 10_000), paused.HoldSpot, paused.HoldSteps, paused.NextHoldReachTick),
-                Is.EqualTo((false, (Vector3?)null, 0, 12_000L)), "a blocked step's pause: no spot");
-        });
-
-        Field(new NoWayMesh(), (bot, Step) =>
-        {
-            var blocked = new PlayerBotState(bot) { CappedSince = 5_000 };
-            Assert.That((Step(blocked, 10_000), blocked.HoldSpot, blocked.HoldSteps, blocked.HoldStepBlockedUntil),
-                Is.EqualTo((false, (Vector3?)null, 1, 10_000L + PlayerBotDriver.StepOutPauseMilliseconds)), "blocked");
-            Assert.That((Step(blocked, 12_000), blocked.HoldSteps), Is.EqualTo((false, 1)), "its pause");
+            Assert.That((capped.Walk, capped.Activity, capped.BackHoldMs, capped.BackWalkMs),
+                Is.EqualTo((PlayerBotWalk.None, PlayerBotActivity.Roaming, (long)PlayerBotDriver.TickMilliseconds, 0L)),
+                "capped: it holds");
+            Assert.That(((int)bot.CurrentSpeed, new Vector3(bot.X, bot.Y, bot.Z)), Is.EqualTo((0, here)),
+                "it stands where it is, in the wolf's reach");
         });
     }
 
@@ -4836,11 +4659,11 @@ public sealed class UT_PlayerBotDriver
             crowdRefused: 4), Does.EndWith(" reason=capped crowdRefused=4"));
         Assert.That(PlayerBotDriver.RelocateNoneLine("Pbotaaaad", 41, 0, 12, PlayerBotDriver.Capped, 0, false, null,
             lifted: true), Does.EndWith(" reason=capped lifted=1"));
-        Assert.That(PlayerBotDriver.RelocateLine("Pbotaaaad", 41, Vector3.Zero, new Vector3(6_000, 0, 0), 6_000, "giant boar",
-                40, 12, PlayerBotDriver.Capped, null, 0, false, null, crowdRefused: 4, holdSteps: 2),
-            Does.EndWith(" reason=capped fallback=- crowdRefused=4 holdStep=2"), "#167 F-WD: the hold's steps out");
-        Assert.That(PlayerBotDriver.RelocateNoneLine("Pbotaaaad", 41, 0, 12, PlayerBotDriver.Capped, 0, false, null,
-            holdSteps: 0), Does.EndWith(" reason=capped holdStep=0"), "#167 F-WD: it stood clear");
+        Assert.That(PlayerBotDriver.RelocateLine("Pbotaaaad", 41, Vector3.Zero, new Vector3(6_000, 0, 0), 6_000,
+                "giant boar", 40, 12, PlayerBotDriver.Capped, null, 0, false, null, crowdRefused: 4),
+            Does.EndWith(" reason=capped fallback=- crowdRefused=4"), "a capped camp line: nothing after its fields");
+        Assert.That(PlayerBotDriver.RelocateNoneLine("Pbotaaaad", 41, 0, 12, PlayerBotDriver.Capped, 0, false, null),
+            Does.EndWith(" reason=capped"), "a capped none line: nothing after reason=");
         Assert.That(PlayerBotDriver.LiftLine("Pbotaaaad", 41, PlayerBotDriver.Capped, "offmesh"),
             Is.EqualTo("PLAYER_BOT_LIFT bot=Pbotaaaad level=41 reason=capped why=offmesh lifted=1"));
     }
@@ -8009,8 +7832,7 @@ public sealed class UT_PlayerBotDriver
     // pick), and pathCrowd=, the potential adds along the corridor of the pick's walk in (-1: unchecked); then (#167 F
     // F5) huntCrowd= and huntTarget=, the rings' pick a defence or a monster coming at the bot replaced on the walk in,
     // its crowd= and name (-1 and "": none replaced); then (#167 F R2) restSkip=, 1 when the fight began on the rest its
-    // kill skipped; then (#167 F-WD) capHold=, the seconds the capped clock had run when the fight began (-1: none),
-    // and holdStep=, the steps out of reach its hold took (-1: no capped clock).
+    // kill skipped; then (#167 F-WD) capHold=, the seconds the capped clock had run when the fight began (-1: none).
     [Test]
     public void FightFormat()
     {
@@ -8023,7 +7845,7 @@ public sealed class UT_PlayerBotDriver
                 HealCasts: 1, HealsLanded: 1, HealHolds: 6, HealHoldMax: 4, Taps: 3,
                 AddWhy: PlayerBotAddWhy.Control, CtlResisted: 1, CtlImmune: 0, QcControls: 1, QcNukes: 2, Reserve: 36, Lifted: true,
                 Over: 1, Due: 1, Seen: "scanned", PathCrowd: 2, HuntCrowd: 1, HuntTarget: "forest giant",
-                RestSkip: true, CapHold: 12, HoldSteps: 1)),
+                RestSkip: true, CapHold: 12)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbotaaaac level=40 target=\"widow claw\" targetLevel=40 con=YELLOW from=pull result=kill " +
                        "startHp=100 endHp=38 startMana=100 endMana=12 sec=21 adds=1 swings=9 notVisible=2 casts=4 lifeKills=0 rests=0 " +
                        "pet=alive heals=2 qc=1 buffs=3 petCasts=2 waits=5 ctl=2 kites=1 ctlBroken=1 addCtl=1 addAt=6 addHp=71 " +
@@ -8031,7 +7853,7 @@ public sealed class UT_PlayerBotDriver
                        "wouldBreak=38 walk=hunt kiteNone=1:0:2:3 dots=2 qcKill=1 ctlMez=1 raceLeft=22 endStart=85 end=31 " +
                        "styleHeld=3 castHeld=2 sight=4 blind=1 blindSteps=2 healCast=1 healLanded=1 healHold=6 healHoldMax=4 " +
                        "taps=3 addWhy=ctl ctlResisted=1 ctlImmune=0 qcCtl=1 qcNuke=2 reserve=36 lifted=1 over=1 due=1 seen=scanned " +
-                       "pathCrowd=2 huntCrowd=1 huntTarget=\"forest giant\" restSkip=1 capHold=12 holdStep=1"));
+                       "pathCrowd=2 huntCrowd=1 huntTarget=\"forest giant\" restSkip=1 capHold=12"));
         Assert.That(PlayerBotDriverReport.FormatFight(new PlayerBotFight("Pbothaaab", 43, "empyrean guardian", 36, ConColor.BLUE, true,
                 false, 64, 51, 100, 100, 7, 2, 3, 0, 0, 3, 1, Rate: -0.04, Walk: PlayerBotWalk.BreakOff)),
             Is.EqualTo("PLAYER_BOT_FIGHT bot=Pbothaaab level=43 target=\"empyrean guardian\" targetLevel=36 con=BLUE from=defence " +
@@ -8042,7 +7864,7 @@ public sealed class UT_PlayerBotDriver
                        "raceLeft=-999 endStart=-1 end=-1 styleHeld=0 castHeld=0 sight=0 blind=0 blindSteps=0 healCast=0 " +
                        "healLanded=0 healHold=0 healHoldMax=0 taps=0 addWhy=none ctlResisted=0 ctlImmune=0 qcCtl=0 " +
                        "qcNuke=0 reserve=0 lifted=0 over=-1 due=-1 seen=- pathCrowd=-1 huntCrowd=-1 huntTarget=\"\" " +
-                       "restSkip=0 capHold=-1 holdStep=-1"),
+                       "restSkip=0 capHold=-1"),
             "a gain under 0.05 a second: 0.0, not -0.0");
     }
 
@@ -9119,8 +8941,7 @@ public sealed class UT_PlayerBotDriver
     // target (-1: no target, or another pick), and (#167 F P1b) over=, (#167 F P2) due= and (#167 F P4) seen= and
     // pathCrowd=, FIGHT's too; then (#167 F F5) FIGHT's huntCrowd= and huntTarget= (-1 and "" with no target) and the
     // fatal fight's blindSteps= (-1 out of a fight); then (#167 F R2) FIGHT's restSkip= (-1 out of a fight); then (#167
-    // F-WD) FIGHT's capHold=, the seconds the capped clock had run when the fight began (-1: none), and holdStep=, the
-    // steps out of reach its hold took (-1: no capped clock), -1 each out of a fight.
+    // F-WD) FIGHT's capHold=, the seconds the capped clock had run when the fight began (-1: none), -1 out of a fight.
     [Test]
     public void DeathDetailFormat()
     {
@@ -9133,7 +8954,7 @@ public sealed class UT_PlayerBotDriver
                 HealHolds: 4, HealHoldMax: 3, Taps: 2, AddWhy: PlayerBotAddWhy.Control, CtlResisted: 0, CtlImmune: 0,
                 QcControls: 1, QcNukes: 0, QcLeft: 22, Crowd: 3, Over: 1, Due: 1,
                 Seen: "scanned", PathCrowd: 2, HuntCrowd: 1, HuntTarget: "forest giant", BlindSteps: 1, RestSkip: 1,
-                CapHold: 12, HoldSteps: 1)),
+                CapHold: 12)),
             Is.EqualTo("activity=Fighting startHp=62 fightSec=14 targetHp=71 from=pull adds=2 lifeKills=3 rests=0 sinceKillSec=40 " +
                        "mana=100 swings=6 notVisible=1 killer=\"widow claw\" killerLevel=40 killerIsTarget=True fromBind=748 " +
                        "avoided=2 again=True sinceRelease=42 ill=True ctl=2 kites=1 casts=4 qc=1 waits=3 ctlBroken=1 addCtl=1 " +
@@ -9142,7 +8963,7 @@ public sealed class UT_PlayerBotDriver
                        "styleHeld=3 castHeld=1 heals=2 healCast=1 healLanded=0 healHold=4 healHoldMax=3 taps=2 " +
                        "addWhy=ctl ctlResisted=0 ctlImmune=0 qcCtl=1 qcNuke=0 qcLeft=22 crowd=3 over=1 due=1 seen=scanned " +
                        "pathCrowd=2 huntCrowd=1 huntTarget=\"forest giant\" blindSteps=1 restSkip=1 " +
-                       "capHold=12 holdStep=1"));
+                       "capHold=12"));
         // Out of a fight, no target, no kill this life, no killer named by the Dying event, the bind in another region.
         Assert.That(PlayerBotDriverReport.FormatDeathDetail(new PlayerBotDeathDetail(PlayerBotActivity.Hunting, -1, -1, -1, true,
                 -1, 0, 2, -1, 37, -1, -1, null, 0, false, -1, BreakOff: true, Rate: 3, Walk: PlayerBotWalk.Clear, Endurance: 100)),
@@ -9154,21 +8975,20 @@ public sealed class UT_PlayerBotDriver
                        "raceLeft=-999 styleHeld=-1 castHeld=-1 heals=-1 healCast=-1 healLanded=-1 healHold=-1 " +
                        "healHoldMax=-1 taps=-1 addWhy=-1 ctlResisted=-1 ctlImmune=-1 qcCtl=-1 qcNuke=-1 qcLeft=-1 crowd=-1 " +
                        "over=-1 due=-1 seen=- pathCrowd=-1 huntCrowd=-1 huntTarget=\"\" blindSteps=-1 restSkip=-1 " +
-                       "capHold=-1 holdStep=-1"),
+                       "capHold=-1"),
             "died on a break-off's run: out of a fight (the dropped one's FIGHT has it)");
     }
 
     // #167 F F5: DEATH's hunt fields come last with their defaults, so a line from a record that sets none of them still
     // ends in the same order (deathdiag.py and the measure scripts read key=value; the fields before stay). Before F5
-    // the line ended at pathCrowd=; (#167 F R2) restSkip= then ended it; (#167 F-WD) capHold= and holdStep= then
-    // end it.
+    // the line ended at pathCrowd=; (#167 F R2) restSkip= then ended it; (#167 F-WD) capHold= then ends it.
     [Test]
     public void A_death_line_ends_with_the_hunt_pick_and_the_blind_steps()
     {
         string line = PlayerBotDriverReport.FormatDeathDetail(new PlayerBotDeathDetail(PlayerBotActivity.Fighting, 62, 14, 71,
             true, 2, 3, 0, 40, 100, 6, 1, "widow claw", 40, true, 748));
         Assert.That(line, Does.EndWith(" pathCrowd=-1 huntCrowd=-1 huntTarget=\"\" blindSteps=-1 restSkip=-1 " +
-            "capHold=-1 holdStep=-1"));
+            "capHold=-1"));
     }
 
     // #167 F F5 (remainder F5's check): a target that is no ring pick keeps the ring pick it replaced on the walk in, its
@@ -9237,7 +9057,7 @@ public sealed class UT_PlayerBotDriver
             "hpAtReach=-1 tHpAtReach=-1 rate=0.0 wouldBreak=-1 walk=none end=-1 kiteNone=-1:-1:-1:-1 dots=-1 qcKill=-1 " +
             "ctlMez=-1 raceLeft=-999 styleHeld=-1 castHeld=-1 heals=-1 healCast=-1 healLanded=-1 healHold=-1 healHoldMax=-1 " +
             "taps=-1 addWhy=-1 ctlResisted=-1 ctlImmune=-1 qcCtl=-1 qcNuke=-1 qcLeft=-1 crowd=-1 over=-1 due=-1 " +
-            "seen=- pathCrowd=-1 huntCrowd=-1 huntTarget=\"\" blindSteps=-1 restSkip=-1 capHold=-1 holdStep=-1"));
+            "seen=- pathCrowd=-1 huntCrowd=-1 huntTarget=\"\" blindSteps=-1 restSkip=-1 capHold=-1"));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, add, target),
             Does.Contain(" killer=\"a wolf\" killerLevel=38 killerIsTarget=False fromBind=748 avoided=0 again=False sinceRelease=-1 ill=False "));
         Assert.That(PlayerBotDriver.DeathLine(head, detail, null, null),
