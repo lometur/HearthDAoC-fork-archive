@@ -5345,6 +5345,42 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.TurretLine("Pbothaaaj", 35, PlayerBotAnimistStep.Skip, "irewood", ConColor.GREEN, 1_419, 1_000),
             Is.EqualTo("PLAYER_BOT_TURRET bot=Pbothaaaj level=35 step=skip target=\"irewood\" con=GREEN toTurret=1419 reach=1000"));
 
+    // --- Necromancers (#167 F N1) ---
+
+    // World-DB spells (v0.37b): a Deathsight Necromancer's owner spells are PetSpells, each casting its SubSpellID
+    // through the pet (PetSpellHandler.cs:49-52): Theft of Energy 9018 (L40, Lifedrain 143), Spirit Vacuum 9117 (L34,
+    // PowerDrainPet 124) and Theft of Vim 9017 (L32, Lifedrain 116).
+    private static readonly SpellLine Deathsight = new("Deathsight", "Deathsight", Specs.Deathsight, true);
+    private static Spell PetSpell(int id, string name, int level, double damage, int payload) =>
+        new(new DbSpell { SpellID = id, Name = name, Type = "PetSpell", Target = "Enemy", Damage = damage, Range = 1500,
+            CastTime = 0, SubSpellID = payload }, level);
+    private static Spell NecroPayload(int id, string name, string type, int level, double damage) =>
+        new(new DbSpell { SpellID = id, Name = name, Type = type, Target = "Enemy", Damage = damage, Range = 1500,
+            CastTime = 3.0, LifeDrainReturn = 50 }, level);
+    private static readonly Spell TheftOfEnergy = PetSpell(9018, "Theft of Energy", 40, 143, 6018),
+        SpiritVacuum = PetSpell(9117, "Spirit Vacuum", 34, 124, 6117),
+        TheftOfVim = PetSpell(9017, "Theft of Vim", 32, 116, 6017);
+    private static readonly Dictionary<int, Spell> NecroPayloads = new()
+    {
+        [6018] = NecroPayload(6018, "Theft of Energy", "Lifedrain", 40, 143),
+        [6117] = NecroPayload(6117, "Spirit Vacuum", "PowerDrainPet", 34, 124),
+        [6017] = NecroPayload(6017, "Theft of Vim", "Lifedrain", 32, 116),
+    };
+
+    // #167 F N1a: BotBrain's rule compares SpellType, PetSpell for all of them, so the L40 Theft of Energy outclassed the
+    // L34 Spirit Vacuum and the L40-43 Deathsight bots (Pbotaaacd, Pbotaaacc, Pbotaaaas) had no power tap. By the
+    // payload's kind the Vacuum stays; the lower Theft (Vim, the same Lifedrain) is outclassed as before.
+    [Test]
+    public void A_necromancers_power_tap_is_not_outclassed_by_its_lifetap()
+    {
+        List<(Spell, SpellLine)> usable = [(TheftOfVim, Deathsight), (SpiritVacuum, Deathsight), (TheftOfEnergy, Deathsight)];
+        Assert.That(PlayerBotDriver.DamageSpells(usable, 43, id => NecroPayloads.GetValueOrDefault(id), perLine: false)
+                .Select(pair => pair.Spell.Name),
+            Is.EqualTo(new[] { "Spirit Vacuum", "Theft of Energy" }));
+        Assert.That(PlayerBotDriver.DamageSpells(usable, 43, _ => null, perLine: false).Select(pair => pair.Spell.Name),
+            Is.EqualTo(new[] { "Theft of Energy" }), "a payload it can't resolve: the spell's own type, as BotBrain's");
+    }
+
     // --- the healer's self-heal (DEATHS.md A6) ---
 
     private static readonly SpellLine Mending = new("Rejuvenation", "Rejuvenation", Specs.Rejuvenation, true);

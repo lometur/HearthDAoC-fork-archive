@@ -3731,7 +3731,8 @@ public static class PlayerBotDriver
     /// (a caster's; no default) keeps a rank outclassed only by one of another line (OutclassedInLine): Greater
     /// Conflagration 37 at Fire 41 beside Ice Blast (Potent) 41 at Cold 6, the score (NukeValue) choosing between them.
     /// Bolts of two lines have two recast timers (SharedTimerGroup), so a Wizard, Eldritch or Runemaster with a bolt in
-    /// each now casts both in 20 s.</summary>
+    /// each now casts both in 20 s. #167 F N1a: by kind (PayloadKind), a PetSpell's payload's type, so a Necromancer's
+    /// lifetap no longer outclasses its power tap (OutclassedByKind).</summary>
     public static List<(Spell Spell, SpellLine Line)> DamageSpells(IEnumerable<(Spell Spell, SpellLine Line)> usable, int level,
         Func<int, Spell> payload, bool perLine)
     {
@@ -3739,7 +3740,7 @@ public static class PlayerBotDriver
         List<Spell> known = all.ConvertAll(pair => pair.Spell);
         foreach ((Spell spell, SpellLine line) in all)
             if (spell.IsHarmful && spell.Damage > 0 && spell.Range > 0 && !spell.NeedInstrument && spell.Level <= level &&
-                !(perLine ? OutclassedInLine(spell, line, all, level) : BotBrain.IsOutclassedDamageSpell(spell, known, level)))
+                !(perLine ? OutclassedInLine(spell, line, all, level) : OutclassedByKind(spell, known, level, payload)))
                 nukes.Add((spell, line));
         return nukes;
     }
@@ -3762,6 +3763,33 @@ public static class PlayerBotDriver
         }
         return best - spell.Level >= 5 && spell.Level * 2 < best;
     }
+
+    /// <summary>BotBrain.IsOutclassedDamageSpell (BotBrain.cs:3413-3430) by kind (#167 F N1a): a higher rank of the same
+    /// kind (PayloadKind: a PetSpell's payload's type), target, area, instant-ness and PBAoE outclasses it; one under half
+    /// the level of the best damage spell, as before. For a spell that isn't a PetSpell, or a payload it can't resolve,
+    /// BotBrain's rule exactly.</summary>
+    public static bool OutclassedByKind(Spell spell, IEnumerable<Spell> known, int level, Func<int, Spell> payload)
+    {
+        if (spell == null || !spell.IsHarmful || !BotCasterPriority.IsDamage(spell)) return false;
+        eSpellType kind = PayloadKind(spell, payload);
+        int best = 0;
+        foreach (Spell other in known)
+        {
+            if (other == null || other == spell || !other.IsHarmful || other.Level > level || !BotCasterPriority.IsDamage(other))
+                continue;
+            best = Math.Max(best, other.Level);
+            if (other.Level > spell.Level && PayloadKind(other, payload) == kind && other.Target == spell.Target &&
+                (other.Radius > 0) == (spell.Radius > 0) && (other.CastTime <= 0) == (spell.CastTime <= 0) &&
+                other.IsPBAoE == spell.IsPBAoE)
+                return true;
+        }
+        return best - spell.Level >= 5 && spell.Level * 2 < best;
+    }
+
+    /// <summary>A spell's kind (#167 F N1a): a PetSpell's is its payload's type (the pet casts SubSpellID,
+    /// PetSpellHandler.cs:49-52), any other spell's its own.</summary>
+    public static eSpellType PayloadKind(Spell spell, Func<int, Spell> payload) =>
+        spell.SpellType is eSpellType.PetSpell && payload?.Invoke(spell.SubSpellID) is Spell sub ? sub.SpellType : spell.SpellType;
 
     // #167 F10b: an Animist's bomber does only its payload (BomberBrain.cs:32-34, its SubSpellID); the bomber's own
     // Damage (50 on every one) is no damage. One whose payload does none (Spreading Vines: a root) is no nuke, nor does it
