@@ -3711,6 +3711,7 @@ public sealed class UT_PlayerBotDriver
     [TestCase((byte)100, 300, (byte)91, (byte)70, 50, 29, true)]                      // a Skald: 70 >= 41 + 29
     [TestCase((byte)100, 300, (byte)91, (byte)69, 50, 29, false)]
     [TestCase((byte)100, 300, (byte)100, (byte)100, 50, -3, true)]                    // a fight that gained
+    [TestCase((byte)100, 0, (byte)0, (byte)40, 100, -3, false)]                       //   still a run's 41 (the review of F)
     public void A_kill_skips_its_rest_with_full_health_its_power_need_and_its_endurance_cost_over_a_run(byte health,
         int maxMana, byte power, byte endurance, int powerNeed, int enduranceCost, bool skips) =>
         Assert.That(PlayerBotDriver.SkipsRestAfterKill(health, maxMana, power, endurance, powerNeed, enduranceCost),
@@ -3757,10 +3758,22 @@ public sealed class UT_PlayerBotDriver
         bool owes) =>
         Assert.That(PlayerBotDriver.OwesRestAfterFight(owed, restSkip, killed), Is.EqualTo(owes));
 
+    // #167 F R2 (the review of F): ReportFight owes the rest after a lost fight begun on a skipped rest, and ends the
+    // skip's fight either way (before its log check, so no log is needed).
+    [TestCase(false, true)] [TestCase(true, false)]
+    public void A_lost_fight_begun_on_a_skipped_rest_owes_the_rest_in_ReportFight(bool killed, bool owes)
+    {
+        MethodInfo report = typeof(PlayerBotDriver).GetMethod("ReportFight", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var state = new PlayerBotState(Player(null)) { FightRestSkip = true };
+        report.Invoke(null, [state, Player(null), 10_000L, killed, !killed]);
+        Assert.That((state.RecoverBeforePull, state.FightRestSkip), Is.EqualTo((owes, false)));
+    }
+
     // #167 F R2, the wiring: the pick after a skipped rest (SettleRestSkip). A monster coming at the bot (crowd -1) is
     // kept and its fight logs restSkip=1; a crowded pick isn't taken and the rest is owed again, so the bot sits.
     [TestCase(-1, true)]
     [TestCase(1, false)]
+    [TestCase(0, false)]                         // the review of F: uncrowded, but yellow (20 against 20), past blue
     public void A_pick_after_a_skipped_rest_is_kept_or_the_rest_is_owed_again(int crowd, bool kept)
     {
         MethodInfo settle = typeof(PlayerBotDriver).GetMethod("SettleRestSkip", BindingFlags.Static | BindingFlags.NonPublic)!;
@@ -3784,6 +3797,33 @@ public sealed class UT_PlayerBotDriver
         {
             calculators[(int)eProperty.LivingEffectiveLevel] = previous;
         }
+    }
+
+    // #167 F R2 (the review of F): a new life drops a skip of the last life's (StartLife).
+    [Test]
+    public void A_new_life_drops_the_rest_skip()
+    {
+        var state = new PlayerBotState(Player(null))
+            { RestSkipPending = true, FightRestSkip = true, DeathRecorded = true, AliveSince = 5_000 };
+        PlayerBotDriver.StartLife(state, 60_000, PlayerBotRole.Melee);
+        Assert.That((state.RestSkipPending, state.FightRestSkip), Is.EqualTo((false, false)));
+    }
+
+    // #167 F R2 (the review of F): RefreshTarget settles the pick after a skipped rest: a field bot's blue pick after a
+    // green kill is refused, the rest owed, the skip ended.
+    [Test]
+    public void The_pick_after_a_skipped_rest_is_settled_in_RefreshTarget()
+    {
+        MethodInfo refresh = typeof(PlayerBotDriver).GetMethod("RefreshTarget", BindingFlags.Static | BindingFlags.NonPublic)!;
+        InTheField(new SplitFloorMesh(), new(840_884, 702_153, 8_784), (region, zone, bot) =>
+        {
+            MonsterAt(region, zone, new(840_700, 702_100, 8_700), LevelFor(bot, ConColor.BLUE));
+            var state = new PlayerBotState(bot)
+                { NukesLevel = 39, Nukes = [], RestSkipPending = true, RestSkipCon = ConColor.GREEN };
+            refresh.Invoke(null, [state, bot, 10_000L]);
+            Assert.That((state.Target, state.RecoverBeforePull, state.RestSkipPending, state.FightRestSkip),
+                Is.EqualTo(((GameLiving)null, true, false, false)));
+        });
     }
 
     // #167 F3, C10: a caster's rest stops at full health, its power stop (90) and (#167 E-R) 80% endurance; power counts
@@ -8504,6 +8544,22 @@ public sealed class UT_PlayerBotDriver
         int carriedCrowd, string carriedTarget, int crowd, string target) =>
         Assert.That(PlayerBotDriver.HuntReplaced(found, ringPick, oldTarget, oldCrowd, (carriedCrowd, carriedTarget)),
             Is.EqualTo((crowd, target)));
+
+    // #167 F F5 (the review of F): TakeTarget keeps the rings' pick a defence replaced (HuntReplaced first, before
+    // PickCrowd and Target go).
+    [Test]
+    public void A_defence_taken_keeps_the_pick_it_replaced_in_TakeTarget()
+    {
+        MethodInfo take = typeof(PlayerBotDriver).GetMethod("TakeTarget", BindingFlags.Static | BindingFlags.NonPublic)!;
+        GamePlayer bot = Player(null);
+        typeof(GamePlayer).GetField("m_characterClass", Hidden)!.SetValue(bot, new DOL.GS.PlayerClass.ClassWarrior());
+        var pick = (GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC));
+        typeof(GameObject).GetField("m_name", Hidden)!.SetValue(pick, "forest giant");
+        GameNPC defender = LiveMonster(60);
+        var state = new PlayerBotState(bot) { Target = pick, PickCrowd = 2, Nukes = [], NukesLevel = 0 };
+        take.Invoke(null, [state, bot, defender, PlayerBotPickReading.None]);
+        Assert.That((state.HuntCrowd, state.HuntTarget, state.Target), Is.EqualTo((2, "forest giant", (GameLiving)defender)));
+    }
 
     // DEATH again= and sinceRelease= (#167 F4): a death with no kill since the bot's last release; none before the first
     // release of the login.
