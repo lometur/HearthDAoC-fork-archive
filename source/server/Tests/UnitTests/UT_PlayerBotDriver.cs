@@ -4555,7 +4555,8 @@ public sealed class UT_PlayerBotDriver
         Assert.That((pulled.FightCapHold, pulled.FightHoldSteps), Is.EqualTo((-1, -1)));
     }
 
-    // #167 F-WD: a capped clock begun afresh (FindWithin's refusal) starts the hold's step-out count and spot afresh.
+    // #167 F-WD: a capped clock begun afresh (FindWithin's refusal) starts the hold's step-out count, spot, ring test
+    // and blocked pause afresh (a pause from the last hold doesn't stand the bot in the new hold's reach).
     [Test]
     public void A_capped_clock_begun_afresh_starts_the_holds_steps_afresh_in_FindWithin()
     {
@@ -4570,12 +4571,12 @@ public sealed class UT_PlayerBotDriver
                 ((DOL.AI.Brain.StandardMobBrain)add.Brain).AggroRange = 400;
                 typeof(GameObject).GetField("m_name", Hidden)!.SetValue(add, "wolf");
             }
-            var state = new PlayerBotState(bot)
-                { NukesLevel = 39, Nukes = [], HoldSteps = 3, HoldSpot = new Vector3(1, 1, 1), NextHoldReachTick = 9_000 };
+            var state = new PlayerBotState(bot) { NukesLevel = 39, Nukes = [], HoldSteps = 3,
+                HoldSpot = new Vector3(1, 1, 1), NextHoldReachTick = 9_000, HoldStepBlockedUntil = 15_000 };
             state.AvoidUntil["wolf"] = 10_000_000;
             find.Invoke(null, [state, bot, PlayerBotDriver.SearchRadius, 10_000L, PlayerBotPickReading.None]);
-            Assert.That((state.CappedSince, state.HoldSteps, state.HoldSpot, state.NextHoldReachTick),
-                Is.EqualTo((10_000L, 0, (Vector3?)null, 0L)));
+            Assert.That((state.CappedSince, state.HoldSteps, state.HoldSpot, state.NextHoldReachTick,
+                state.HoldStepBlockedUntil), Is.EqualTo((10_000L, 0, (Vector3?)null, 0L, 0L)));
         });
     }
 
@@ -4724,6 +4725,12 @@ public sealed class UT_PlayerBotDriver
                 "under 2 s since its arrival");
             Assert.That((Step(arrived, 12_000), arrived.HoldSteps, arrived.NextHoldReachTick), Is.EqualTo((true, 2, 14_000L)),
                 "2 s on: in reach again, a step out");
+
+            var there = new PlayerBotState(bot)
+                { CappedSince = 5_000, HoldSteps = 1, HoldSpot = new Vector3(bot.X, bot.Y, bot.Z) };
+            Assert.That((Step(there, 16_000), there.HoldSpot, there.NextHoldReachTick),
+                Is.EqualTo((true, (Vector3?)null, 18_000L)), "an arrival: the next ring test 2 s after it");
+            Assert.That((Step(there, 17_999), there.HoldSteps), Is.EqualTo((false, 1)), "under 2 s since it arrived");
 
             var paused = new PlayerBotState(bot) { CappedSince = 5_000, HoldStepBlockedUntil = 20_000 };
             Assert.That((Step(paused, 10_000), paused.HoldSpot, paused.HoldSteps, paused.NextHoldReachTick),

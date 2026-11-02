@@ -1771,7 +1771,8 @@ public static class PlayerBotDriver
             (bool passed, bool crowdPassedOver, bool clearRefused) = CrowdSearchEnd(best != null, refused.Count, passedOver);
             long since = CappedClock(state.CappedSince, best != null, passed, now);      // #167 F P1: a refusal too
             if (since != state.CappedSince)                                             // #167 F-WD: a hold's step out
-                (state.HoldSpot, state.HoldSteps, state.NextHoldReachTick) = (null, 0, 0);   //   afresh with its clock
+                (state.HoldSpot, state.HoldSteps, state.NextHoldReachTick, state.HoldStepBlockedUntil) =
+                    (null, 0, 0, 0);                                                    //   afresh with its clock
             state.CappedSince = since;
             state.SafestPassedOver = best == null ? safestOver : null;                  // FallbackInPlace's
             state.CrowdPassedOver = crowdPassedOver;                                    // #167 F P1: FallBackInPlace's,
@@ -5574,6 +5575,8 @@ public static class PlayerBotDriver
             state.HoldStepBlockedUntil = now + StepOutPauseMilliseconds;
         }
         state.HoldSpot = HoldSpotAfter(step, spot);
+        if (step is PlayerBotStepResult.Arrived)                                        //   the next ring test 2 s
+            state.NextHoldReachTick = now + TargetRefreshMilliseconds;                  //   after it arrives
         return step is not PlayerBotStepResult.Blocked;
     }
 
