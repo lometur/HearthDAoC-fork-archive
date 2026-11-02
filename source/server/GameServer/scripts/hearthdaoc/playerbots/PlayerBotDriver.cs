@@ -58,8 +58,14 @@ public enum PlayerBotAnimistStep { Pull, Walk, Replant, Wait, Skip }
 /// <summary>A think's walk (#167 FIGHT and DEATH walk=, F12d's field; PlayerBotDriver.NextWalk): to its target or an
 /// Animist's stand (Hunt), to its anchor (Anchor) or a roam point (Roam), out of reach after a release (Clear), to its
 /// rest spot (Rest), a caster's step back (Kite), a break-off's run (BreakOff), the walk out toward the camp planned
-/// under the release's immunity (WalkOut, #167 D4).</summary>
-public enum PlayerBotWalk { None, Hunt, Anchor, Roam, Clear, Rest, Kite, BreakOff, WalkOut }
+/// under the release's immunity (WalkOut, #167 D4), the walk to its anchor gone round a monster on the route (Detour,
+/// #167 F12: PlayerBotDriver.GuardsRoute).</summary>
+public enum PlayerBotWalk { None, Hunt, Anchor, Roam, Clear, Rest, Kite, BreakOff, WalkOut, Detour }
+
+/// <summary>#167 F12: what a walk to the anchor did about the first monster on its route it shouldn't meet
+/// (PlayerBotDriver.GuardsRoute; PLAYER_BOT_ROUTE action=): went round it (Detour), gave its camp up (GiveUp), walked on
+/// past it (Pass); Blocked: a detour's walk ended blocked.</summary>
+public enum PlayerBotRouteAction { Detour, GiveUp, Pass, Blocked }
 
 /// <summary>A scripted job (the errands: quest 20206, promotion) that runs before grinding until Finished. Tick returns
 /// true when it used this think (walked, stood, acted), false to let the driver grind this think.</summary>
@@ -266,6 +272,7 @@ public sealed class PlayerBotState
     public GameNPC Incoming;                                     // #167 F7: the nearest monster coming at it (Incoming),
     public long NextIncomingTick;                                //   scanned every 2 s; the last search's potential adds
     public readonly List<GameNPC> SearchAdds = new();            //   (FindWithin), and the rest spot read from them once
+    public long SearchAddsAt;                                    //   (#167 F12: and when that search ran, GuardsRoute's)
     public bool RestSpotChecked;                                 //   per rest (RestSpot), walked to before the bot sits
     public Vector3? RestGoal;
     public IReadOnlyList<Vector3> RestSpots = Array.Empty<Vector3>();   // #167 D10: that check's clear spots (RestSpots),
@@ -350,6 +357,12 @@ public sealed class PlayerBotState
                                                                  //   read (ReserveNow)
     public int FightBuffHitters;                                 // #167 D12: the live monsters on the bot when the fight's
                                                                  //   buff was last weighed (FightBuffCheck)
+    public Vector3? RouteGoal, RouteWaypoint;                    // #167 F12: the walk the route look-ahead reads (its
+    public GameNPC RouteBlocker;                                 //   goal; GuardsRoute, StartRoute), a detour's point
+    public int RouteGoalDetours;                                 //   and the monster it goes round, the detours on this
+    public readonly Dictionary<GameNPC, int> RouteDetours = new();   //   walk and round each monster, the monsters it
+    public readonly HashSet<GameNPC> RoutePassed = new();        //   walks on past, and the next give-up's earliest
+    public long NextRouteGiveUpTick;                             //   (GiveUpRoute)
 }
 
 // HearthDAoC player bots (#137): a thin copy of the /bot pilot's think (bots/autonomous/AutonomousPlayerPilot.cs:229-374) for a
@@ -570,6 +583,8 @@ public static class PlayerBotDriver
     [ThreadStatic] private static HashSet<GameNPC> _overCap;                                   //   and P1b's adds over the cap
     [ThreadStatic] private static List<(GameNPC Npc, Vector3 At, int AggroRange)> _due;        // #167 F P2: FindWithin's
     [ThreadStatic] private static List<Vector3> _route;                                        // #167 F P4: PathCrowding's
+    [ThreadStatic] private static List<(GameNPC Npc, Vector3 At, int AggroRange, ConColor Con)> _threats;   // #167 F12:
+    [ThreadStatic] private static List<(Vector3 Point, Vector3 Rejoin, float Cost)> _detours;               //   GuardsRoute's
 
     public static IEnumerable<PlayerBotState> States => _states.Values;
     public static bool IsDriven(GamePlayer player) => player != null && _states.ContainsKey(player);
@@ -848,6 +863,7 @@ public static class PlayerBotDriver
         state.Mover.Reset();
         state.Target = null;
         state.RoamDestination = null;
+        (state.RouteGoal, state.RouteWaypoint) = (null, null);                          // #167 F12: read afresh
         state.RoamingSince = 0;
         state.CappedSince = 0;
         state.FallbackCap = null;
@@ -1679,6 +1695,8 @@ public static class PlayerBotDriver
         state.KiteGoal = null;                                                             // #167 F11
         (state.BlindSince, state.FightSight, state.FightBlind) = (0, 0, false);            // #167 E M2
         (state.BlindStop, state.FightBlindSteps) = (0, 0);                                 // #167 E R1
+        if (found != null) state.RouteWaypoint = null;                                     // #167 F12: after a fight the
+                                                                                           //   look-ahead reads afresh
         (state.Spell, state.SpellLine) = found == null ? (null, null) : Nuke(state, player, found);
     }
 
@@ -1764,6 +1782,7 @@ public static class PlayerBotDriver
         }
         state.SearchAdds.Clear();                                                       // #167 F7: the rest spot's, read
         foreach ((GameNPC add, _, _) in adds) state.SearchAdds.Add(add);                //   live (WalksToRestSpot)
+        state.SearchAddsAt = now;                                                       //   #167 F12: and GuardsRoute's
         candidates.Clear();                                                             // no other monster held past the
         adds.Clear();                                                                   //   search
         limits.Clear();
@@ -2109,7 +2128,8 @@ public static class PlayerBotDriver
     /// reach but none under its cap for CappedRelocateMilliseconds (DEATHS.md A4), Outgrown when it has reached no target
     /// for RelocateAfterMilliseconds. #167 D4: also while the release's immunity lasts. C1 held the reason then, as the
     /// plan's IsAttackable found no monster while the bot was immune (AbstractServerRules.cs:385-392); the plan reads
-    /// IsPlannable now, so the bot plans at once.</summary>
+    /// IsPlannable now, so the bot plans at once. #167 F12: RouteGiveUp after a walk to its camp gave it up for a monster
+    /// on its route (GiveUpRoute), owed as the others.</summary>
     public static string RelocateReason(long roamingSince, long cappedSince, long now, string owed) =>
         owed ??
         (cappedSince != 0 && now - cappedSince >= CappedRelocateMilliseconds ? Capped :
@@ -2128,6 +2148,18 @@ public static class PlayerBotDriver
         $"distance={distance} monster=\"{monster}\" monsterLevel={monsterLevel} zone={zone} reason={reason} " +
         $"fallback={fallback?.ToString() ?? "-"}" +
         RelocateSuffix(reason, sinceReleaseMs, barredOld, capKill, recent, near, crowdRefused, lifted, overSkipped);
+
+    /// <summary>#167 F12: PLAYER_BOT_ROUTE, a walk's blocker (GuardsRoute) and what the bot did (action=: detour,
+    /// giveup, pass; blocked: a detour's walk ended blocked): its name, con, the bot's cap, its pack (RoutePackAt; -1 on
+    /// blocked), along=, how far along the route the leg it crosses passes nearest it (-1 on blocked), from=, where the
+    /// bot stands, at=, where the monster stands, goal=, the walk's (its anchor), and waypoint=, the detour's point (-
+    /// for none).</summary>
+    public static string RouteLine(string bot, int level, PlayerBotRouteAction action, string target, ConColor con,
+        ConColor cap, int pack, int along, Vector3 from, Vector3 at, Vector3 goal, Vector3? waypoint) =>
+        $"PLAYER_BOT_ROUTE bot={bot} level={level} action={action.ToString().ToLowerInvariant()} target=\"{target}\" " +
+        $"con={con} cap={cap} pack={pack} along={along} from=({from.X:0},{from.Y:0},{from.Z:0}) " +
+        $"at=({at.X:0},{at.Y:0},{at.Z:0}) goal=({goal.X:0},{goal.Y:0},{goal.Z:0}) " +
+        $"waypoint={(waypoint is Vector3 w ? $"({w.X:0},{w.Y:0},{w.Z:0})" : "-")}";
 
     /// <summary>PLAYER_BOT_RELOCATE when no camp checked had a corridor (or none was found): checked= of them. #167 F
     /// P1: lifted=1 when the fallback in place that follows lifted the crowd limits (FallBackInPlace).</summary>
@@ -3442,6 +3474,56 @@ public static class PlayerBotDriver
                 return false;
         }
         return true;
+    }
+
+    /// <summary>#167 F12: whether a walk may go round its blocker: not inside a detour (none round a second monster on
+    /// the way to the first's point, as the GameBots), fewer than RouteDetoursPerMonster round it and
+    /// RouteDetoursPerWalk on the walk.</summary>
+    public static bool MayDetour(bool detouring, int detoursRoundIt, int detoursOnWalk) =>
+        !detouring && detoursRoundIt < RouteDetoursPerMonster && detoursOnWalk < RouteDetoursPerWalk;
+
+    /// <summary>#167 F12: whether a walk may give its camp up (GiveUpRoute): a leash it can move (CanRelocate: no lever
+    /// spot bot, in its anchor's region), no task, and none given up in the last RouteGiveUpMilliseconds.</summary>
+    public static bool MayGiveUpRoute(bool canRelocate, bool onTask, long nextGiveUpTick, long now) =>
+        canRelocate && !onTask && now >= nextGiveUpTick;
+
+    /// <summary>#167 F12: what a walk does about its blocker: goes round it with a detour found, else gives its camp up
+    /// when it may, else walks on past it.</summary>
+    public static PlayerBotRouteAction RouteAction(bool detourFound, bool mayGiveUp) =>
+        detourFound ? PlayerBotRouteAction.Detour : mayGiveUp ? PlayerBotRouteAction.GiveUp : PlayerBotRouteAction.Pass;
+
+    /// <summary>#167 F12: a new walk for the look-ahead (GuardsRoute, at a goal it hasn't read): no detour, none counted,
+    /// none passed.</summary>
+    public static void StartRoute(PlayerBotState state, Vector3 goal)
+    {
+        state.RouteGoal = goal;
+        (state.RouteWaypoint, state.RouteBlocker, state.RouteGoalDetours) = (null, null, 0);
+        state.RouteDetours.Clear();
+        state.RoutePassed.Clear();
+    }
+
+    /// <summary>#167 F12: a walk to its camp that gives the camp up (GuardsRoute): the camp barred as a failed one
+    /// (RememberFailedCamp, 15 minutes; RELOCATE barred=old), a relocation owed at once (RouteGiveUp; planned from
+    /// where it stands, RelocationOrigin), the bot held for it from now (no walk: HoldsForRelocation, MaxHoldMilliseconds
+    /// at most), no other give-up for RouteGiveUpMilliseconds.</summary>
+    public static void GiveUpRoute(PlayerBotState state, long now)
+    {
+        RememberFailedCamp(state.FailedCamps, state.AnchorRegion, state.Anchor, now);
+        state.ReplanOwed = RouteGiveUp;
+        state.ReplanSince = now;
+        state.NextRelocateTick = 0;
+        state.RelocateRejected.Clear();
+        state.RoamDestination = null;
+        state.RouteWaypoint = null;
+        state.NextRouteGiveUpTick = now + RouteGiveUpMilliseconds;
+    }
+
+    /// <summary>#167 F12: a route give-up that planned no other camp (FallBack): the walk to the camp it had goes on (its
+    /// leash's; leashed: Leashed), the bar on it kept.</summary>
+    public static void ResumeRoute(PlayerBotState state, bool leashed)
+    {
+        (state.ReplanOwed, state.ReplanSince) = (null, 0);
+        state.RoamDestination = leashed ? state.Anchor : null;
     }
 
     /// <summary>The candidates out of every potential add's reach (InAddReach), nearest to here first.</summary>
@@ -5247,7 +5329,9 @@ public static class PlayerBotDriver
     // bot), out of combat, with no corridor from where it stands to its anchor (CutOffFromAnchor) teleports the bot
     // back there (MoveBack, PLAYER_BOT_CUTOFF); from where it stands after the walk, as a floor step may have moved it
     // (TryFloorStep). #167 E fix U4: at once only with no real player in sight; else the bot is held, with no walk,
-    // until none is, or until it can walk back (HoldsCutOff).
+    // until none is, or until it can walk back (HoldsCutOff). #167 F12: the walk to the anchor looks ahead on its route
+    // (GuardsRoute): it gives its camp up there (held for the plan), or walks round a monster to a detour's point, a
+    // blocked one ending the detour (PLAYER_BOT_BLOCKED walk=detour, ROUTE action=blocked), not the walk.
     private static void Roam(PlayerBotState state, GamePlayer player, long now)
     {
         if (HoldsCutOff(state, player, now)) return;
@@ -5259,6 +5343,24 @@ public static class PlayerBotDriver
             state.RoamDestination = PickRoamPoint(player, leashed ? state.Anchor : here);
         state.Activity = PlayerBotActivity.Roaming;
         state.Walk = state.RoamDestination == state.Anchor ? PlayerBotWalk.Anchor : PlayerBotWalk.Roam;   // #167 walk=
+        if (GuardsRoute(state, player, now)) return;                                    // #167 F12: gave its camp up
+        if (state.RouteWaypoint is Vector3 waypoint)                                    // #167 F12: round a monster
+        {
+            state.Walk = PlayerBotWalk.Detour;
+            PlayerBotStepResult detour = state.Mover.StepToward(waypoint, RouteDetourStop, now);
+            if (detour is PlayerBotStepResult.Blocked)
+            {
+                ReportBlocked(state, player, "detour", waypoint, now);
+                PlayerBotDriverReport.Route(PlayerBotRouteAction.Blocked);
+                if (Log.IsInfoEnabled && state.RouteBlocker is GameNPC blocker)
+                    Log.Info(RouteLine(player.Name, player.Level, PlayerBotRouteAction.Blocked, blocker.Name,
+                        ConLevels.GetConColor(player.GetConLevel(blocker)), Cap(state, now), -1, -1,
+                        new(player.X, player.Y, player.Z), new(blocker.X, blocker.Y, blocker.Z), state.RoamDestination.Value,
+                        waypoint));
+            }
+            if (detour is PlayerBotStepResult.Blocked or PlayerBotStepResult.Arrived) state.RouteWaypoint = null;
+            return;
+        }
         PlayerBotStepResult step = state.Mover.StepToward(state.RoamDestination.Value, 20, now);
         if (step is PlayerBotStepResult.Blocked)
         {
@@ -5274,6 +5376,92 @@ public static class PlayerBotDriver
         }
         if (step is PlayerBotStepResult.Blocked or PlayerBotStepResult.Arrived)
             state.RoamDestination = null;
+    }
+
+    // #167 F12: the walk to the anchor (a camp planned, or back to the leash) looks ahead on its route on each search's
+    // think (SearchAddsAt): RouteLookAhead along its corridor (PlayerBotPathMover.CopyUpcoming; to the detour's point
+    // while it walks one), against that search's potential adds where they are now, at their con. For the first that
+    // blocks it under the bot's cap (FirstBlocker) it goes round it (RouteDetour: a waypoint, MayDetour), else gives its
+    // camp up (GiveUpRoute, MayGiveUpRoute), else walks on past it (RoutePassed): PLAYER_BOT_ROUTE. Not in a fight, nor
+    // within the mover's direct step of the goal (its corridor is stale there). True when it gave its camp up: the bot
+    // stops, held for the plan (HoldsForRelocation). Its time counts in the report (ROUTE win= ms=).
+    private static bool GuardsRoute(PlayerBotState state, GamePlayer player, long now)
+    {
+        Vector3 goal = state.RoamDestination.Value;
+        if (state.RouteGoal != goal) StartRoute(state, goal);
+        if (state.SearchAddsAt != now || goal != state.Anchor || player.InCombat ||
+            Vector3.Distance(new(player.X, player.Y, player.Z), goal) <= PlayerBotPathMover.DirectStepRange)
+            return false;
+        long started = Stopwatch.GetTimestamp();
+        Span<Vector3> route = stackalloc Vector3[PlayerBotPathMover.MaxUpcomingCorners + 2];
+        route = route[..state.Mover.CopyUpcoming(state.RouteWaypoint ?? goal, route)];
+        if (route.Length < 2) return false;                     // the review of F12: no corridor yet, the next search
+        List<(GameNPC Npc, Vector3 At, int AggroRange, ConColor Con)> threats = _threats ??= new();
+        try
+        {
+            foreach (GameNPC add in state.SearchAdds)
+                if (AddReach(player, add) is > 0 and int reach)
+                    threats.Add((add, new(add.X, add.Y, add.Z), reach, ConLevels.GetConColor(player.GetConLevel(add))));
+            ConColor cap = Cap(state, now);
+            bool detouring = state.RouteWaypoint != null;
+            int blocker = FirstBlocker(route, threats, cap, state.RoutePassed, detouring ? state.RouteBlocker : null,
+                out int pack, out float along, margin: detouring ? AddMargin / 2 : AddMargin);   // the review of F12: as
+                                                                                    //   the detour's legs were checked
+            if (blocker < 0) return false;
+            (GameNPC npc, Vector3 at, _, ConColor con) = threats[blocker];
+            Vector3? waypoint = MayDetour(detouring, state.RouteDetours.GetValueOrDefault(npc), state.RouteGoalDetours)
+                ? RouteDetour(player, route, blocker, threats) : null;
+            PlayerBotRouteAction action = RouteAction(waypoint != null,
+                MayGiveUpRoute(CanRelocate(state, player), state.Task != null, state.NextRouteGiveUpTick, now));
+            PlayerBotDriverReport.Route(action);
+            if (Log.IsInfoEnabled)
+                Log.Info(RouteLine(player.Name, player.Level, action, npc.Name, con, cap, pack, (int)along, route[0], at,
+                    goal, waypoint));
+            switch (action)
+            {
+                case PlayerBotRouteAction.Detour:
+                    (state.RouteWaypoint, state.RouteBlocker) = (waypoint, npc);
+                    state.RouteDetours[npc] = state.RouteDetours.GetValueOrDefault(npc) + 1;
+                    state.RouteGoalDetours++;
+                    return false;
+                case PlayerBotRouteAction.GiveUp:
+                    GiveUpRoute(state, now);
+                    state.Mover.Stop(now);
+                    return true;
+                default:
+                    state.RoutePassed.Add(npc);
+                    return false;
+            }
+        }
+        finally
+        {
+            threats.Clear();
+            PlayerBotDriverReport.AddRoute(Stopwatch.GetTimestamp() - started);
+        }
+    }
+
+    // #167 F12: the first way round a route's blocker (DetourCandidates, cheapest first; RouteCheckedDetours of them looked
+    // up) whose point lies on the bot's navmesh (OnMesh, #188's island rule too) with both legs from it still clear
+    // (DetourLegsClear) and straight on the navmesh (its line of sight both ways: the walk then follows the legs
+    // checked). None with no navmesh.
+    private static Vector3? RouteDetour(GamePlayer player, ReadOnlySpan<Vector3> route, int blocker,
+        List<(GameNPC Npc, Vector3 At, int AggroRange, ConColor Con)> threats)
+    {
+        IPathfindingMgr nav = PathfindingProvider.Instance;
+        Zone zone = player.CurrentZone;
+        if (zone == null || !nav.HasNavmesh(zone)) return null;
+        List<(Vector3 Point, Vector3 Rejoin, float Cost)> candidates = _detours ??= new();
+        DetourCandidates(route, blocker, threats, candidates);
+        Vector3 here = route[0], end = route[^1];
+        for (int i = 0; i < candidates.Count && i < RouteCheckedDetours; i++)
+        {
+            (Vector3 candidate, Vector3 rejoin, _) = candidates[i];
+            if (OnMesh(player, candidate) is Vector3 point && DetourLegsClear(here, point, rejoin, end, threats) &&
+                nav.HasLineOfSight(zone, here, point, nav.DefaultFilters) &&
+                nav.HasLineOfSight(zone, point, rejoin, nav.DefaultFilters))
+                return point;
+        }
+        return null;
     }
 
     // #167 E fix U4: a bot found cut off from its anchor (Roam, CutOffFromAnchor) is held where it stands until its
@@ -5495,8 +5683,11 @@ public static class PlayerBotDriver
                 planAdds: planAdds, overSkipped: overSkipped);
             if (TakeCamp(spots, fallback, stale, near)) return;
         }
-        bool lifted = spots.Length == 0 && FallBack(state, player, reason, now);   // no camp in the zone: none to try next
-        if (Log.IsInfoEnabled)                                                     //   time either; #167 F P1: a lift
+        // #167 F12 (the review): a route give-up that took no camp, for want of one or of a corridor to one, walks on to
+        // its own (FallBack's ResumeRoute): never held to the hold's end, then hunting by its blocker (EndReplan).
+        bool lifted = (spots.Length == 0 || reason == RouteGiveUp) &&              // no camp in the zone: none to try next
+            FallBack(state, player, reason, now);                                  //   time either; #167 F P1: a lift
+        if (Log.IsInfoEnabled)
             Log.Info(RelocateNoneLine(player.Name, player.Level, spots.Length, zone.ID, reason, now - state.ReleasedAt,
                 barredOld, killerCon, afterDeath, crowdRefused, lifted, overSkipped.Count));
 
@@ -5527,10 +5718,16 @@ public static class PlayerBotDriver
         }
     }
 
-    // A capped bot's FallBackInPlace; after a death (#167 F4) or a break-off (C2), the end of the relocation owed. #167 F
-    // P1: true when it lifted the crowd limits (the caller logs it).
+    // A capped bot's FallBackInPlace; after a death (#167 F4) or a break-off (C2), the end of the relocation owed; after a
+    // route give-up (#167 F12), the walk to the camp it had again (ResumeRoute). #167 F P1: true when it lifted the crowd
+    // limits (the caller logs it).
     private static bool FallBack(PlayerBotState state, GamePlayer player, string reason, long now)
     {
+        if (reason == RouteGiveUp)                                                 // #167 F12: no other camp: the
+        {                                                                          //   walk to its own goes on
+            ResumeRoute(state, Leashed(state, player));
+            return false;
+        }
         if (reason is not (Died or BrokeOff)) return FallBackInPlace(state, reason, now);
         EndReplan(state, player);
         return false;
@@ -6351,6 +6548,7 @@ public static class PlayerBotDriver
             state.Target = null;
             state.Engaged = false;
             state.RoamDestination = null;
+            (state.RouteGoal, state.RouteWaypoint) = (null, null);                      // #167 F12: the walk read afresh
             state.RoamingSince = 0;                                                     // back at the bind point: a fresh start
             state.RelocateRejected.Clear();
             state.Mover.Reset();
@@ -6649,6 +6847,7 @@ public static class PlayerBotDriver
         player.TargetObject = null;
         state.Target = null;
         state.RoamDestination = null;
+        (state.RouteGoal, state.RouteWaypoint) = (null, null);                          // #167 F12: read afresh
         state.RoamingSince = 0;
         state.RelocateRejected.Clear();
         player.MoveTo(state.AnchorRegion, (int)state.Anchor.X, (int)state.Anchor.Y, (int)state.Anchor.Z, player.Heading);
