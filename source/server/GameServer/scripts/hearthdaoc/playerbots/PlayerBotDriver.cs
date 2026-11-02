@@ -409,6 +409,14 @@ public static class PlayerBotDriver
     public const int MaxDeathSteps = (int)ConColor.YELLOW - (int)ConColor.GREEN;   // a solo GameBot's (AWBC:3756, :3793-3796)
     public const string Outgrown = "outgrown", Capped = "capped", Died = "died", BrokeOff = "brokeoff";   // RelocateReason
     public const int MaxHoldMilliseconds = 60_000;           // #167 F4: a hold while no camp is planned ends by then
+    public const string RouteGiveUp = "route";               // #167 F12: RelocateReason after a walk gave its camp up
+    public const int RouteLookAhead = 1_500;                 // #167 F12: the route read ahead (the GameBots' LookAhead,
+                                                             //   AutonomousRouteThreatPolicy.cs:27), the detours round
+    public const int RouteDetoursPerMonster = 2;             //   one monster (MaxDetoursPerThreat, :34) and on one walk
+    public const int RouteDetoursPerWalk = 4;                //   (BATCH-C F12a), one give-up in RouteGiveUpMilliseconds
+    public const int RouteGiveUpMilliseconds = 600_000;      //   (RetargetCooldownMilliseconds, :35), a detour point's
+    public const int RouteDetourStop = 60;                   //   stop (the GameBots' arrival radius, AWBC.RouteThreats:139),
+    public const int RouteCheckedDetours = 2;                //   and the points looked up on the navmesh per blocker (inf.)
     public const int KillerConMemoryMilliseconds = 300_000;  // #167 D6: a killer's con kept (st-deathsD's fix round, inf.)
     public static readonly int[] StepOutRings = [500, 900, 1_300, 1_700, 2_100, 2_500];   // #167 F4: a released bot's
     public const int SpotDirections = 12;                    //   candidate spots, every 30 degrees on each ring
@@ -3289,6 +3297,151 @@ public static class PlayerBotDriver
                 return true;
         }
         return false;
+    }
+
+    // --- #167 F12: the route look-ahead's pure parts (GuardsRoute's) ---
+
+    /// <summary>#167 F12: a walk's route ahead into into (PlayerBotPathMover.CopyUpcoming): here, the corridor's corners
+    /// still ahead (a first one within a unit of here dropped: the walker stands on it), then the goal, unless the last
+    /// corner lies within a corner's reach of it across (32 units, PlayerTravelPath.HasReachedCorner); with no corner,
+    /// here and the goal. At most into's length less one point before the goal, so the goal always fits. The point
+    /// count.</summary>
+    public static int UpcomingRoute(Vector3 here, ReadOnlySpan<Vector3> corners, Vector3 goal, Span<Vector3> into)
+    {
+        int count = 0;
+        into[count++] = here;
+        foreach (Vector3 corner in corners)
+        {
+            if (count == into.Length - 1) break;
+            if (count == 1 && Vector3.DistanceSquared(corner, here) < 1) continue;
+            into[count++] = corner;
+        }
+        Vector3 last = into[count - 1];
+        if (count == 1 || Vector2.DistanceSquared(new(last.X, last.Y), new(goal.X, goal.Y)) > 32 * 32) into[count++] = goal;
+        return count;
+    }
+
+    /// <summary>#167 F12: the most monsters of a con a walk passes on its route without going round them: the GameBots'
+    /// solo easy pack (AutonomousRouteThreatPolicy.Decide: GREEN 3, BLUE 2, YELLOW or harder 1). A melee or archer
+    /// bot's pick allows the same at a BLUE or YELLOW (MaxPullCrowd: its crowd is the pack less the target), one more at
+    /// a GREEN.</summary>
+    public static int RoutePack(ConColor con) => con <= ConColor.GREEN ? 3 : con == ConColor.BLUE ? 2 : 1;
+
+    /// <summary>#167 F12: a monster on a walk's route the bot shouldn't meet: over its cap (Cap), or in a pack over
+    /// RoutePack of its con.</summary>
+    public static bool RouteBlocks(ConColor con, ConColor cap, int pack) => con > cap || pack > RoutePack(con);
+
+    /// <summary>#167 F12: the pack a route threat (threats[index]) is in where the bot passes it: itself and the other
+    /// threats whose reach (aggro range + AddMargin, 3D, InAddReach's) covers the route's point nearest it within
+    /// lookAhead (AutonomousRouteThreatPolicy.NearestOnRoute).</summary>
+    public static int RoutePackAt<T>(ReadOnlySpan<Vector3> route, int index,
+        IReadOnlyList<(T Npc, Vector3 At, int AggroRange, ConColor Con)> threats, float lookAhead) where T : class
+    {
+        if (!AutonomousRouteThreatPolicy.NearestOnRoute(route, threats[index].At, lookAhead, out Vector3 point, out _))
+            return 1;
+        int pack = 1;
+        for (int j = 0; j < threats.Count; j++)
+            if (j != index && CoversPoint(threats[j].At, threats[j].AggroRange, point)) pack++;
+        return pack;
+    }
+
+    // #167 F12: a threat's reach (aggro range + AddMargin, 3D, InAddReach's) over a point.
+    private static bool CoversPoint(Vector3 at, int aggroRange, Vector3 point)
+    {
+        float reach = aggroRange + AddMargin;
+        return Vector3.DistanceSquared(at, point) <= reach * reach;
+    }
+
+    /// <summary>#167 F12: whether a route threat (threats[index]) blocks a route (from the bot to its goal) within
+    /// lookAhead: its reach (aggro range + AddMargin) crosses it there within 160 of the route's height (the GameBots'
+    /// corridor test, AutonomousDungeonPolicy.IntersectsCorridor), it reaches neither the route's start (a fight
+    /// self-defence has already) nor its end (the camp's own, the plan's: PlanRelocation's over-cap bar), and it
+    /// RouteBlocks under cap in its pack (RoutePackAt). along: how far along the route the first leg it crosses passes
+    /// nearest it (IntersectsCorridor's). margin: the corridor's reach past the aggro range, AddMargin but on a detour's
+    /// walk (GuardsRoute: AddMargin / 2, the clearance DetourLegsClear checked its legs at; the review of F12).</summary>
+    public static bool BlocksRoute<T>(ReadOnlySpan<Vector3> route, int index,
+        IReadOnlyList<(T Npc, Vector3 At, int AggroRange, ConColor Con)> threats, ConColor cap, float lookAhead,
+        out int pack, out float along, int margin = AddMargin) where T : class
+    {
+        (pack, along) = (0, float.MaxValue);
+        (_, Vector3 at, int aggroRange, ConColor con) = threats[index];
+        if (route.Length < 2 || CoversPoint(at, aggroRange, route[0]) || CoversPoint(at, aggroRange, route[^1]) ||
+            !AutonomousDungeonPolicy.IntersectsCorridor(route, at, aggroRange + margin, lookAhead, out along))
+            return false;
+        pack = RoutePackAt(route, index, threats, lookAhead);
+        return RouteBlocks(con, cap, pack);
+    }
+
+    /// <summary>#167 F12: the first monster along a walk's route ahead (route: from the bot, UpcomingRoute) that blocks it
+    /// within lookAhead (BlocksRoute), but those passed (walked on past on this walk) and skip (the one a detour goes
+    /// round): its index, or -1; its pack and along (BlocksRoute's) for the log; margin, BlocksRoute's.</summary>
+    public static int FirstBlocker<T>(ReadOnlySpan<Vector3> route,
+        IReadOnlyList<(T Npc, Vector3 At, int AggroRange, ConColor Con)> threats, ConColor cap, ICollection<T> passed,
+        T skip, out int pack, out float along, float lookAhead = RouteLookAhead, int margin = AddMargin) where T : class
+    {
+        int first = -1;
+        (pack, along) = (0, float.MaxValue);
+        for (int i = 0; i < threats.Count; i++)
+        {
+            T npc = threats[i].Npc;
+            if (ReferenceEquals(npc, skip) || passed != null && passed.Contains(npc) ||
+                !BlocksRoute(route, i, threats, cap, lookAhead, out int size, out float crossing, margin: margin) ||
+                crossing >= along)
+                continue;
+            (first, pack, along) = (i, size, crossing);
+        }
+        return first;
+    }
+
+    /// <summary>#167 F12: the ways round a route's blocker (threats[blocker]), cheapest first (into): a point on each side
+    /// of it, beside it and half and a whole sidestep before or after it along the route (the GameBots'
+    /// AutonomousRouteThreatPolicy.DetourPoint at AddMargin, DetourAlongFractions), at the height of the route's point
+    /// nearest it; each with where it rejoins the route (a sidestep and a half past that point, or the route's end when
+    /// that is nearer) and its cost, the two legs' length. Only those whose legs DetourLegsClear.</summary>
+    public static void DetourCandidates<T>(ReadOnlySpan<Vector3> route, int blocker,
+        IReadOnlyList<(T Npc, Vector3 At, int AggroRange, ConColor Con)> threats,
+        List<(Vector3 Point, Vector3 Rejoin, float Cost)> into) where T : class
+    {
+        into.Clear();
+        (_, Vector3 at, int aggroRange, _) = threats[blocker];
+        if (route.Length < 2 ||
+            !AutonomousRouteThreatPolicy.NearestOnRoute(route, at, RouteLookAhead, out Vector3 point, out Vector2 direction))
+            return;
+        Vector3 here = route[0], end = route[^1];
+        float sidestep = aggroRange + AddMargin + AutonomousRouteThreatPolicy.DetourClearance;
+        Vector3 past = point + new Vector3(direction.X, direction.Y, 0) * (sidestep * 1.5f);
+        Vector3 rejoin = Vector3.Distance(point, end) < Vector3.Distance(point, past) ? end : past;
+        foreach (int side in RouteSides)
+            foreach (float fraction in AutonomousRouteThreatPolicy.DetourAlongFractions)
+            {
+                Vector3 candidate = AutonomousRouteThreatPolicy.DetourPoint(at, direction, aggroRange, AddMargin, point.Z,
+                    side, fraction);
+                if (!DetourLegsClear(here, candidate, rejoin, end, threats)) continue;
+                float cost = Vector3.Distance(here, candidate) + Vector3.Distance(candidate, rejoin);
+                int slot = into.Count;
+                while (slot > 0 && into[slot - 1].Cost > cost) slot--;                 // stable: the earlier first
+                into.Insert(slot, (candidate, rejoin, cost));
+            }
+    }
+
+    /// <summary>#167 F12: DetourCandidates' sides: the route's left (DetourPoint's +1), then its right.</summary>
+    public static readonly int[] RouteSides = [1, -1];
+
+    /// <summary>#167 F12: whether both straight legs of a detour (here to point, point to rejoin) stay clear of every
+    /// threat by its aggro range + AddMargin / 2 across (the GameBots' AutonomousRouteThreatPolicy.LegsClear, 2D, at
+    /// their margin over two), but those whose reach (aggro range + AddMargin) covers here (the legs start in it: the
+    /// bot's fight already) or the route's end (the camp's own).</summary>
+    public static bool DetourLegsClear<T>(Vector3 here, Vector3 point, Vector3 rejoin, Vector3 end,
+        IReadOnlyList<(T Npc, Vector3 At, int AggroRange, ConColor Con)> threats) where T : class
+    {
+        for (int i = 0; i < threats.Count; i++)
+        {
+            (_, Vector3 at, int aggroRange, _) = threats[i];
+            if (!CoversPoint(at, aggroRange, here) && !CoversPoint(at, aggroRange, end) &&
+                !AutonomousRouteThreatPolicy.LegsClear(here, point, rejoin, at, aggroRange + AddMargin / 2))
+                return false;
+        }
+        return true;
     }
 
     /// <summary>The candidates out of every potential add's reach (InAddReach), nearest to here first.</summary>

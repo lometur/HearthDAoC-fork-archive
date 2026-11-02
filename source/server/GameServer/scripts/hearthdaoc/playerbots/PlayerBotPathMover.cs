@@ -461,6 +461,23 @@ public sealed class PlayerBotPathMover
     public bool OnItsNetwork(Vector3 spot) =>
         _network.Accepts(Nav, _player.CurrentZone, StepStart(new(_player.X, _player.Y, _player.Z), _exact), spot, Home?.Invoke());
 
+    /// <summary>#167 F12: the most corners of a walk's corridor CopyUpcoming reads.</summary>
+    public const int MaxUpcomingCorners = 64;
+
+    /// <summary>#167 F12: the walk to goal's route ahead (PlayerBotDriver.UpcomingRoute): from where the next step starts
+    /// (StepStart) along the corridor's corners still ahead (PlayerTravelPath.CopyCorners) to goal; read only: no step,
+    /// no corridor search, no replan. None (0) while it holds no corridor for goal: before the walk's first corridor step
+    /// (the first think back on a walk after a fight, a rest or a detour's point) or at a seam, where the straight line
+    /// is not the way it walks (the review of F12).</summary>
+    public int CopyUpcoming(Vector3 goal, Span<Vector3> into)
+    {
+        Span<Vector3> corners = stackalloc Vector3[MaxUpcomingCorners];
+        int count = _path.CopyCorners(goal, corners);
+        if (count == 0) return 0;
+        return PlayerBotDriver.UpcomingRoute(StepStart(new(_player.X, _player.Y, _player.Z), _exact), corners[..count], goal,
+            into);
+    }
+
     // #188: each change of island a step would make (kind=took: taken, as onto the camp's island or a larger one; ground:
     // the floor under the step taken instead; step or link: refused) counts in the report's PLAYER_BOT_CROSSING win= line,
     // the totals. The bot's own PLAYER_BOT_CROSSING bot= line is a sample of where, the first change after

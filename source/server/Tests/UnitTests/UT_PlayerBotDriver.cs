@@ -9832,4 +9832,136 @@ public sealed class UT_PlayerBotDriver
             Assert.That(((System.Collections.IDictionary)caches.GetValue(bot)!).Contains(eGameObjectType.PLAYER), Is.False);
         });
     }
+
+    // --- #167 F12 (Part A): the route look-ahead's read and pure parts ---
+
+    // #167 F12: the corridor's corners still ahead, read only (PlayerTravelPath.CopyCorners): none before the walk's first
+    // corridor step; after it, the two corners left (its start passed); the same goal within 64 units (TryStep's own
+    // reset), none for another; no more than the span holds. Reading moves nothing: the next step is the one the walk
+    // takes anyway, and no new search.
+    [Test]
+    public void CopyCorners()
+    {
+        var (region, zone) = World();
+        var mesh = new Mesh { Corners = new[] { new Vector3(100, 100, 0), new Vector3(100, 500, 0), new Vector3(600, 500, 0) } };
+        var path = new PlayerTravelPath();
+        Span<Vector3> into = stackalloc Vector3[8];
+        Assert.That(path.CopyCorners(mesh.Corners[^1], into), Is.EqualTo(0), "no corridor yet");
+        Assert.That(PlayerBotPathMover.TryComputeNext(mesh, region, zone, path, mesh.Corners[0], mesh.Corners[^1], 0, 47.75f, 0,
+            out Vector3 next, out string failure), Is.True, failure);
+        int count = path.CopyCorners(mesh.Corners[^1], into);
+        Assert.That(into[..count].ToArray(), Is.EqualTo(new[] { new Vector3(100, 500, 0), new Vector3(600, 500, 0) }));
+        Assert.That(path.CopyCorners(new Vector3(600, 500, 64), into), Is.EqualTo(2), "64 off: the same goal");
+        Assert.That(path.CopyCorners(new Vector3(600, 565, 0), into), Is.EqualTo(0), "65 off: another goal");
+        Assert.That(path.CopyCorners(mesh.Corners[^1], into[..1]), Is.EqualTo(1), "as many as the span holds");
+        Assert.That(PlayerBotPathMover.TryComputeNext(mesh, region, zone, path, next, mesh.Corners[^1], 0, 47.75f, 250,
+            out next, out failure), Is.True, failure);
+        Assert.That((next, mesh.Searches), Is.EqualTo((new Vector3(100, 195.5f, 0), 1)), "the walk goes on as before");
+    }
+
+    // #167 F12: the route ahead (UpcomingRoute; BATCH-C Part 2's rows), corners and points as (x, y) at height 0, the bot
+    // at (0, 0): the goal 30 units across from the last corner adds nothing (a corner's reach, 32); 400 off it does; no
+    // corner: the straight line; a first corner within a unit of the bot is dropped; a span of 4 keeps room for the goal.
+    [TestCase(new float[] { 100, 0, 500, 0, 500, 800 }, 500f, 830f, 66, new float[] { 0, 0, 100, 0, 500, 0, 500, 800 })]
+    [TestCase(new float[] { 100, 0, 500, 0, 500, 800 }, 500f, 1200f, 66, new float[] { 0, 0, 100, 0, 500, 0, 500, 800, 500, 1200 })]
+    [TestCase(new float[0], 300f, 400f, 66, new float[] { 0, 0, 300, 400 })]
+    [TestCase(new float[] { 0.5f, 0, 100, 0, 500, 0, 500, 800 }, 500f, 1200f, 66,
+        new float[] { 0, 0, 100, 0, 500, 0, 500, 800, 500, 1200 })]
+    [TestCase(new float[] { 100, 0, 500, 0, 500, 800 }, 500f, 1200f, 4, new float[] { 0, 0, 100, 0, 500, 0, 500, 1200 })]
+    public void UpcomingRoute(float[] corners, float goalX, float goalY, int room, float[] expected)
+    {
+        Vector3[] cornerPoints = Enumerable.Range(0, corners.Length / 2).Select(i => new Vector3(corners[2 * i], corners[2 * i + 1], 0)).ToArray();
+        Vector3[] into = new Vector3[room];
+        int count = PlayerBotDriver.UpcomingRoute(Vector3.Zero, cornerPoints, new Vector3(goalX, goalY, 0), into);
+        Assert.That(into.Take(count).SelectMany(p => new[] { p.X, p.Y }).ToArray(), Is.EqualTo(expected));
+    }
+
+    // #167 F12: the pack a monster on the route may be in, the GameBots' solo easy pack (RoutePack), and whether one blocks
+    // a walk (RouteBlocks): over the bot's cap, or its pack over that.
+    [TestCase(ConColor.GREEN, 3)] [TestCase(ConColor.BLUE, 2)] [TestCase(ConColor.YELLOW, 1)] [TestCase(ConColor.ORANGE, 1)]
+    [TestCase(ConColor.PURPLE, 1)]
+    public void RoutePack(ConColor con, int expected) => Assert.That(PlayerBotDriver.RoutePack(con), Is.EqualTo(expected));
+
+    [TestCase(ConColor.ORANGE, ConColor.YELLOW, 1, true)] [TestCase(ConColor.YELLOW, ConColor.YELLOW, 1, false)]
+    [TestCase(ConColor.YELLOW, ConColor.YELLOW, 2, true)] [TestCase(ConColor.BLUE, ConColor.YELLOW, 2, false)]
+    [TestCase(ConColor.BLUE, ConColor.YELLOW, 3, true)] [TestCase(ConColor.GREEN, ConColor.YELLOW, 3, false)]
+    [TestCase(ConColor.GREEN, ConColor.YELLOW, 4, true)] [TestCase(ConColor.BLUE, ConColor.GREEN, 1, true)]
+    public void RouteBlocks(ConColor con, ConColor cap, int pack, bool expected) =>
+        Assert.That(PlayerBotDriver.RouteBlocks(con, cap, pack), Is.EqualTo(expected));
+
+    // #167 F12: the first blocker on a route (FirstBlocker; BATCH-C Part 2's FirstOnRoute rows, then the new rules), the
+    // route (0,0,0) -> (1000,0,0) -> (1000,3000,0), monsters A and B of aggro 500 (reach 700). Rows: A first at 500 (its
+    // pack 2: B's reach covers the route's point nearest A, (1000,500,0), within the 1,500 read); A 300 above the route:
+    // B at 1,500, the read's end; read 1,000: neither, or A alone (pack 1: (500,0,0) nearest then); A skipped (the
+    // detour's own): B; B 360.6 from the route's end: the camp's own, none; A's reach over the bot: a fight already, B;
+    // A passed: B; both yellow under a yellow cap: A's pack of 2 blocks; both blue: packs of 2 walk on; A orange under an
+    // orange cap: its pack; A blue over a green cap.
+    [TestCase(500f, 600f, 0f, ConColor.ORANGE, 1300f, 800f, ConColor.ORANGE, ConColor.YELLOW, 1500f, false, false, "A", 500f, 2)]
+    [TestCase(500f, 600f, 300f, ConColor.ORANGE, 1300f, 800f, ConColor.ORANGE, ConColor.YELLOW, 1500f, false, false, "B", 1500f, 2)]
+    [TestCase(500f, 600f, 300f, ConColor.ORANGE, 1300f, 800f, ConColor.ORANGE, ConColor.YELLOW, 1000f, false, false, null, 0f, 0)]
+    [TestCase(500f, 600f, 0f, ConColor.ORANGE, 1300f, 800f, ConColor.ORANGE, ConColor.YELLOW, 1000f, false, false, "A", 500f, 1)]
+    [TestCase(500f, 600f, 0f, ConColor.ORANGE, 1300f, 800f, ConColor.ORANGE, ConColor.YELLOW, 1500f, true, false, "B", 1500f, 2)]
+    [TestCase(500f, 600f, 300f, ConColor.ORANGE, 1300f, 2800f, ConColor.ORANGE, ConColor.YELLOW, 1500f, false, false, null, 0f, 0)]
+    [TestCase(300f, 300f, 0f, ConColor.ORANGE, 1300f, 800f, ConColor.ORANGE, ConColor.YELLOW, 1500f, false, false, "B", 1500f, 1)]
+    [TestCase(500f, 600f, 0f, ConColor.ORANGE, 1300f, 800f, ConColor.ORANGE, ConColor.YELLOW, 1500f, false, true, "B", 1500f, 2)]
+    [TestCase(500f, 600f, 0f, ConColor.YELLOW, 1300f, 800f, ConColor.YELLOW, ConColor.YELLOW, 1500f, false, false, "A", 500f, 2)]
+    [TestCase(500f, 600f, 0f, ConColor.BLUE, 1300f, 800f, ConColor.BLUE, ConColor.YELLOW, 1500f, false, false, null, 0f, 0)]
+    [TestCase(500f, 600f, 0f, ConColor.ORANGE, 1300f, 800f, ConColor.YELLOW, ConColor.ORANGE, 1500f, false, false, "A", 500f, 2)]
+    [TestCase(500f, 600f, 0f, ConColor.BLUE, 1300f, 800f, ConColor.GREEN, ConColor.GREEN, 1500f, false, false, "A", 500f, 2)]
+    public void FirstBlocker(float ax, float ay, float az, ConColor aCon, float bx, float by, ConColor bCon, ConColor cap,
+        float lookAhead, bool skipA, bool passA, string expected, float along, int pack)
+    {
+        Vector3[] route = { Vector3.Zero, new(1_000, 0, 0), new(1_000, 3_000, 0) };
+        List<(string Npc, Vector3 At, int AggroRange, ConColor Con)> threats =
+            [("A", new(ax, ay, az), 500, aCon), ("B", new(bx, by, 0), 500, bCon)];
+        int first = PlayerBotDriver.FirstBlocker(route, threats, cap, passA ? new HashSet<string> { "A" } : new HashSet<string>(),
+            skipA ? "A" : null, out int size, out float crossing, lookAhead);
+        Assert.That(first < 0 ? null : threats[first].Npc, Is.EqualTo(expected));
+        if (expected == null) return;
+        Assert.That(crossing, Is.EqualTo(along).Within(0.01));
+        Assert.That(size, Is.EqualTo(pack));
+    }
+
+    // #167 F12: the ways round a blocker (DetourCandidates; BATCH-C Part 2's row first): the bot at (0,0,0) walking to
+    // (3000,0,0), an orange blocker at (1000,100,0), aggro 500 (its point 820 off: aggro + AddMargin + the GameBots' 120),
+    // a second monster at (1000,-900,0): only the point beside it on the far side, rejoining 1,230 past it (each of that
+    // side's others passes the blocker at 514.6, 462.7 or 412.4, under its 600; every point on the near side lies in the
+    // second's reach). Alone, both sides beside it, the cheaper first; the camp's own monster by the route's end changes
+    // nothing; with the end nearer than the rejoin point, the legs end there.
+    [Test]
+    public void DetourCandidates()
+    {
+        var into = new List<(Vector3 Point, Vector3 Rejoin, float Cost)>();
+        (string, Vector3, int, ConColor) blocker = ("blocker", new(1_000, 100, 0), 500, ConColor.ORANGE),
+            below = ("below", new(1_000, -900, 0), 500, ConColor.ORANGE), camp = ("camp", new(2_900, 0, 0), 500, ConColor.YELLOW);
+        Vector3[] route = { Vector3.Zero, new(3_000, 0, 0) };
+        void Expect(params (Vector3 Point, Vector3 Rejoin, float Cost)[] expected)
+        {
+            Assert.That(into.Select(c => (c.Point, c.Rejoin)), Is.EqualTo(expected.Select(c => (c.Point, c.Rejoin))));
+            Assert.That(into.Select(c => c.Cost), Is.EqualTo(expected.Select(c => c.Cost)).Within(0.01));
+        }
+        PlayerBotDriver.DetourCandidates<string>(route, 0, [blocker, below], into);
+        Expect((new(1_000, 920, 0), new(2_230, 0, 0), 2_894.82f));
+        PlayerBotDriver.DetourCandidates<string>(route, 0, [blocker], into);
+        Expect((new(1_000, -720, 0), new(2_230, 0, 0), 2_657.47f), (new(1_000, 920, 0), new(2_230, 0, 0), 2_894.82f));
+        PlayerBotDriver.DetourCandidates<string>(route, 0, [blocker, camp], into);
+        Expect((new(1_000, -720, 0), new(2_230, 0, 0), 2_657.47f), (new(1_000, 920, 0), new(2_230, 0, 0), 2_894.82f));
+        PlayerBotDriver.DetourCandidates<string>(new Vector3[] { Vector3.Zero, new(2_000, 0, 0) }, 0, [blocker], into);
+        Expect((new(1_000, -720, 0), new(2_000, 0, 0), 2_464.47f), (new(1_000, 920, 0), new(2_000, 0, 0), 2_717.65f));
+    }
+
+    // #167 F12, the review: on a detour's walk the look-ahead reads every monster at its aggro range + AddMargin / 2, the
+    // clearance the detour's legs were checked at (DetourLegsClear), so it names no monster the detour was let past: A,
+    // orange, aggro 500, 650 from the route's first leg and 820.1 from the bot, blocks at 700 (AddMargin), not at 600.
+    [Test]
+    public void A_detours_walk_reads_its_route_at_the_legs_clearance_in_FirstBlocker()
+    {
+        Vector3[] route = { Vector3.Zero, new(1_000, 0, 0), new(1_000, 3_000, 0) };
+        List<(string Npc, Vector3 At, int AggroRange, ConColor Con)> threats = [("A", new(500, -650, 0), 500, ConColor.ORANGE)];
+        Assert.That(PlayerBotDriver.FirstBlocker(route, threats, ConColor.YELLOW, null, null, out _, out float along),
+            Is.EqualTo(0));
+        Assert.That(along, Is.EqualTo(500).Within(0.01));
+        Assert.That(PlayerBotDriver.FirstBlocker(route, threats, ConColor.YELLOW, null, null, out _, out _,
+            margin: PlayerBotDriver.AddMargin / 2), Is.EqualTo(-1));
+    }
 }
