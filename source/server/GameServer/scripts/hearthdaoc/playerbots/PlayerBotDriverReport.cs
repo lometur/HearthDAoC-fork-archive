@@ -19,6 +19,14 @@ public readonly record struct PlayerBotDriverWindow(
 /// final review of #188) the driver's ring points on the mesh dropped for their island before any walk (OnMesh).</summary>
 public readonly record struct PlayerBotCrossingWindow(int Seconds, long Took, long Ground, long Refused, long Dropped);
 
+/// <summary>#167 F12: one report window's route look-aheads over all bots (PLAYER_BOT_ROUTE win=): the bots then, the
+/// checks (a walk to the anchor read ahead on a search's think, PlayerBotDriver.GuardsRoute), the blockers by what the bot
+/// did (Detours, GiveUps, Passes), the detours' walks that ended blocked, and the checks' own time; then (#167 F12-S,
+/// the second review) the stays' camps moved to where the bot stood, its straight way back passing the monster it gave
+/// up on (Reanchors; PlayerBotDriver.Roam).</summary>
+public readonly record struct PlayerBotRouteWindow(int Seconds, int Bots, long Checks, long Detours, long GiveUps,
+    long Passes, long Blocked, double Ms, long Reanchors = 0);
+
 /// <summary>One settled fight (levelmatch/DEATHS.md 2): the bot's health and power at its first think in reach and now,
 /// the most attackers on a think, the swings seen and those the view gate refused, the casts, and this life's kills and
 /// sits before it; then whether it had a living pet at that first think and its heals on itself since (DEATHS.md A5,
@@ -135,6 +143,8 @@ public static class PlayerBotDriverReport
     private static long _ticks, _tickStopwatch, _moverStopwatch, _kills, _deaths, _levelUps, _experience, _blocked, _stuck,
         _ldCancelled, _errors;
     private static long _crossingTook, _crossingGround, _crossingRefused, _crossingDropped;    // #188
+    private static long _routeChecks, _routeStopwatch, _routeDetours, _routeGiveUps, _routePasses, _routeBlocked;   // #167 F12
+    private static long _routeReanchors;                                                       // #167 F12-S
     private static long _windowStarted;                                                        // #188: its start (Stopwatch)
     private static int _maxLevel, _windows;
     private static Timer _timer;
@@ -166,6 +176,26 @@ public static class PlayerBotDriverReport
     // The final review of #188: each ring point on the mesh the driver drops for its island (PlayerBotDriver.OnMesh), the
     // guard's common case live, which no step sees.
     public static void CrossingDropped() => Interlocked.Increment(ref _crossingDropped);
+    // #167 F12: each route look-ahead (PlayerBotDriver.GuardsRoute) and its time, and what a blocker made the bot do, for
+    // PLAYER_BOT_ROUTE win=.
+    public static void AddRoute(long stopwatchTicks)
+    {
+        Interlocked.Increment(ref _routeChecks);
+        Interlocked.Add(ref _routeStopwatch, stopwatchTicks);
+    }
+    public static void Route(PlayerBotRouteAction action)
+    {
+        switch (action)
+        {
+            case PlayerBotRouteAction.Detour: Interlocked.Increment(ref _routeDetours); break;
+            case PlayerBotRouteAction.GiveUp: Interlocked.Increment(ref _routeGiveUps); break;
+            case PlayerBotRouteAction.Pass: Interlocked.Increment(ref _routePasses); break;
+            default: Interlocked.Increment(ref _routeBlocked); break;
+        }
+    }
+    // #167 F12-S (the second review): each stay's camp moved to where the bot stands (PlayerBotDriver.Roam), for
+    // PLAYER_BOT_ROUTE win= reanchors=.
+    public static void RouteReanchor() => Interlocked.Increment(ref _routeReanchors);
 
     public static void LevelUp(int levels, int newLevel)
     {
@@ -192,8 +222,13 @@ public static class PlayerBotDriverReport
         if (timer == null) return;
         timer.Dispose();
         long since = Stopwatch.GetTimestamp() - Volatile.Read(ref _windowStarted);
-        PlayerBotCrossingWindow last = TakeCrossings((int)Math.Round((double)since / Stopwatch.Frequency));
+        int seconds = (int)Math.Round((double)since / Stopwatch.Frequency);
+        PlayerBotCrossingWindow last = TakeCrossings(seconds);
         if (Log.IsInfoEnabled) Log.Info(FormatCrossing(last));
+        int bots = 0;
+        foreach (PlayerBotState _ in PlayerBotDriver.States) bots++;
+        PlayerBotRouteWindow route = TakeRoute(seconds, bots);                   // #167 F12: its last line too
+        if (Log.IsInfoEnabled) Log.Info(FormatRoute(route));
     }
 
     /// <summary>#188: the changes of island (and ring points dropped) since the last call, for a PLAYER_BOT_CROSSING win=
@@ -201,6 +236,14 @@ public static class PlayerBotDriverReport
     public static PlayerBotCrossingWindow TakeCrossings(int seconds) => new(seconds, Interlocked.Exchange(ref _crossingTook, 0),
         Interlocked.Exchange(ref _crossingGround, 0), Interlocked.Exchange(ref _crossingRefused, 0),
         Interlocked.Exchange(ref _crossingDropped, 0));
+
+    /// <summary>#167 F12: the window's route look-aheads (PLAYER_BOT_ROUTE win=), the counters from zero again.</summary>
+    public static PlayerBotRouteWindow TakeRoute(int seconds, int bots) => new(seconds, bots,
+        Interlocked.Exchange(ref _routeChecks, 0), Interlocked.Exchange(ref _routeDetours, 0),
+        Interlocked.Exchange(ref _routeGiveUps, 0), Interlocked.Exchange(ref _routePasses, 0),
+        Interlocked.Exchange(ref _routeBlocked, 0),
+        Interlocked.Exchange(ref _routeStopwatch, 0) * 1000.0 / Stopwatch.Frequency,
+        Interlocked.Exchange(ref _routeReanchors, 0));
 
     private static void Write()
     {
@@ -251,6 +294,8 @@ public static class PlayerBotDriverReport
             Volatile.Write(ref _windowStarted, Stopwatch.GetTimestamp());          // #188: its own line too, every window
             PlayerBotCrossingWindow crossing = TakeCrossings(WindowSeconds);
             if (Log.IsInfoEnabled) Log.Info(FormatCrossing(crossing));
+            PlayerBotRouteWindow route = TakeRoute(WindowSeconds, bots);           // #167 F12: its own line too
+            if (Log.IsInfoEnabled) Log.Info(FormatRoute(route));
             int window = Interlocked.Increment(ref _windows);
             if (window % TallyEveryWindows == 0 && Log.IsInfoEnabled)
                 foreach (PlayerBotState s in PlayerBotDriver.States)                   // fields written on the loop: whole-value reads
@@ -395,6 +440,18 @@ public static class PlayerBotDriverReport
     /// PlayerBotPathMover.ReportCrossing).</summary>
     public static string FormatCrossing(PlayerBotCrossingWindow w) => string.Create(CultureInfo.InvariantCulture,
         $"PLAYER_BOT_CROSSING win={w.Seconds} took={w.Took} ground={w.Ground} refused={w.Refused} dropped={w.Dropped}");
+
+    /// <summary>#167 F12: PLAYER_BOT_ROUTE win=, after CROSSING: the window's route look-aheads (PlayerBotRouteWindow),
+    /// the stays' camps moved (reanchors=, #167 F12-S), their time in all (ms=) and per bot-second (msPerBotSec=;
+    /// - with no bot).</summary>
+    public static string FormatRoute(PlayerBotRouteWindow w)
+    {
+        CultureInfo c = CultureInfo.InvariantCulture;
+        string perBotSecond = w.Bots == 0 || w.Seconds == 0 ? "-" : (w.Ms / ((double)w.Bots * w.Seconds)).ToString("0.00000", c);
+        return string.Create(c, $"PLAYER_BOT_ROUTE win={w.Seconds} bots={w.Bots} checks={w.Checks} detours={w.Detours} " +
+            $"giveups={w.GiveUps} passes={w.Passes} blocked={w.Blocked} reanchors={w.Reanchors} ms={w.Ms:0.000} " +
+            $"msPerBotSec={perBotSecond}");
+    }
 
     public static string Format(PlayerBotDriverWindow w)
     {
