@@ -370,6 +370,10 @@ public sealed class PlayerBotState
     public GameNPC RouteGaveUpOn;                                // #167 F12-R: the monster its walk gave its camp up
                                                                  //   for (GiveUpRoute), the replan's blocker
                                                                  //   (RouteGiveUpBlockers)
+    public (GameNPC Npc, Vector3 At, int AggroRange) RouteAvoid; // #167 F12-S: a stay's monster (StayHere: the one
+    public long RouteAvoidUntil;                                 //   given up on, as the replan read it), kept out of
+                                                                 //   the roam and the pulls (StayAvoid) until then (0:
+                                                                 //   no stay)
 }
 
 // HearthDAoC player bots (#137): a thin copy of the /bot pilot's think (bots/autonomous/AutonomousPlayerPilot.cs:229-374) for a
@@ -437,6 +441,9 @@ public static class PlayerBotDriver
     public const int RouteGiveUpMilliseconds = 600_000;      //   (RetargetCooldownMilliseconds, :35), a detour point's
     public const int RouteDetourStop = 60;                   //   stop (the GameBots' arrival radius, AWBC.RouteThreats:139),
     public const int RouteCheckedDetours = 2;                //   and the points looked up on the navmesh per blocker (inf.)
+    public const int RouteStayTries = 4;                     // #167 F12-S: a stay's roam points tried (PickRoamPoint),
+    public const int RouteStayStepOut = 100;                 //   and how far past the monster's reach its anchor steps
+                                                             //   out of it (StayAnchor; inf.)
     public const int KillerConMemoryMilliseconds = 300_000;  // #167 D6: a killer's con kept (st-deathsD's fix round, inf.)
     public static readonly int[] StepOutRings = [500, 900, 1_300, 1_700, 2_100, 2_500];   // #167 F4: a released bot's
     public const int SpotDirections = 12;                    //   candidate spots, every 30 degrees on each ring
@@ -865,7 +872,8 @@ public static class PlayerBotDriver
     /// <summary>Step 4: a bot in another region (a release to a bind there, a re-entry) starts its hunt afresh: no walk,
     /// target, idle or capped clock, fallback cap or stale camp's names. Its failed camps stay (#167 F4): each has its
     /// region (FailedCamps); cleared, a bot that came back planned into the camp it died at. #167 F P1: no crowd
-    /// refusals, lift or crowd bars (the review: cleared on a region change).</summary>
+    /// refusals, lift or crowd bars (the review: cleared on a region change). #167 F12-S: no stay
+    /// (RouteAvoid).</summary>
     public static void ResetOnRegionChange(PlayerBotState state, ushort region)
     {
         state.LastRegion = region;
@@ -874,6 +882,7 @@ public static class PlayerBotDriver
         state.RoamDestination = null;
         (state.RouteGoal, state.RouteWaypoint) = (null, null);                          // #167 F12: read afresh
         state.RouteRounded.Clear();
+        (state.RouteAvoid, state.RouteAvoidUntil) = (default, 0);                       // #167 F12-S: a stay ends
         state.RoamingSince = 0;
         state.CappedSince = 0;
         state.FallbackCap = null;
@@ -1722,7 +1731,9 @@ public static class PlayerBotDriver
     // candidate counts as passed over, and those refused since the last target go to CrowdRefused for the capped plan's
     // bar. A target the bot walks to is searched again every 2 s until it fights, so one whose crowd rises past its
     // limit on the walk in is dropped. The scan reads each threat's con before the filters (P1b's overCap; GetConLevel
-    // is level arithmetic): the candidates' con is the same as before.
+    // is level arithmetic): the candidates' con is the same as before. #167 F12-S: while the bot stays (StayAvoid), a
+    // candidate whose walk in doesn't keep clear of the monster it gave up on (StayClear: in its reach, or past it on
+    // the straight way) is left out, as one beyond the leash is (not passed over), but that monster itself.
     private static GameNPC FindWithin(PlayerBotState state, GamePlayer player, ushort radius, long now,
         out PlayerBotPickReading reading)
     {
@@ -1738,6 +1749,8 @@ public static class PlayerBotDriver
         List<int> limits = _limits ??= new();
         List<GameNPC> refused = _refused ??= new();
         HashSet<GameNPC> overCap = _overCap ??= new();                                  // #167 F P1b
+        Vector3 from = new(player.X, player.Y, player.Z);
+        (GameNPC Npc, Vector3 At, int AggroRange)? avoid = StayAvoid(state, player, now);   // #167 F12-S
         foreach (GameNPC npc in player.GetNPCsInRadius((ushort)(radius + AddScanMargin)))
         {
             bool experience = IsExperienceTarget(npc);                                  // monsters only, adds too, and
@@ -1753,7 +1766,8 @@ public static class PlayerBotDriver
                 PickSkips(state, npc, now))                                          // #167 E M2, U1
                 continue;
             if (!AutonomousPlayerPilot.IsEligibleExperienceTarget(con, npc.EffectiveLevel, player.Level, 1) ||
-                leashed && Vector3.Distance(at, state.Anchor) > LeashRadius + RoamRadius)
+                leashed && Vector3.Distance(at, state.Anchor) > LeashRadius + RoamRadius ||
+                avoid is { } stay && npc != stay.Npc && !StayClear(from, at, stay.At, stay.AggroRange))   // #167 F12-S
                 continue;
             int score = TargetScore(player.GetDistanceTo(npc), con);                    // AWBC:3100
             if (con <= cap && (state.HuntAvoided || !IsAvoided(state.AvoidUntil, npc.Name, now) &&
@@ -1768,7 +1782,6 @@ public static class PlayerBotDriver
                 if (con > cap && (safestOver == null || con < safestOver)) safestOver = con;
             }
         }
-        Vector3 from = new(player.X, player.Y, player.Z);
         int stop = PullStop(state, player);
         List<(GameNPC Npc, Vector3 At, int AggroRange)> due = _due ??= new();           // #167 F P2: its kills' spots
         bool readsDue = ReadsDueRespawns(role);                                         //   coming due, 50-150 s after
@@ -2174,13 +2187,16 @@ public static class PlayerBotDriver
 
     /// <summary>PLAYER_BOT_RELOCATE when no camp checked had a corridor (or none was found): checked= of them. #167 F
     /// P1: lifted=1 when the fallback in place that follows lifted the crowd limits (FallBackInPlace). #167 F12-R: on a
-    /// route give-up's, the spots it skipped (routeSkipped=: a corridor, but a way past a blocker) count too.</summary>
+    /// route give-up's, the spots it skipped (routeSkipped=: a corridor, but a way past a blocker) count too. #167
+    /// F12-S: a route give-up's then ends with stay=1 when the bot hunts where it stands (StayHere), stay=0 when it
+    /// walks on to its own camp (FallBack's ResumeRoute); no other reason's line has it, nor a line with a
+    /// camp.</summary>
     public static string RelocateNoneLine(string bot, int level, int candidates, ushort zone, string reason,
         long sinceReleaseMs, bool barredOld, ConColor? capKill, bool recent = false, int crowdRefused = 0,
-        bool lifted = false, int overSkipped = 0, int routeSkipped = 0) =>
+        bool lifted = false, int overSkipped = 0, int routeSkipped = 0, bool stay = false) =>
         $"PLAYER_BOT_RELOCATE bot={bot} level={level} none checked={candidates} zone={zone} reason={reason}" +
         RelocateSuffix(reason, sinceReleaseMs, barredOld, capKill, recent, false, crowdRefused, lifted, overSkipped,
-            routeSkipped);
+            routeSkipped) + (reason == RouteGiveUp ? $" stay={(stay ? 1 : 0)}" : "");
 
     /// <summary>#167 F P1 (the review: every lift logged): PLAYER_BOT_LIFT, a fallback in place that lifted the crowd
     /// limits where RelocateIfOutgrown writes no RELOCATE line (why=norelocate: it can't move its leash, or no zone to
@@ -2195,7 +2211,8 @@ public static class PlayerBotDriver
     // recent=1 and near=1. #167 F P1: then crowdRefused=, the crowd bars' spots a capped plan barred, and lifted=1 on a
     // camp it took anyway (InCrowdBarred) or a fallback in place that lifted the limits. #167 F P3: then overSkipped=, the
     // fit spots skipped for an over-cap aggressive monster in reach (each once). #167 F12-R: last, on a route give-up's
-    // (reason=route) only, routeSkipped=, the camp spots skipped for a monster it gave up on or walked past (0 too).
+    // (reason=route) only, routeSkipped=, the camp spots skipped for the monster it gave up on (0 too); #167 F12-S: a
+    // none line's stay= follows it (RelocateNoneLine).
     private static string RelocateSuffix(string reason, long sinceReleaseMs, bool barredOld, ConColor? capKill,
         bool recent, bool near, int crowdRefused = 0, bool lifted = false, int overSkipped = 0, int routeSkipped = 0) =>
         (reason == Died ? $" sinceRelease={sinceReleaseMs}" : "") + (barredOld ? " barred=old" : "") +
@@ -2253,10 +2270,11 @@ public static class PlayerBotDriver
     /// clock afresh (the next search starts it, on the way there too), BACK replan=moved after a death (#167 C1; same at
     /// the anchor it had, D4), and the relocation owed planned (#167 F4, C2). The review of 9aacd69: with BackMoved's line
     /// dropped no test failed. #167 F P1: the crowd refusals afresh, the limits lifted until crowdLiftedUntil (0: on); the
-    /// crowd bars stay (CrowdBars, 10 minutes each).</summary>
+    /// crowd bars stay (CrowdBars, 10 minutes each). #167 F12-S: a stay ends (RouteAvoid).</summary>
     public static void PlanCamp(PlayerBotState state, Vector3 spot, ConColor? fallback, bool stale, string reason,
         long crowdLiftedUntil = 0)
     {
+        (state.RouteAvoid, state.RouteAvoidUntil) = (default, 0);                       // #167 F12-S
         if (reason == Died) state.BackSame = SameCamp(spot, state.Anchor);
         state.Anchor = spot;
         state.RoamDestination = spot;
@@ -3452,6 +3470,35 @@ public static class PlayerBotDriver
                 return i;
         }
         return -1;
+    }
+
+    /// <summary>#167 F12-S: where a route give-up that stays (StayHere) anchors: where it stands (here), snapped on its
+    /// mesh (onMesh: OnMesh's; none, here as it is). If the reach of the monster it gave up on (at: aggro range +
+    /// AddMargin, 3D) covers here (it gave up late), the point RouteStayStepOut past that reach straight away from the
+    /// monster, the way it came (the monster lay ahead on its route), at its height, snapped, if that is out of the
+    /// reach; else here. Only the anchor moves: the bot walks no step for it.</summary>
+    public static Vector3 StayAnchor(Vector3 here, Vector3 at, int aggroRange, Func<Vector3, Vector3?> onMesh)
+    {
+        Vector2 away = new(here.X - at.X, here.Y - at.Y);
+        float length = away.Length();
+        if (CoversPoint(at, aggroRange, here) && length >= 1 &&
+            onMesh(new Vector3(at.X, at.Y, here.Z) +
+                new Vector3(away * ((aggroRange + AddMargin + RouteStayStepOut) / length), 0)) is Vector3 stepped &&
+            !CoversPoint(at, aggroRange, stepped))
+            return stepped;
+        return onMesh(here) ?? here;
+    }
+
+    /// <summary>#167 F12-S: whether a walk from `from` to `to` keeps clear of the monster a stay keeps out (at, its
+    /// aggro range; StayAvoid): `to` out of its reach (aggro range + AddMargin, 3D, InAddReach's), and the straight way
+    /// there no nearer to it than that reach, or than the bot stands when inside it already (DetourClearance's rule): a
+    /// bot in its reach may leave it. Read for a roam point (PickRoamPoint) and a hunt target (FindWithin) while it
+    /// stays.</summary>
+    public static bool StayClear(Vector3 from, Vector3 to, Vector3 at, int aggroRange)
+    {
+        float reach = aggroRange + AddMargin, clearance = Math.Max(0, Math.Min(reach, Vector3.Distance(from, at) - 1));
+        return Vector3.DistanceSquared(at, to) > reach * reach &&
+               SegmentDistanceSquared(at, from, to) > clearance * clearance;
     }
 
     /// <summary>#167 F12: the first monster along a walk's route ahead (route: from the bot, UpcomingRoute) that blocks it
@@ -5395,7 +5442,9 @@ public static class PlayerBotDriver
     // (TryFloorStep). #167 E fix U4: at once only with no real player in sight; else the bot is held, with no walk,
     // until none is, or until it can walk back (HoldsCutOff). #167 F12: the walk to the anchor looks ahead on its route
     // (GuardsRoute): it gives its camp up there (held for the plan), or walks round a monster to a detour's point, a
-    // blocked one ending the detour (PLAYER_BOT_BLOCKED walk=detour, ROUTE action=blocked), not the walk.
+    // blocked one ending the detour (PLAYER_BOT_BLOCKED walk=detour, ROUTE action=blocked), not the walk. #167 F12-S:
+    // a stay's roam keeps clear of the monster it gave up on (PickRoamPoint, StayAvoid); the leash's walk back to the
+    // anchor is a walk to the anchor, which the look-ahead reads.
     private static void Roam(PlayerBotState state, GamePlayer player, long now)
     {
         if (HoldsCutOff(state, player, now)) return;
@@ -5404,7 +5453,7 @@ public static class PlayerBotDriver
         if (leashed && Vector3.Distance(here, state.Anchor) > LeashRadius)
             state.RoamDestination = state.Anchor;
         else if (state.RoamDestination == null || Vector3.Distance(here, state.RoamDestination.Value) < 80)
-            state.RoamDestination = PickRoamPoint(player, leashed ? state.Anchor : here);
+            state.RoamDestination = PickRoamPoint(player, leashed ? state.Anchor : here, StayAvoid(state, player, now));
         state.Activity = PlayerBotActivity.Roaming;
         state.Walk = state.RoamDestination == state.Anchor ? PlayerBotWalk.Anchor : PlayerBotWalk.Roam;   // #167 walk=
         if (GuardsRoute(state, player, now)) return;                                    // #167 F12: gave its camp up
@@ -5699,8 +5748,8 @@ public static class PlayerBotDriver
     // anchor's region is the bot's (CanRelocate). #167 E W1: after a death (AfterDeathPlan) it first takes a camp near
     // where it stands (PlanCampChoice's near pass: the zone it stands in, within NearWalk, corridors from here), and only
     // with none the plan as before. One read of the region's monsters serves both passes. #167 F12-R: a route give-up's
-    // plan skips the camp spots whose way passes a monster that walk gave up on or walked past (TakeCamp,
-    // ReplanBlocker).
+    // plan skips the camp spots whose way passes the monster that walk gave up on (TakeCamp, ReplanBlocker); #167
+    // F12-S: with a spot skipped so and no camp taken, the bot hunts where it stands (StayHere).
     private static void RelocateIfOutgrown(PlayerBotState state, GamePlayer player, long now)
     {
         string reason = RelocateReason(state.RoamingSince, state.CappedSince, now, state.ReplanOwed);
@@ -5763,12 +5812,16 @@ public static class PlayerBotDriver
             if (TakeCamp(spots, fallback, stale, near)) return;
         }
         // #167 F12 (the review): a route give-up that took no camp, for want of one or of a corridor to one, walks on to
-        // its own (FallBack's ResumeRoute): never held to the hold's end, then hunting by its blocker (EndReplan).
-        bool lifted = (spots.Length == 0 || reason == RouteGiveUp) &&              // no camp in the zone: none to try next
-            FallBack(state, player, reason, now);                                  //   time either; #167 F P1: a lift
+        // its own (FallBack's ResumeRoute): never held to the hold's end, then hunting by its blocker (EndReplan). #167
+        // F12-S: one that skipped a spot for the monster it gave up on (each camp it could walk to lies behind it)
+        // hunts where it stands instead (StayHere; the owner's decision of 2026-11-02): no walk on past that monster.
+        bool stay = reason == RouteGiveUp && routeSkipped > 0;
+        if (stay) StayHere(state, player, gaveUpOn[0], now);
+        bool lifted = !stay && (spots.Length == 0 || reason == RouteGiveUp) &&  // no camp in the zone: none to try next
+            FallBack(state, player, reason, now);                               //   time either; #167 F P1: a lift
         if (Log.IsInfoEnabled)
             Log.Info(RelocateNoneLine(player.Name, player.Level, spots.Length, zone.ID, reason, now - state.ReleasedAt,
-                barredOld, killerCon, afterDeath, crowdRefused, lifted, overSkipped.Count, routeSkipped));
+                barredOld, killerCon, afterDeath, crowdRefused, lifted, overSkipped.Count, routeSkipped, stay));
 
         // The first of a camp's spots it has a corridor to (one without is rejected, RelocateRejected): RELOCATE, PlanCamp.
         // #167 F P1: a spot the crowd bar barred (only the fallback takes one) lifts the limits there (InCrowdBarred).
@@ -5866,6 +5919,31 @@ public static class PlayerBotDriver
         state.RoamDestination = null;
     }
 
+    // #167 F12-S: a route give-up whose plan skipped each camp it could walk to for the monster it gave up on
+    // (blocker: the plan's reading of it, RouteGiveUpBlockers: where it stands, its aggro range) hunts where it stands:
+    // the anchor here, snapped on its mesh, or stepped out of that monster's reach (StayAnchor; only the anchor moves),
+    // the roam picked afresh round it, no hold and no plan owed (no second reason=route plan). That monster, as read,
+    // is kept out of its roam and its pulls (StayAvoid) for FailureMemoryMilliseconds, the barred camp's 15 minutes,
+    // or until a camp is planned (PlanCamp), a death or a region change. The give-up's cooldown and the bar on its
+    // camp stay.
+    private static void StayHere(PlayerBotState state, GamePlayer player, (Vector3 At, int AggroRange) blocker,
+        long now)
+    {
+        state.Anchor = StayAnchor(new(player.X, player.Y, player.Z), blocker.At, blocker.AggroRange,
+            point => OnMesh(player, point, countDropped: false));
+        state.RoamDestination = null;
+        (state.ReplanOwed, state.ReplanSince) = (null, 0);
+        state.RouteAvoid = (state.RouteGaveUpOn, blocker.At, blocker.AggroRange);
+        state.RouteAvoidUntil = now + AutonomousDeathRecoveryPolicy.FailureMemoryMilliseconds;
+    }
+
+    // #167 F12-S: the monster a stay keeps out of the bot's roam (PickRoamPoint) and its pulls (FindWithin's pick)
+    // while the stay lasts (RouteAvoidUntil), unless it fights the bot already (IsAttacking: that fight is on); else
+    // none.
+    private static (GameNPC Npc, Vector3 At, int AggroRange)? StayAvoid(PlayerBotState state, GamePlayer player,
+        long now) =>
+        now < state.RouteAvoidUntil && !IsAttacking(player, state.RouteAvoid.Npc) ? state.RouteAvoid : null;
+
     // FallbackInPlace's cap where the bot is; its next search finds the monster it passed over, and the hold ends. #167 F
     // P1: with only crowded monsters refused, the crowd limits lift here (CrowdLiftAfterFallback) and the hold ends too;
     // true then (logged: the none line's lifted=1, else a LIFT line).
@@ -5881,13 +5959,23 @@ public static class PlayerBotDriver
         return lifts;
     }
 
-    private static Vector3 PickRoamPoint(GamePlayer player, Vector3 centre)
+    // #167 F12-S: while the bot stays (avoid, StayAvoid), a point whose walk from here doesn't keep clear of the
+    // monster it gave up on (StayClear) is not taken: up to RouteStayTries random points, then the point 700 from the
+    // centre straight away from that monster. Without one, as before: one random point, else one 700 off at random.
+    private static Vector3 PickRoamPoint(GamePlayer player, Vector3 centre,
+        (GameNPC Npc, Vector3 At, int AggroRange)? avoid = null)
     {
         IPathfindingMgr nav = PathfindingProvider.Instance;
-        Vector3? random = nav.GetRandomPoint(player.CurrentZone, centre, RoamRadius, nav.DefaultFilters);
-        if (random.HasValue && Vector3.DistanceSquared(random.Value, new(player.X, player.Y, player.Z)) > 6400)
-            return random.Value;
-        double angle = Random.Shared.NextDouble() * Math.PI * 2;
+        Vector3 here = new(player.X, player.Y, player.Z);
+        for (int i = 0; i < (avoid == null ? 1 : RouteStayTries); i++)
+        {
+            Vector3? random = nav.GetRandomPoint(player.CurrentZone, centre, RoamRadius, nav.DefaultFilters);
+            if (random.HasValue && Vector3.DistanceSquared(random.Value, here) > 6400 &&
+                (avoid is not { } stay || StayClear(here, random.Value, stay.At, stay.AggroRange)))
+                return random.Value;
+        }
+        double angle = avoid is { } away ? Math.Atan2(centre.Y - away.At.Y, centre.X - away.At.X)
+            : Random.Shared.NextDouble() * Math.PI * 2;
         return new(centre.X + (float)(Math.Cos(angle) * 700), centre.Y + (float)(Math.Sin(angle) * 700), centre.Z);
     }
 
@@ -6672,6 +6760,7 @@ public static class PlayerBotDriver
             state.RoamDestination = null;
             (state.RouteGoal, state.RouteWaypoint) = (null, null);                      // #167 F12: the walk read afresh
             state.RouteRounded.Clear();
+            (state.RouteAvoid, state.RouteAvoidUntil) = (default, 0);                   // #167 F12-S: a stay ends
             state.RoamingSince = 0;                                                     // back at the bind point: a fresh start
             state.RelocateRejected.Clear();
             state.Mover.Reset();
