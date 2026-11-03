@@ -134,13 +134,13 @@ public static class PlayerBotSessions
         selfTestSlot && (!sessionsOn || entries == 1);
 
     /// <summary>Whether a small plan's quest fighter gets its errands at this world entry (entries counts it), after
-    /// the errand's own re-login is handled. Sessions off, as at 350d60c: every time. On: the run's first entry only, not
-    /// each session's login.</summary>
+    /// the errand's own re-login is handled. Sessions off, as at 350d60c: every time. On: the run's first entry only,
+    /// not each session's login.</summary>
     public static bool GivesErrands(bool sessionsOn, int entries) => !sessionsOn || entries == 1;
 
     /// <summary>Whether a bot's logout releases it first (HeadlessClient.QuitOnGameLoop). Sessions on: a dead bot, as a
-    /// link death's end does (GamePlayer.cs:1131-1137), so a drop's relogin is at its bind with the release's costs, not
-    /// alive where it died (WorldInitRequestHandler.cs:108-112). Off: never, as at 350d60c.</summary>
+    /// link death's end does (GamePlayer.cs:1131-1137), so a drop's relogin is at its bind with the release's costs,
+    /// not alive where it died (WorldInitRequestHandler.cs:108-112). Off: never, as at 350d60c.</summary>
     public static bool ReleasesOnLogout(bool sessionsOn, bool alive) => sessionsOn && !alive;
 
     /// <summary>Whether a bot keeps its camp (the driver's anchor as it stopped) for its next login: not when it owes a
@@ -149,14 +149,16 @@ public static class PlayerBotSessions
     /// in, as a GameBot that died replans (AWBC:3780-3816).</summary>
     public static bool KeepsCamp(bool replanOwed, int deathsSinceLogOff) => !replanOwed && deathsSinceLogOff <= 0;
 
-    /// <summary>Why the spawner's BeginLogOff can't give the log-off to the driver yet, or null: no driver (not in the world,
-    /// or its self-test still runs), a task it runs (the errands), or the errands' re-login due (that goes first).</summary>
+    /// <summary>Why the spawner's BeginLogOff can't give the log-off to the driver yet, or null: no driver (not in the
+    /// world, or its self-test still runs), a task it runs (the errands), or the errands' re-login due (that goes
+    /// first).</summary>
     public static string LogOffWait(bool driven, bool taskRunning, bool errandRelogDue) =>
         !driven ? "no-driver" : taskRunning ? "task" : errandRelogDue ? "errand-relog" : null;
 
-    /// <summary>Whether a think that finds its bot not alive found it out of the world instead (PlayerBotDriver step 6): a
-    /// quit timer's end on another TimerService worker (GamePlayer.cs:827-828) took it out during the think (Active, then
-    /// Inactive, then Deleted; a death keeps it Active). Sessions on: no death, the think ends. Off: as at 350d60c.</summary>
+    /// <summary>Whether a think that finds its bot not alive found it out of the world instead (PlayerBotDriver step
+    /// 6): a quit timer's end on another TimerService worker (GamePlayer.cs:827-828) took it out during the think
+    /// (Active, then Inactive, then Deleted; a death keeps it Active). Sessions on: no death, the think ends. Off: as
+    /// at 350d60c.</summary>
     public static bool LeftDuringThink(bool sessionsOn, bool active) => sessionsOn && !active;
 
     /// <summary>A session's or an offline gap's length, uniform between min and max minutes, to the second.</summary>

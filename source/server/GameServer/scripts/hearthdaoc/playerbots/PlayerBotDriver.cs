@@ -105,7 +105,7 @@ public sealed class PlayerBotState
     public Vector3 Anchor { get; set; }             // spawn point: the leash centre; moved when a task ends far away
     public PlayerBotDriverTimer Timer { get; set; }
     public IPlayerBotTask Task { get; set; }
-    public Action<PlayerBotState> OnStop;           // #160: run once by Stop, before the task goes (PlayerBotSpawner.Carry)
+    public Action<PlayerBotState> OnStop;           // #160: run once by Stop (PlayerBotSpawner.Carry)
     public volatile bool Stopped;
     public volatile PlayerBotActivity Activity;      // read by the report thread
     public volatile int NearPlayerBots, NearGamebots;
@@ -675,8 +675,8 @@ public static class PlayerBotDriver
             state.PendingDeath = null;
             if (Log.IsInfoEnabled) Log.Info(DeathLine(held.Head, held.Detail, state.Killer, held.Target));
         }
-        if (!player.IsAlive && PlayerBotSessions.LeftDuringThink(PlayerBotSpawner.Sessions.On,  // 6. #160: a quit, no death
-                player.ObjectState is GameObject.eObjectState.Active)) return;
+        if (!player.IsAlive && PlayerBotSessions.LeftDuringThink(PlayerBotSpawner.Sessions.On,   // 6. #160: a quit,
+                player.ObjectState is GameObject.eObjectState.Active)) return;                  //    no death
         if (!player.IsAlive) { HandleDeath(state, player, now); return; }               // 6
         StartLife(state, now, RoleOf(player.CharacterClass.ID));                         //    a new life
         state.SoloSteps = SoloSteps(player.CharacterClass.ID);                           //    #167 E CY4: the cap's floor

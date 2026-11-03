@@ -86,7 +86,8 @@ public sealed class UT_PlayerBotSpawnerSessions
         return s;
     }
 
-    // F1 stays visible with sessions off: whatever took the bot out, it is Lost, never logged in again, drops uncounted.
+    // F1 stays visible with sessions off: whatever took the bot out, it is Lost, never logged in again, drops
+    // uncounted.
     [TestCase("error")] [TestCase("reaped")] [TestCase("none")] [TestCase("kicked")] [TestCase("quit")]
     [TestCase("logoff-forced")]
     public void Sessions_off_a_bot_that_leaves_for_any_reason_is_lost(string reason)
@@ -185,8 +186,8 @@ public sealed class UT_PlayerBotSpawnerSessions
         Assert.That(s.DeathSteps, Is.EqualTo(PlayerBotDriver.MaxDeathSteps));
     }
 
-    // The camp: the anchor as the driver stopped, used once, at a login in its region; not one the bot died at (a replan
-    // owed), nor after a death on its log-off (deaths past DeathsAtLogOff with the log-off task running).
+    // The camp: the anchor as the driver stopped, used once, at a login in its region; not one the bot died at (a
+    // replan owed), nor after a death on its log-off (deaths past DeathsAtLogOff with the log-off task running).
     [Test]
     public void A_session_keeps_its_camp_for_the_next_login_in_its_region_once()
     {
@@ -259,7 +260,8 @@ public sealed class UT_PlayerBotSpawnerSessions
         States.TryRemove(state.Player, out _);
     }
 
-    // The review of step 1: a late ask (posted again before the first ran) finds its own task: started, nothing replaced.
+    // The review of step 1: a late ask (posted again before the first ran) finds its own task: started, nothing
+    // replaced.
     [Test]
     public void A_late_ask_finds_its_own_log_off_and_marks_it_started()
     {
@@ -272,7 +274,8 @@ public sealed class UT_PlayerBotSpawnerSessions
         States.TryRemove(state.Player, out _);
     }
 
-    // It waits, counted (a waiting line once a minute), for the errands to finish and then for their re-login to go first.
+    // It waits, counted (a waiting line once a minute), for the errands to finish and then for their re-login to go
+    // first.
     [Test]
     public void The_log_off_waits_for_the_errands_and_their_relog()
     {
@@ -316,8 +319,8 @@ public sealed class UT_PlayerBotSpawnerSessions
             now.AddSeconds(PlayerBotSpawner.LogOffRetrySeconds + 1))));
     }
 
-    // The review of step 1: a slot out of the world keeps no client and no player (no offline progress, no memory held):
-    // once its old client is Disconnected, Observe drops it.
+    // The review of step 1: a slot out of the world keeps no client and no player (no offline progress, no memory
+    // held): once its old client is Disconnected, Observe drops it.
     [TestCase(PlayerBotSpawner.SlotPhase.Offline)] [TestCase(PlayerBotSpawner.SlotPhase.Pending)]
     public void A_slot_out_of_the_world_drops_its_old_client_once_it_is_disconnected(PlayerBotSpawner.SlotPhase phase)
     {

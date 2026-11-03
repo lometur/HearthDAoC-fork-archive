@@ -78,7 +78,7 @@ public sealed class UT_PlayerBotSessions
     {
         var dice = new Random(1);
         TimeSpan[] rolls = Enumerable.Range(0, 2_000).Select(_ => PlayerBotSessions.Roll(3, 6, dice)).ToArray();
-        Assert.That((rolls.Min(), rolls.Max()), Is.EqualTo((TimeSpan.FromMinutes(3), TimeSpan.FromMinutes(6))));   // both ends
+        Assert.That((rolls.Min(), rolls.Max()), Is.EqualTo((TimeSpan.FromMinutes(3), TimeSpan.FromMinutes(6))));
         Assert.That(rolls.All(r => r.Ticks % TimeSpan.TicksPerSecond == 0), Is.True);
         Assert.That(PlayerBotSessions.Roll(5, 5, dice), Is.EqualTo(TimeSpan.FromMinutes(5)));
         Assert.That(PlayerBotSessions.Roll(0, 0, dice), Is.EqualTo(TimeSpan.Zero));

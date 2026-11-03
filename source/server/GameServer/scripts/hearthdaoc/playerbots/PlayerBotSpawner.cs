@@ -81,8 +81,8 @@ public static class PlayerBotSpawner
         public volatile bool Equipped;              // set by OnEnteredWorld: the kit's gear went on (not again on a re-login)
         public volatile int Entries;                // set by OnEnteredWorld: worlds entered this run (1: the run's first login)
         public volatile bool LogOffStarted;         // #160: set by BeginLogOff once the log-off is the driver's task
-        public volatile PlayerBotCamp Camp;         // #160: the driver's anchor as the bot left, for its next login (Carry)
-        public volatile int DeathSteps;             // #160: its death cap (PlayerBotState.DeathSafetySteps), carried (Carry)
+        public volatile PlayerBotCamp Camp;         // #160: the driver's anchor as the bot left, for its next login
+        public volatile int DeathSteps;             // #160: its death cap (DeathSafetySteps), carried (Carry)
         public volatile int DeathsAtLogOff;         // #160: the driver's deaths as its log-off began (BeginLogOff)
         public Random Dice { get; } = PlayerBotSessions.Dice(slot);   // #160: its sessions and gaps (the timer only)
         public SlotPhase Phase;                     // the timer only, under Gate
@@ -92,7 +92,8 @@ public static class PlayerBotSpawner
         public int LogOffWaits;                     // #160: BeginLogOff's waits this session (StartSession resets it)
         public string LeftHow = "-";                // #160: quit, logoff-forced or the drop's reason, for the relogin line
         public DateTime LoadingSinceUtc, RetryAtUtc;
-        public DateTime SessionStartUtc, SessionEndsUtc, LogOffAskedUtc, LogOffPostedUtc, LeftUtc;   // #160: asked first, posted last
+        public DateTime SessionStartUtc, SessionEndsUtc, LeftUtc;   // #160
+        public DateTime LogOffAskedUtc, LogOffPostedUtc;            // #160: the log-off asked first, posted last
         public string Name => Client?.Player?.Name ?? "-";
     }
 
@@ -267,7 +268,7 @@ public static class PlayerBotSpawner
                     logOffs++;
                     s.Phase = SlotPhase.LoggingOff;
                     s.LogOffStarted = false;
-                    if (s.LogOffAskedUtc < s.SessionStartUtc) s.LogOffAskedUtc = now;                 //   asked first: askedS
+                    if (s.LogOffAskedUtc < s.SessionStartUtc) s.LogOffAskedUtc = now;                 //   first: askedS
                     s.LogOffPostedUtc = now;
                     NpcService.Instance.Post(BeginLogOff, s);
                     break;
@@ -275,8 +276,8 @@ public static class PlayerBotSpawner
                     s.Phase = SlotPhase.Playing;                                                      // #160: asked again
                     break;
                 case SlotPhase.Offline or SlotPhase.Pending when c is { ClientState: GameClient.eClientState.Disconnected }:
-                    s.Client = null;                                                                  // #160: out, its old client
-                    break;                                                                            //   and player go
+                    s.Client = null;                                                                  // #160: out, its
+                    break;                                                                            //   client goes
             }
         }
     }
@@ -327,10 +328,11 @@ public static class PlayerBotSpawner
         }
     }
 
-    // #160: on the game loop (an NpcService posted action, as StartOnGameLoop). The log-off becomes the driver's task once
-    // the driver runs the bot with no other task (the errands) and no errand re-login due (that goes first); else the slot
-    // asks again after LogOffRetrySeconds, with a waiting line once a minute (PlayerBotSessions.LogOffWait). A late ask,
-    // posted again before this one ran, finds the log-off already given: it marks it started and changes nothing.
+    // #160: on the game loop (an NpcService posted action, as StartOnGameLoop). The log-off becomes the driver's task
+    // once the driver runs the bot with no other task (the errands) and no errand re-login due (that goes first); else
+    // the slot asks again after LogOffRetrySeconds, with a waiting line once a minute (PlayerBotSessions.LogOffWait). A
+    // late ask, posted again before this one ran, finds the log-off already given: it marks it started and changes
+    // nothing.
     private static void BeginLogOff(SlotState s)
     {
         try
@@ -375,8 +377,8 @@ public static class PlayerBotSpawner
         state.OnStop = stopped => Carry(s, stopped);
     }
 
-    // #160: the driver's stop (PlayerBotState.OnStop: on the game loop, once a session, a log-off's or a drop's), what the
-    // next login carries: the death cap, and the camp (the anchor) unless the bot owes a replan or died since its
+    // #160: the driver's stop (PlayerBotState.OnStop: on the game loop, once a session, a log-off's or a drop's), what
+    // the next login carries: the death cap, and the camp (the anchor) unless the bot owes a replan or died since its
     // log-off began (PlayerBotSessions.KeepsCamp). Its other memories (failed camps, avoided names, killers' cons) end
     // with the session: they last 5-15 minutes, under the default offline gap.
     private static void Carry(SlotState s, PlayerBotState state)
@@ -437,9 +439,9 @@ public static class PlayerBotSpawner
             DbAccount account = PlayerBotAccounts.EnsureAccount(s.Slot);
             if (Sessions.On) PlayerBotAccounts.TouchLogin(account);                                   // #160
             HeadlessClient client = new(account);
-            PlayerBotSpot spot = PlayerBotSessions.PlacesSpot(Sessions.On, s.Entries, s.ErrandRelogged)
-                ? _spots.For(s.Slot) : null;                                                          // #160: not the errand's
-                                                                                                      //   re-login; on, no relogin
+            PlayerBotSpot spot = PlayerBotSessions.PlacesSpot(Sessions.On, s.Entries, s.ErrandRelogged)   // #160: not
+                ? _spots.For(s.Slot) : null;                                                          //   the errand's
+                                                                                                      //   or a relogin
             if (spot?.Build != null && s.Kit == null)                                                 // once per slot: a retry keeps it
             {
                 PlayerBotKitPlan kit = PlayerBotKit.Plan(spot.Build, PlayerBotKit.Seed(s.Slot));
@@ -512,7 +514,7 @@ public static class PlayerBotSpawner
                     Log.Warn($"{LogPrefix} driver not started account={s.Slot.AccountName} after=relog");
                 return;                                                                               // T5
             }
-            if (PlayerBotSessions.RunsSelfTest(Sessions.On, s.SelfTest, s.Entries))                    // #160: on, the first login
+            if (PlayerBotSessions.RunsSelfTest(Sessions.On, s.SelfTest, s.Entries))                    // #160: on, once
             {
                 // onDone runs on the self-test's timer; a region trip that has not re-entered yet leaves it undriven.
                 HeadlessSelfTest.Start(c, done =>                                                     // T4 (T3: Start(c))
@@ -527,7 +529,7 @@ public static class PlayerBotSpawner
                 Log.Warn($"{LogPrefix} driver not started account={s.Slot.AccountName}");             // T4
                 return;                                                                               // T4
             }
-            if (errands && PlayerBotSessions.GivesErrands(Sessions.On, s.Entries))                    // T5; #160: on, once a run
+            if (errands && PlayerBotSessions.GivesErrands(Sessions.On, s.Entries))                    // T5; #160
                 PlayerBotDriver.StateOf(player).Task = new PlayerBotErrandTask(new PlayerBotErrands(player),
                     done => { if (done) s.RelogRequested = true; });                                  // T5
         }
