@@ -149,6 +149,11 @@ public static class PlayerBotSessions
     /// in, as a GameBot that died replans (AWBC:3780-3816).</summary>
     public static bool KeepsCamp(bool replanOwed, int deathsSinceLogOff) => !replanOwed && deathsSinceLogOff <= 0;
 
+    /// <summary>Why the spawner's BeginLogOff can't give the log-off to the driver yet, or null: no driver (not in the world,
+    /// or its self-test still runs), a task it runs (the errands), or the errands' re-login due (that goes first).</summary>
+    public static string LogOffWait(bool driven, bool taskRunning, bool errandRelogDue) =>
+        !driven ? "no-driver" : taskRunning ? "task" : errandRelogDue ? "errand-relog" : null;
+
     /// <summary>A session's or an offline gap's length, uniform between min and max minutes, to the second.</summary>
     public static TimeSpan Roll(int minMinutes, int maxMinutes, Random dice) =>
         TimeSpan.FromSeconds(minMinutes * 60 + dice.Next((maxMinutes - minMinutes) * 60 + 1));

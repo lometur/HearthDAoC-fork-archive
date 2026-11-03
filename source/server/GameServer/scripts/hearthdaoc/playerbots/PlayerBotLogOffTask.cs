@@ -9,7 +9,7 @@ namespace DOL.GS.HearthDAoC.PlayerBots;
 // rest, stand or self-cast while it holds the think. First the fight: while a monster hits the bot, or the target it
 // engaged is still in the fight, the driver fights it (PlayerBotDriver.UnderAttack, the errand task's rule). Then, once
 // per try, a spot out of the reach of every monster round it that would aggro (PlayerBotDriver.LogOffSpot), the walk
-// there, a stop, and the player's /quit (GamePlayer.Quit(false), GamePlayer.cs:1057-1098): the sit, the session
+// there (standing first if it sat to rest: a walk doesn't stand it), a stop, and the player's /quit (GamePlayer.Quit(false), GamePlayer.cs:1057-1098): the sit, the session
 // statistics, the quit timer of 20 s or up to 60 s after combat (GamePlayer.cs:718-833), sitting still. A hit stands it
 // and the driver fights (the quit is cancelled, GamePlayer.cs:8793-8802); then it tries again. A refused /quit (moving,
 // mounted, crafting, an instance: GamePlayer.cs:1059-1084) lets the bot play on for a minute, then it tries again. At the
@@ -69,6 +69,9 @@ public sealed class PlayerBotLogOffTask : IPlayerBotTask
                 (_spotChecked, _spotAt) = (true, now);
                 _spot = PlayerBotDriver.LogOffSpot(player);
                 return true;
+            case PlayerBotLogOffStep.Stand:
+                player.Sit(false);                                   // seated from a rest: up before the walk (step 13's)
+                return true;
             case PlayerBotLogOffStep.Walk:
                 PlayerBotStepResult walked = state.Mover.StepToward(_spot.Value, 20, now);
                 if (walked is PlayerBotStepResult.Arrived or PlayerBotStepResult.Blocked)
@@ -107,7 +110,7 @@ public sealed class PlayerBotLogOffTask : IPlayerBotTask
 }
 
 /// <summary>The log-off's step this think (PlayerBotLogOffPlan.Next).</summary>
-public enum PlayerBotLogOffStep { Fight, Play, Find, Walk, Stop, Quit, Hold, Force }
+public enum PlayerBotLogOffStep { Fight, Play, Find, Walk, Stop, Quit, Hold, Force, Stand }
 
 /// <summary>The log-off's decisions, from what the bot sees, with no server (UT_PlayerBotSessions).</summary>
 public static class PlayerBotLogOffPlan
@@ -122,8 +125,8 @@ public static class PlayerBotLogOffPlan
 
     /// <summary>In order: the fight first (underAttack: the driver fights, as the errands let it); a quit timer running
     /// (asked, still seated, under QuitWaitMilliseconds) holds; given up and out of every human's sight, the forced
-    /// logout; after a refusal it plays on until its time (playing); then the spot (once per try), the walk to it, a
-    /// stop, and /quit.</summary>
+    /// logout; after a refusal it plays on until its time (playing); then the spot (once per try), the walk to it (a bot
+    /// seated from a rest stands first: the mover's steps don't stand it, GamePlayer.cs:7973), a stop, and /quit.</summary>
     public static PlayerBotLogOffStep Next(bool underAttack, bool sitting, bool quitAsked, long msSinceQuit, bool playing,
         bool spotChecked, bool walking, bool moving, bool givesUp, bool seenByHuman)
     {
@@ -132,7 +135,7 @@ public static class PlayerBotLogOffPlan
         if (givesUp && !seenByHuman) return PlayerBotLogOffStep.Force;
         if (playing) return PlayerBotLogOffStep.Play;
         if (!spotChecked) return PlayerBotLogOffStep.Find;
-        if (walking) return PlayerBotLogOffStep.Walk;
+        if (walking) return sitting && !quitAsked ? PlayerBotLogOffStep.Stand : PlayerBotLogOffStep.Walk;
         if (moving) return PlayerBotLogOffStep.Stop;
         return PlayerBotLogOffStep.Quit;
     }

@@ -136,6 +136,17 @@ public sealed class UT_PlayerBotSessions
         Assert.That(Next(sitting: true), Is.EqualTo(PlayerBotLogOffStep.Quit));   // seated from a rest: /quit as it sits
     }
 
+    // The review of step 1: a bot seated from a rest stands before it walks to its spot (the mover's steps don't stand
+    // it); seated for /quit it holds, and seated at its spot it quits as it sits.
+    [Test]
+    public void Seated_from_a_rest_it_stands_before_the_walk()
+    {
+        Assert.That(Next(sitting: true, walking: true), Is.EqualTo(PlayerBotLogOffStep.Stand));
+        Assert.That(Next(walking: true), Is.EqualTo(PlayerBotLogOffStep.Walk));
+        Assert.That(Next(sitting: true, walking: true, quitAsked: true, msSinceQuit: 1_000), Is.EqualTo(PlayerBotLogOffStep.Hold));
+        Assert.That(Next(sitting: true, spotChecked: false), Is.EqualTo(PlayerBotLogOffStep.Find));
+    }
+
     [TestCase(599_999, 4, false)] [TestCase(600_000, 0, true)] [TestCase(0, 5, true)]
     public void It_gives_up_after_ten_minutes_or_five_refusals(long ms, int refusals, bool givesUp) =>
         Assert.That(PlayerBotLogOffPlan.GivesUp(ms, refusals), Is.EqualTo(givesUp));
@@ -157,6 +168,12 @@ public sealed class UT_PlayerBotSessions
     [TestCase(false, 1, true)] [TestCase(false, 2, true)] [TestCase(true, 1, true)] [TestCase(true, 2, false)]
     public void Sessions_off_gives_the_errands_as_before_and_on_once_a_run(bool on, int entries, bool gives) =>
         Assert.That(PlayerBotSessions.GivesErrands(on, entries), Is.EqualTo(gives));
+
+    [TestCase(false, false, false, "no-driver")] [TestCase(false, true, true, "no-driver")] [TestCase(true, true, true, "task")]
+    [TestCase(true, false, true, "errand-relog")] [TestCase(true, false, false, null)]
+    public void The_log_off_waits_for_a_driver_its_task_and_the_errands_relog(bool driven, bool task, bool errandRelog,
+        string wait) =>
+        Assert.That(PlayerBotSessions.LogOffWait(driven, task, errandRelog), Is.EqualTo(wait));
 
     [TestCase(false, 0, true)] [TestCase(true, 0, false)] [TestCase(false, 1, false)] [TestCase(true, 2, false)]
     public void A_camp_is_kept_unless_the_bot_died_there_or_on_its_log_off(bool replanOwed, int deathsSince, bool keeps) =>

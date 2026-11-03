@@ -49,6 +49,7 @@ public static class PlayerBotSpawner
     public const int MaxPlayersReserve = 50;    // bots count in ClientService.ClientCount, which max_players gates (LoginRequestHandler.cs:426)
     public const int ErrandMaxBots = 3;         // errands and their re-login only when the plan has 3 bots or fewer (run 1)
     public const int LogOffRetrySeconds = 5;    // #160: a log-off the driver could not take yet is asked again
+    public const int LogOffWaitLineEvery = 60 / LogOffRetrySeconds;   // #160: BeginLogOff's waiting line, once a minute
     private const long MB = 1024 * 1024;
 
     private static readonly Logger Log = LoggerManager.Create(typeof(PlayerBotSpawner));
@@ -88,9 +89,10 @@ public static class PlayerBotSpawner
         public int Attempts;
         public bool Started;                        // #160: its first login of the run began (the ramp counts these)
         public int Logins, Drops;                   // #160: worlds entered while sessions are on; drops logged in again
+        public int LogOffWaits;                     // #160: BeginLogOff's waits this session (StartSession resets it)
         public string LeftHow = "-";                // #160: quit, logoff-forced or the drop's reason, for the relogin line
         public DateTime LoadingSinceUtc, RetryAtUtc;
-        public DateTime SessionStartUtc, SessionEndsUtc, LogOffAskedUtc, LeftUtc;   // #160
+        public DateTime SessionStartUtc, SessionEndsUtc, LogOffAskedUtc, LogOffPostedUtc, LeftUtc;   // #160: asked first, posted last
         public string Name => Client?.Player?.Name ?? "-";
     }
 
@@ -265,10 +267,11 @@ public static class PlayerBotSpawner
                     logOffs++;
                     s.Phase = SlotPhase.LoggingOff;
                     s.LogOffStarted = false;
-                    s.LogOffAskedUtc = now;
+                    if (s.LogOffAskedUtc < s.SessionStartUtc) s.LogOffAskedUtc = now;                 //   asked first: askedS
+                    s.LogOffPostedUtc = now;
                     NpcService.Instance.Post(BeginLogOff, s);
                     break;
-                case SlotPhase.LoggingOff when !s.LogOffStarted && (now - s.LogOffAskedUtc).TotalSeconds >= LogOffRetrySeconds:
+                case SlotPhase.LoggingOff when !s.LogOffStarted && (now - s.LogOffPostedUtc).TotalSeconds >= LogOffRetrySeconds:
                     s.Phase = SlotPhase.Playing;                                                      // #160: asked again
                     break;
             }
@@ -281,6 +284,7 @@ public static class PlayerBotSpawner
     {
         if (++s.Logins > 1) _relogins++;
         s.Attempts = 0;
+        s.LogOffWaits = 0;
         s.SessionStartUtc = now;
         s.SessionEndsUtc = now + PlayerBotSessions.Roll(Sessions.SessionMinMinutes, Sessions.SessionMaxMinutes, s.Dice);
     }
@@ -321,16 +325,29 @@ public static class PlayerBotSpawner
     }
 
     // #160: on the game loop (an NpcService posted action, as StartOnGameLoop). The log-off becomes the driver's task once
-    // the driver runs the bot and no other task (the errands); else LoggingOff asks again after LogOffRetrySeconds. The
-    // driver's anchor is kept for the next login (Drive): the session's camp.
+    // the driver runs the bot with no other task (the errands) and no errand re-login due (that goes first); else the slot
+    // asks again after LogOffRetrySeconds, with a waiting line once a minute (PlayerBotSessions.LogOffWait). A late ask,
+    // posted again before this one ran, finds the log-off already given: it marks it started and changes nothing.
     private static void BeginLogOff(SlotState s)
     {
         try
         {
             HeadlessClient client = s.Client;
-            if (client?.Player is not { ObjectState: GameObject.eObjectState.Active } player ||
-                PlayerBotDriver.StateOf(player) is not { } state || state.Task is { Finished: false })
+            PlayerBotState state = client?.Player is { ObjectState: GameObject.eObjectState.Active } player
+                ? PlayerBotDriver.StateOf(player) : null;
+            if (state?.Task is PlayerBotLogOffTask)
+            {
+                s.LogOffStarted = true;
                 return;
+            }
+            string wait = PlayerBotSessions.LogOffWait(state != null, state?.Task is { Finished: false },
+                s.RelogRequested && !s.ErrandRelogged);
+            if (wait != null)
+            {
+                if (s.LogOffWaits++ % LogOffWaitLineEvery == 0)
+                    Log.Info(Invariant($"{LogPrefix} logoff waiting account={s.Slot.AccountName} name={s.Name} why={wait} waits={s.LogOffWaits} askedS={(long)(DateTime.UtcNow - s.LogOffAskedUtc).TotalSeconds}"));
+                return;
+            }
             s.DeathsAtLogOff = state.Deaths;
             state.Task = new PlayerBotLogOffTask(client, GameLoop.GameLoopTime);
             s.LogOffStarted = true;

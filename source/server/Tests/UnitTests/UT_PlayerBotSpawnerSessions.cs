@@ -14,7 +14,8 @@ namespace DOL.GS.Tests;
 // HearthDAoC player bots (#160 step 1, its review): PlayerBotSpawner's session rules on its own slots, by reflection
 // (they are private and static), with no server and no game loop: what Leave does with each reason under both switch
 // values, StartDue's wait for a slot's old client, and what a session carries to the next login (Resume at the login,
-// Carry at the driver's stop: the death cap, and the camp unless a death came after it).
+// Carry at the driver's stop: the death cap, and the camp unless a death came after it); BeginLogOff's waits and late
+// asks, and Observe's asks again.
 [TestFixture, NonParallelizable]
 public sealed class UT_PlayerBotSpawnerSessions
 {
@@ -225,6 +226,94 @@ public sealed class UT_PlayerBotSpawnerSessions
         clean.Task = new PlayerBotLogOffTask(null, 0);
         End(clean);
         Assert.That(s.Camp, Is.EqualTo(new PlayerBotCamp(0, CampB)));
+    }
+
+    // A bot in the world, driven: its client Playing, its player Active, its driver state registered (no timer).
+    private static (PlayerBotSpawner.SlotState Slot, PlayerBotState State) Driven()
+    {
+        HeadlessClient client = Client(GameClient.eClientState.Playing);
+        GamePlayer player = (GamePlayer)RuntimeHelpers.GetUninitializedObject(typeof(GamePlayer));
+        typeof(GamePlayer).GetField("m_client", Hidden)!.SetValue(player, client);
+        client.Player = player;
+        PlayerBotState state = new(player);
+        States[player] = state;
+        PlayerBotSpawner.SlotState s = Slot(PlayerBotSpawner.SlotPhase.LoggingOff);
+        s.Client = client;
+        return (s, state);
+    }
+
+    private sealed class Errands : IPlayerBotTask
+    {
+        public bool Finished { get; set; }
+        public bool Tick(PlayerBotState state, long now) => true;
+    }
+
+    [Test]
+    public void The_log_off_is_given_to_a_free_driver_with_its_deaths_so_far()
+    {
+        SessionsProperty.SetValue(null, On);
+        (PlayerBotSpawner.SlotState s, PlayerBotState state) = Driven();
+        state.Deaths = 3;
+        Call("BeginLogOff", s);
+        Assert.That((state.Task is PlayerBotLogOffTask, s.LogOffStarted, s.DeathsAtLogOff, s.LogOffWaits), Is.EqualTo((true, true, 3, 0)));
+        States.TryRemove(state.Player, out _);
+    }
+
+    // The review of step 1: a late ask (posted again before the first ran) finds its own task: started, nothing replaced.
+    [Test]
+    public void A_late_ask_finds_its_own_log_off_and_marks_it_started()
+    {
+        SessionsProperty.SetValue(null, On);
+        (PlayerBotSpawner.SlotState s, PlayerBotState state) = Driven();
+        PlayerBotLogOffTask given = new(s.Client, 0);
+        state.Task = given;
+        Call("BeginLogOff", s);
+        Assert.That((state.Task, s.LogOffStarted, s.LogOffWaits), Is.EqualTo(((IPlayerBotTask)given, true, 0)));
+        States.TryRemove(state.Player, out _);
+    }
+
+    // It waits, counted (a waiting line once a minute), for the errands to finish and then for their re-login to go first.
+    [Test]
+    public void The_log_off_waits_for_the_errands_and_their_relog()
+    {
+        SessionsProperty.SetValue(null, On);
+        (PlayerBotSpawner.SlotState s, PlayerBotState state) = Driven();
+        Errands errands = new();
+        state.Task = errands;
+        Call("BeginLogOff", s);
+        errands.Finished = true;
+        s.RelogRequested = true;
+        Call("BeginLogOff", s);
+        Assert.That((state.Task, s.LogOffStarted, s.LogOffWaits), Is.EqualTo(((IPlayerBotTask)errands, false, 2)));
+        States.TryRemove(state.Player, out _);
+    }
+
+    [Test]
+    public void Without_a_driver_the_log_off_waits()
+    {
+        SessionsProperty.SetValue(null, On);
+        PlayerBotSpawner.SlotState s = Slot(PlayerBotSpawner.SlotPhase.LoggingOff);
+        s.Client = Client(GameClient.eClientState.Playing);
+        Call("BeginLogOff", s);
+        Assert.That((s.LogOffStarted, s.LogOffWaits), Is.EqualTo((false, 1)));
+    }
+
+    // A log-off the driver couldn't take is asked again every LogOffRetrySeconds; askedS counts from the first ask.
+    [Test]
+    public void A_log_off_asked_again_keeps_its_first_ask()
+    {
+        DateTime now = DateTime.UtcNow;
+        SessionsProperty.SetValue(null, On);
+        PlayerBotSpawner.SlotState s = Slot(PlayerBotSpawner.SlotPhase.Playing);
+        (s.Client, s.SessionStartUtc, s.SessionEndsUtc) = (Client(GameClient.eClientState.Playing), now.AddMinutes(-5), now);
+        SlotsField.SetValue(null, new[] { s });
+        Call("Observe", now);
+        Assert.That((s.Phase, s.LogOffAskedUtc), Is.EqualTo((PlayerBotSpawner.SlotPhase.LoggingOff, now)));
+        Call("Observe", now.AddSeconds(PlayerBotSpawner.LogOffRetrySeconds));
+        Assert.That(s.Phase, Is.EqualTo(PlayerBotSpawner.SlotPhase.Playing), "not taken: asked again");
+        Call("Observe", now.AddSeconds(PlayerBotSpawner.LogOffRetrySeconds + 1));
+        Assert.That((s.Phase, s.LogOffAskedUtc, s.LogOffPostedUtc), Is.EqualTo((PlayerBotSpawner.SlotPhase.LoggingOff, now,
+            now.AddSeconds(PlayerBotSpawner.LogOffRetrySeconds + 1))));
     }
 
     // The ramp holds first logins only: a slot that started before logs in again whatever the room.
