@@ -304,6 +304,73 @@ public sealed class UT_HeadlessClient
         Assert.That(client.RegionChangePending, Is.True);
     }
 
+    // #160 step 1: SendPlayerQuit(false) to a Playing client comes only from the quit timer's end (GamePlayer.cs:827);
+    // the kick to the character screen sets CharScreen first (GameServiceUtils.cs:78-83); other callers send totalOut.
+    [Test]
+    public void Only_the_quit_timers_end_marks_the_client_as_quit()
+    {
+        HeadlessClient client = Client();
+        client.ClientState = GameClient.eClientState.Playing;
+        client.Out.SendPlayerQuit(true);                                      // a GM's /kick (kick.cs:85)
+        Assert.That(client.QuitSent, Is.False);
+        client.ClientState = GameClient.eClientState.CharScreen;
+        client.Out.SendPlayerQuit(false);                                     // the kick to the character screen
+        Assert.That(client.QuitSent, Is.False);
+        client.ClientState = GameClient.eClientState.Playing;
+        client.Out.SendPlayerQuit(false);                                     // the quit timer's end
+        Assert.That(client.QuitSent, Is.True);
+    }
+
+    // #160 step 1: at its next tick the quit client goes to the character screen and logs out with reason quit, which
+    // the spawner reads as its own log-off (PlayerBotSessions.AfterLeave). No player here: the quit took it out.
+    [Test]
+    public void After_the_quit_timer_the_client_goes_to_its_character_screen_and_logs_out_quit()
+    {
+        HeadlessClient client = Client();
+        typeof(HeadlessClient).GetProperty(nameof(HeadlessClient.Step))!.SetValue(client, HeadlessStep.InWorld);
+        client.ClientState = GameClient.eClientState.Playing;
+        client.Out.SendPlayerQuit(false);
+        typeof(ClientService).GetMethod("BeginTickInternal", HiddenStatic)!.Invoke(null, [client]);
+        Assert.That((client.ClientState, client.LogoutReason, client.QuitPosted),
+            Is.EqualTo((GameClient.eClientState.CharScreen, PlayerBotSessions.QuitReason, true)));
+    }
+
+    // #160, the review of step 1: a logout posted in the tick the quit timer's end deleted the player (the forced
+    // log-off racing it, an error) runs before the client's own BeginTick sets CharScreen. With sessions on the player
+    // is quit once, by the timer, not a second time (no second Quit event: "has left", the audit entry, Delete); the
+    // client ends Disconnected and unregistered all the same.
+    [Test]
+    public void A_logout_racing_the_quit_timers_end_quits_the_player_once()
+    {
+        typeof(BaseServer).GetField("_sessionIdAllocator", Hidden)!.SetValue(GameServer.Instance, new SessionIdAllocator());
+        HeadlessClient client = InWorldClient(out GamePlayer player);
+        // Playing writes the keep-alive to its movement component; the Quit event's Notify reads its class first.
+        typeof(GamePlayer).GetField("movementComponent")!.SetValue(player,
+            RuntimeHelpers.GetUninitializedObject(typeof(PlayerMovementComponent)));
+        typeof(GamePlayer).GetField("m_characterClass", Hidden)!.SetValue(player, new DefaultCharacterClass());
+        typeof(BaseClient).GetMethod("OnConnect")!.Invoke(client, [HeadlessClient.AllocateSessionId()]);
+        int before = ClientService.Instance.ClientCount;
+        ClientService.Instance.OnClientConnect(client);                         // what OnConnect's post does
+        client.ClientState = GameClient.eClientState.Playing;
+        player.ObjectState = GameObject.eObjectState.Deleted;                   // the timer's Quit(true): Delete
+        int quits = 0;
+        DOLEventHandler onQuit = (e, sender, args) => { if (sender == player) quits++; };
+        GameEventMgr.AddHandler(GamePlayerEvent.Quit, onQuit);
+        HeadlessClient.SessionsOn = true;
+        try
+        {
+            client.Logout(PlayerBotSessions.ForcedReason);                      // posted; run as ClientService would
+            typeof(HeadlessClient).GetMethod("QuitOnGameLoop", Hidden)!.Invoke(client, null);
+        }
+        finally
+        {
+            HeadlessClient.SessionsOn = false;
+            GameEventMgr.RemoveHandler(GamePlayerEvent.Quit, onQuit);
+        }
+        Assert.That((quits, client.ClientState, ClientService.Instance.ClientCount),
+            Is.EqualTo((0, GameClient.eClientState.Disconnected, before)));
+    }
+
     [Test]
     public void The_navmesh_answers_LoS_and_a_zone_without_a_mesh_sees()
     {

@@ -47,6 +47,14 @@ public static class PlayerBotAccounts
         return account;
     }
 
+    // #160: each login writes LastLogin as the real login does (LoginRequestHandler.cs:411, :418), so the account says
+    // when its session began; the quit writes LastDisconnected (GameClient.cs:262-263). Sessions on only.
+    public static void TouchLogin(DbAccount account)
+    {
+        account.LastLogin = DateTime.Now;
+        GameServer.Database.SaveObject(account);
+    }
+
     // eventClient: the bot's own HeadlessClient (Version 1127). The CharacterCreated handlers read only its Version
     // (StartupLocations.cs:77, :91, :107; the other five handlers do not touch the client). kit: a level-matched bot's
     // plan, null for a roster bot.

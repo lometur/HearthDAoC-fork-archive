@@ -29,7 +29,7 @@ So don't turn them on on a world people play on.
 The accounts are `hdbot-alb-01`, `hdbot-mid-01` and so on. No game client can log into them or create them: the `-` is
 refused at login. Without a spots file, each bot is a level-1 base-class character at its realm's start.
 
-Two more settings are read only when bots are on:
+Three more settings are read only when bots are on:
 - `HEARTHDAOC_PLAYER_BOT_WAKE`: `gamebot` (the default: the lever, below) or `player`.
 - `HEARTHDAOC_PLAYER_BOT_SPOTS`: a file in the data volume, for example `/data/player-bot-spots.txt`. Each line is
   `realm|region|x|y[|z[|level|class|race]]` and places one bot there, and the bot keeps that spot.
@@ -47,6 +47,25 @@ Two more settings are read only when bots are on:
     GameBot Savage does (Midgard has few right-hand fist weapons, so it kept its starter axe); at the levels that have
     some, its right hand picks among them and the claws.
   - A bad value or an unreadable file keeps the bots off, with a `HEARTHDAOC_PLAYER_BOTS error` line.
+- `HEARTHDAOC_PLAYER_BOT_SESSIONS`: `off` (the default: they log in at the start and stay) or `on`: play sessions
+  (#160).
+  - First logins follow the GameBots' startup ramp: a third of the roster over the first 5 minutes, all of it by
+    minute 15.
+  - Each bot plays a session of 1-4 hours. Then it finishes its fight, stands if it sat to rest, walks out of the
+    reach of the monsters round it and logs off as a player does (`/quit`, the sit and the quit timer). A hit cancels
+    the quit: the bot fights, then tries again. Only after 10 minutes or 5 refused `/quit`s, and with no real player in
+    sight, is it logged out without the timer (`logoff-forced`). At most 2 log-offs are asked a second. The quest bot
+    finishes its errands, and their relog, first.
+  - It logs back in 30-120 minutes later, where it logged off, with nothing gained while it was out. Its death cap
+    (the con steps its deaths took off) carries over, and it goes back to its camp unless it died there (it owed a
+    replan) or died after its log-off began; then it plans a camp afresh, as after a death.
+  - The spot from a spots file and the self-test are for its first login only, and the quest bot runs its errands in
+    its first session only.
+  - A bot that drops out (a link death, an error, a GM's `/kick`) comes back a minute later, at most 5 times a run.
+    The next drop leaves it out.
+  - `on,ramp=MIN,session=MIN-MAX,offline=MIN-MAX,relog=SECONDS` changes any of these (minutes; `ramp=0` logs them in as
+    fast as `off` does). The test legs use `on,ramp=2,session=3-6,offline=1-2,relog=30`. Case is ignored.
+  - A bad value keeps the bots off, with a `HEARTHDAOC_PLAYER_BOTS error` line. With `off` none of this runs.
 
 ## What they do
 
@@ -379,6 +398,23 @@ Playing:
   Most of it is the real cost of player regeneration. A kill now skips its rest when the bot has what its next pull
   needs. The 80% endurance stop still starts sits that health and power wouldn't, a quarter fewer than on
   v0.37b-hearth.16.
+- **Sessions** (`HEARTHDAOC_PLAYER_BOT_SESSIONS`, #160 step 1):
+  - They are flat: every bot plays 1-4 hours and is out 30-120 minutes, at any time of day. There is no weekly
+    schedule, and there are no designations yet.
+  - A bot logs off by its camp, out of the monsters' reach, not in a town.
+  - A session carries only its death cap and its camp to the next, and the camp not when the bot died at it or after
+    its log-off began. A route stay's monster goes with its camp, to the stay's own end, as if the bot had stayed
+    online. Its failed camps, the names it avoids and its killers' cons end with the session (they last 5-15 minutes,
+    under the default time out), so with a short time out its next plan can take a camp it gave up again.
+  - `PLAYER_BOT_TALLY` counts one session, and bot-hours on a sessions leg need the online time: a sessions leg
+    doesn't compare one for one with a sessions-off leg.
+  - A GM's `/kick` counts as a drop: the bot is back a minute later, up to 5 times, as a GameBot is. Keeping it out
+    is #171's.
+  - A bot's login and logout messages go only to its region, to the players its `/region` would reach: those in the
+    same region and of its realm (staff too). A human's go to every online player, as before, and the owner's server
+    property `show_logins` still turns them all off (`PlayerEnterExit.cs`, #160). Each realm's mainland is one
+    region (Albion 1, Midgard 100, Hibernia 200), and on `spots-lm3` it holds about 70% of that realm's bots (277 of
+    390 in all), so a human there still sees most of their realm's bot logins and logouts.
 - **Not done at all:** they don't group, buff others, take part in RvR or battlegrounds, stealth, use realm abilities
   or ride horses (#152, #167).
 - **Ranged and songs:** they can't shoot or play. Archers fight in melee, and Bards and Minstrels have no songs: theirs
@@ -784,14 +820,32 @@ All start `PLAYER_BOT_`:
   minutes with no progress, which have no line of their own;
 - `REPLAN`: a stalled walk planned again, with where, the goal, the count in that walk and the stall's first step;
 - `ERRAND`: the quest bot's steps;
-- `SPOT`, `KIT`, `RETRAIN`: start spots and level-matched bots; `TALLY`, every few minutes, a line per bot.
+- `SPOT`, `KIT`, `RETRAIN`: start spots and level-matched bots; `TALLY`, every few minutes, a line per bot;
+- `LOGOFF` (#160, sessions on): `quit` for each `/quit` asked and `forced` for a logout without the timer, with `bot=`,
+  `level=`, `sec=` (the seconds since the log-off began), `refusals=`, `cancels=` (quits a hit or a cast stood up),
+  `walks=`, `inCombat=` and where it sits (`region= x= y= z=`).
+
+With sessions on (#160), the spawner's own lines, which start `HEARTHDAOC_PLAYER_BOTS`, add:
+- `sessions on ramp= session= offline= relog= logoffsPerSecond= maxRelogs=`, once at the start (none with `off`);
+- `logoff account= name= reason=quit|logoff-forced sessionS= askedS= offlineS=`: a bot logged off. `askedS=` counts
+  from the spawner's first ask, and `offlineS=` is the time out it drew;
+- `logoff waiting account= name= why=no-driver|task|errand-relog waits= askedS=`, about once a minute (every 10
+  waits of 6 s) while a log-off waits: for a driver (out of the world, or its self-test still runs), for its errands,
+  or for their relog;
+- `relogin account= name= after= offS= region= x= y= z=`: back in, `after=` how it left and `offS=` the seconds out;
+- `lost account= name= reason= relogInS= drops=N/5`: a drop, logged in again in `relogInS=` seconds. A `lost` line
+  without them (the sixth drop, or any with `off`) leaves the bot out;
+- the status line adds `loggingOff= offline= logoffs= relogins= drops=`.
 
 The bot CPU meter (`/botcpu`) charges them to its own kind, `playerbot`, and their pets with them.
 
 ## Tests
 
 `Tests/UnitTests/UT_HeadlessClient.cs`, `UT_PlayerBotPlan.cs`, `UT_PlayerBotDriver.cs`, `UT_PlayerBotErrands.cs`,
-`UT_PlayerBotWake.cs`, `UT_PlayerBotSpots.cs`, `UT_PlayerBotKit.cs` and `UT_PlayerBotNetwork.cs` run in CI.
+`UT_PlayerBotWake.cs`, `UT_PlayerBotSpots.cs`, `UT_PlayerBotKit.cs`, `UT_PlayerBotNetwork.cs`, `UT_PlayerBotSessions.cs`
+and `UT_PlayerBotSpawnerSessions.cs` run in CI, and so do `UT_TemporaryGroupStableTravelQuit.cs` (#160: a quit
+player's transfer marker goes with it) and `UT_PlayerEnterExitBots.cs` (#160: `PlayerEnterExit.cs` sends a bot's
+login and logout messages to its region only).
 `UT_PlayerBotWalkReplay.cs` runs only when asked for. It needs `OFFLINE_DAOC_NAV_ROOT`: a folder holding
 `navmesh/zone008.nav`, `zone012.nav`, `zone014.nav`, `zone104.nav`, `zone120.nav`, `zone126.nav`, `zone152.nav`,
 `zone181.nav`, `zone209.nav` and `zone250.nav` (each from

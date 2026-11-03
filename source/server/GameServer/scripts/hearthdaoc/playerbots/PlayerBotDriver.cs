@@ -111,6 +111,7 @@ public sealed class PlayerBotState
     public Vector3 Anchor { get; set; }             // spawn point: the leash centre; moved when a task ends far away
     public PlayerBotDriverTimer Timer { get; set; }
     public IPlayerBotTask Task { get; set; }
+    public Action<PlayerBotState> OnStop;           // #160: run once by Stop (PlayerBotSpawner.Carry)
     public volatile bool Stopped;
     public volatile PlayerBotActivity Activity;      // read by the report thread
     public volatile int NearPlayerBots, NearGamebots;
@@ -631,6 +632,7 @@ public static class PlayerBotDriver
     public static void Stop(GamePlayer player)
     {
         if (player == null || !_states.TryRemove(player, out PlayerBotState state)) return;
+        state.OnStop?.Invoke(state);                                // #160: sessions on, what the next login carries
         GameEventMgr.RemoveHandler(player, GameLivingEvent.Dying, OnBotDying);
         GameEventMgr.RemoveHandler(player, GameLivingEvent.CastFinished, OnBotCastFinished);
         state.Stopped = true;
@@ -710,6 +712,8 @@ public static class PlayerBotDriver
             state.PendingDeath = null;
             if (Log.IsInfoEnabled) Log.Info(DeathLine(held.Head, held.Detail, state.Killer, held.Target));
         }
+        if (!player.IsAlive && PlayerBotSessions.LeftDuringThink(PlayerBotSpawner.Sessions.On,   // 6. #160: a quit,
+                player.ObjectState is GameObject.eObjectState.Active)) return;                  //    no death
         if (!player.IsAlive) { HandleDeath(state, player, now); return; }               // 6
         StartLife(state, now, RoleOf(player.CharacterClass.ID));                         //    a new life
         state.SoloSteps = SoloSteps(player.CharacterClass.ID);                           //    #167 E CY4: the cap's floor
@@ -6173,6 +6177,11 @@ public static class PlayerBotDriver
         adds.Clear();                                                                   // no monster held past the scan
         return found;
     }
+
+    /// <summary>#160 step 1, the log-off's spot (PlayerBotLogOffTask): out of the reach of every monster round the bot
+    /// that would aggro, on the step-out rings (ClearSpotNear, StepOutRings: 500-2,500 out), or null when it stands
+    /// clear or no ring point is.</summary>
+    public static Vector3? LogOffSpot(GamePlayer player) => ClearSpotNear(player, StepOutRings);
 
     // The monsters within radius round the bot that would aggro it (AddReach), a hostile keep guard too (#167 D7,
     // IsThreat), in the scans' list (_reach): the caller clears it.

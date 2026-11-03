@@ -47,6 +47,19 @@ public static class TemporaryGroupStableTravel
     {
         _monitorTimer?.Dispose();
         _monitorTimer = new Timer(PollRoutes, null, 250, 250);
+        GameEventMgr.AddHandler(GamePlayerEvent.Quit, OnPlayerQuit); // HearthDAoC: OnPlayerQuit (#160)
+    }
+
+    // HearthDAoC: a quit player's transfer marker and route go with it (#160). A groupless player's marker was never
+    // taken away (RelocateHelpersAfterPlayerTransfer returns before its TryRemove), so every player who teleported once
+    // (a release, a portal, a player bot's session) stayed reachable here until the server stopped. Every quit raises
+    // Quit (GamePlayer.Quit(true)), after the owner's helpers' own handler deletes them (GameBot.OnOwnerQuit).
+    public static void OnPlayerQuit(DOLEvent e, object sender, EventArgs args)
+    {
+        if (sender is not GamePlayer player)
+            return;
+        PendingPlayerTransfers.TryRemove(player, out _);
+        ActiveRoutes.TryRemove(player, out _);
     }
 
     [GameServerStoppedEvent]
@@ -54,6 +67,7 @@ public static class TemporaryGroupStableTravel
     {
         _monitorTimer?.Dispose();
         _monitorTimer = null;
+        GameEventMgr.RemoveHandler(GamePlayerEvent.Quit, OnPlayerQuit); // HearthDAoC (#160)
         ActiveRoutes.Clear();
         PendingPlayerTransfers.Clear();
     }
