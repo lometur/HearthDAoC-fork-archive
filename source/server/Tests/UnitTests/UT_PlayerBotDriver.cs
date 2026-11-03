@@ -10088,7 +10088,10 @@ public sealed class UT_PlayerBotDriver
     public void RouteFormat()
     {
         Assert.That(PlayerBotDriverReport.FormatRoute(new PlayerBotRouteWindow(60, 40, 1_200, 7, 2, 5, 1, 2.4)), Is.EqualTo(
-            "PLAYER_BOT_ROUTE win=60 bots=40 checks=1200 detours=7 giveups=2 passes=5 blocked=1 ms=2.400 msPerBotSec=0.00100"));
+            "PLAYER_BOT_ROUTE win=60 bots=40 checks=1200 detours=7 giveups=2 passes=5 blocked=1 reanchors=0 ms=2.400 " +
+            "msPerBotSec=0.00100"));
+        Assert.That(PlayerBotDriverReport.FormatRoute(new PlayerBotRouteWindow(60, 40, 1_200, 7, 2, 5, 1, 2.4, 3)),
+            Does.Contain(" blocked=1 reanchors=3 ms="), "#167 F12-S: the stays' camps moved");
         Assert.That(PlayerBotDriverReport.FormatRoute(new PlayerBotRouteWindow { Seconds = 60 }),
             Does.EndWith(" ms=0.000 msPerBotSec=-"));
     }
@@ -10102,7 +10105,9 @@ public sealed class UT_PlayerBotDriver
         foreach (PlayerBotRouteAction action in new[] { PlayerBotRouteAction.Detour, PlayerBotRouteAction.GiveUp,
                      PlayerBotRouteAction.Pass, PlayerBotRouteAction.Pass, PlayerBotRouteAction.Blocked })
             PlayerBotDriverReport.Route(action);
-        Assert.That(PlayerBotDriverReport.TakeRoute(60, 3), Is.EqualTo(new PlayerBotRouteWindow(60, 3, 2, 1, 1, 2, 1, 0)));
+        PlayerBotDriverReport.RouteReanchor();                          // #167 F12-S: a stay's camp moved
+        Assert.That(PlayerBotDriverReport.TakeRoute(60, 3),
+            Is.EqualTo(new PlayerBotRouteWindow(60, 3, 2, 1, 1, 2, 1, 0, 1)));
         Assert.That(PlayerBotDriverReport.TakeRoute(60, 3), Is.EqualTo(new PlayerBotRouteWindow(60, 3, 0, 0, 0, 0, 0, 0)),
             "from zero again");
         PlayerBotDriverReport.Route(PlayerBotRouteAction.Pass);
@@ -11094,6 +11099,133 @@ public sealed class UT_PlayerBotDriver
                     Is.EqualTo(((string)null, (Vector3?)null, OnPocket)), $"{other}: stays, no walk on");
                 Assert.That((state.RouteAvoid, state.RouteAvoidUntil), Is.EqualTo(((drake, drakeAt, 500), 1_030_000L)));
                 if (below != null) Assert.That(state.RelocateRejected, Does.Contain(below), "no corridor to its spot");
+            });
+        });
+    }
+
+    // --- #167 F12-S, the second review: a stayed bot past the monster, and the stay's record in every plan ---
+
+    // #167 F12-S (the second review): a stayed bot past the monster it gave up on, on the far side from its anchor
+    // (after a pull beyond it, or a break-off's EndReplan near it), its anchor 2,000 west and the mesh offering 4
+    // points round that anchor, each past the monster from the bot. "past": the monster recorded 1,000 west (aggro 500,
+    // reach 700), the bot out of its reach: its straight way back passes it, so its camp moves to where it stands
+    // (StayAnchor; the bot doesn't move), and with no point round it clear it walks to the one 700 on straight away
+    // from the monster. "inside": the monster recorded 400 west, the bot in its reach: its camp stays (a bot in the
+    // reach keeps it; its roam may leave the reach), and the point 700 from the anchor straight away from the monster
+    // (its way there through the reach) is not taken: the one 700 from the bot straight away from it, out of the reach.
+    // Before, both walked to (-2,700, 0).
+    [TestCase("past")] [TestCase("inside")]
+    public void A_stayed_bot_past_the_monster_roams_clear_of_it_in_Roam(string how)
+    {
+        MethodInfo roam = typeof(PlayerBotDriver).GetMethod("Roam", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var mesh = new RoamPointsMesh();
+        InTheField(mesh, OnPocket, (region, zone, bot) =>
+        {
+            Vector3 anchor = OnPocket + new Vector3(-2_000, 0, 0);
+            Vector3 recorded = OnPocket + new Vector3(how == "past" ? -1_000 : -400, 0, 0);
+            foreach (Vector3 p in new[] { new Vector3(0, 300, 0), new Vector3(0, -300, 0), new Vector3(-300, 300, 0),
+                         new Vector3(-300, -300, 0) })
+            {
+                Assert.That(PlayerBotDriver.StayClear(OnPocket, anchor + p, recorded, 500), Is.False, "past it");
+                mesh.Points.Enqueue(anchor + p);
+            }
+            GameNPC monster = MonsterAt(region, zone, OnPocket + new Vector3(-20_000, 0, 0),
+                LevelFor(bot, ConColor.ORANGE));
+            InWorld(region, [monster], () =>
+            {
+                var state = new PlayerBotState(bot) { AnchorRegion = region.ID, Anchor = anchor,
+                    RouteAvoid = (monster, recorded, 500), RouteAvoidUntil = 910_000 };
+                roam.Invoke(null, [state, bot, 10_000L]);
+                Vector3 away = OnPocket + new Vector3(700, 0, 0);
+                Assert.That((state.Anchor, state.RouteGoal, mesh.Asked), Is.EqualTo((how == "past" ? OnPocket : anchor,
+                    (Vector3?)away, PlayerBotDriver.RouteStayTries)), how);
+                Assert.That(PlayerBotDriver.StayClear(OnPocket, away, recorded, 500), Is.True, "clear of it");
+            });
+        });
+    }
+
+    // #167 F12-S (the second review): a stayed bot's camp moves to where it stands only when the bot is out of the
+    // monster's reach and its straight way back passes it, and once. "far": the anchor 2,000 west, the monster recorded
+    // 1,000 west (aggro 500, reach 700), the bot at the pocket's spot: its camp moves there (the bot doesn't move;
+    // ROUTE win= reanchors=1), and it takes the first point round it, 600 east, the next think keeping both. "inside":
+    // the monster recorded 400 west, the bot at its anchor in its reach (no step out found there): its camp stays and
+    // the first point is taken, asked once over two thinks (no camp moved and no new roam point each think).
+    [TestCase("far")] [TestCase("inside")]
+    public void A_stayed_bots_camp_moves_to_where_it_stands_once_its_way_back_passes_the_monster_in_Roam(string how)
+    {
+        MethodInfo roam = typeof(PlayerBotDriver).GetMethod("Roam", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var mesh = new RoamPointsMesh();
+        InTheField(mesh, OnPocket, (region, zone, bot) =>
+        {
+            Vector3 recorded = OnPocket + new Vector3(how == "inside" ? -400 : -1_000, 0, 0);
+            Vector3 anchor = how == "inside" ? OnPocket : OnPocket + new Vector3(-2_000, 0, 0);
+            Vector3 first = OnPocket + new Vector3(600, 0, 0);
+            mesh.Points.Enqueue(first);
+            mesh.Points.Enqueue(OnPocket + new Vector3(600, 300, 0));
+            GameNPC monster = MonsterAt(region, zone, OnPocket + new Vector3(-20_000, 0, 0),
+                LevelFor(bot, ConColor.ORANGE));
+            InWorld(region, [monster], () =>
+            {
+                var state = new PlayerBotState(bot) { AnchorRegion = region.ID, Anchor = anchor,
+                    RouteAvoid = (monster, recorded, 500), RouteAvoidUntil = 910_000 };
+                PlayerBotDriverReport.TakeRoute(0, 0);                          // the counters are process-wide
+                roam.Invoke(null, [state, bot, 10_000L]);
+                Assert.That((state.Anchor, state.RoamDestination), Is.EqualTo((OnPocket, (Vector3?)first)), how);
+                roam.Invoke(null, [state, bot, 10_250L]);
+                Assert.That((state.Anchor, state.RoamDestination, mesh.Asked),
+                    Is.EqualTo((OnPocket, (Vector3?)first, 1)), $"{how}: the next think");
+                Assert.That(PlayerBotDriverReport.TakeRoute(60, 1).Reanchors, Is.EqualTo(how == "far" ? 1L : 0L),
+                    "ROUTE win= reanchors=");
+            });
+        });
+    }
+
+    // #167 F12-S (the second review): a plan in a stay reads the stay's record (RouteAvoid) as it stands, not through
+    // StayAvoid, whose exception (the monster fighting the bot) is the pulls'. As the plan-in-a-stay test above: the
+    // route plan at 130,000 stays (the cyclops' camp behind the drake). "attacking": a break-off's plan 30 s on, the
+    // drake targeting the bot: the cyclops' camp still skipped, the stay kept (before: taken, the stay over, the walk
+    // past the drake). "second": a second route give-up 610 s into the stay, for a goblin 3,500 north (aggro 300) on a
+    // walk back: its plan reads both, skips the cyclops' camp and stays, now for the goblin (the stay records one;
+    // before: the cyclops' camp taken, its walk meeting the drake with the give-up's cooldown just reset, a pass).
+    // "dead": the drake died after the stay: an outgrown plan 30 s on still skips the camps behind where it stood, by
+    // design (one that respawns there would be met within the give-up's cooldown, a pass).
+    [TestCase("attacking")] [TestCase("second")] [TestCase("dead")]
+    public void A_plan_in_a_stay_reads_the_monster_as_the_stay_recorded_it_in_RelocateIfOutgrown(string how)
+    {
+        MethodInfo relocate =
+            typeof(PlayerBotDriver).GetMethod("RelocateIfOutgrown", BindingFlags.Static | BindingFlags.NonPublic)!;
+        InTheField(new SplitFloorMesh(), OnPocket, (region, zone, bot) =>
+        {
+            Vector3 oldCamp = new(834_000, OnPocket.Y, 8_700), drakeAt = new(OnPocket.X - 1_384, OnPocket.Y, 8_700);
+            Vector3 cyclopsAt = new(838_000, OnPocket.Y, 8_700), goblinAt = new(OnPocket.X, OnPocket.Y + 3_500, 8_700);
+            GameNPC cyclops = MonsterAt(region, zone, cyclopsAt, LevelFor(bot, ConColor.YELLOW));
+            GameNPC drake = MonsterAt(region, zone, drakeAt, LevelFor(bot, ConColor.ORANGE));
+            var brain = (DOL.AI.Brain.StandardMobBrain)drake.Brain;
+            (brain.AggroLevel, brain.AggroRange) = (100, 500);
+            GameNPC goblin = MonsterAt(region, zone, goblinAt, LevelFor(bot, ConColor.ORANGE));
+            var goblinBrain = (DOL.AI.Brain.StandardMobBrain)goblin.Brain;
+            (goblinBrain.AggroLevel, goblinBrain.AggroRange) = (100, 300);
+            InWorld(region, how == "second" ? [cyclops, drake, goblin] : [cyclops, drake], () =>
+            {
+                var state = new PlayerBotState(bot) { AnchorRegion = region.ID, Anchor = oldCamp,
+                    RoamDestination = oldCamp, RoamingSince = 1 };
+                PlayerBotDriver.GiveUpRoute(state, 130_000, drake);
+                relocate.Invoke(null, [state, bot, 130_000L]);
+                (GameNPC, Vector3, int) recorded = (drake, drakeAt, 500);
+                Assert.That((state.Anchor, state.RouteAvoid, state.RouteAvoidUntil),
+                    Is.EqualTo((OnPocket, recorded, 1_030_000L)), "stays");
+                long at = how == "second" ? 740_000 : 160_500;
+                if (how == "dead") typeof(GameObject).GetField("m_health", Hidden)!.SetValue(drake, 0);
+                if (how == "attacking")
+                {
+                    drake.TargetObject = bot;
+                    (state.ReplanOwed, state.ReplanSince) = (PlayerBotDriver.BrokeOff, 155_000);
+                }
+                if (how == "second") PlayerBotDriver.GiveUpRoute(state, at, goblin);
+                relocate.Invoke(null, [state, bot, at]);
+                Assert.That((state.Anchor, state.RoamDestination, state.RouteAvoid, state.RouteAvoidUntil),
+                    Is.EqualTo((OnPocket, (Vector3?)null, how == "second" ? (goblin, goblinAt, 300) : recorded,
+                        how == "second" ? 1_640_000L : 1_030_000L)), $"{how}: no camp behind the drake, the stay kept");
             });
         });
     }

@@ -21,9 +21,11 @@ public readonly record struct PlayerBotCrossingWindow(int Seconds, long Took, lo
 
 /// <summary>#167 F12: one report window's route look-aheads over all bots (PLAYER_BOT_ROUTE win=): the bots then, the
 /// checks (a walk to the anchor read ahead on a search's think, PlayerBotDriver.GuardsRoute), the blockers by what the bot
-/// did (Detours, GiveUps, Passes), the detours' walks that ended blocked, and the checks' own time.</summary>
+/// did (Detours, GiveUps, Passes), the detours' walks that ended blocked, and the checks' own time; then (#167 F12-S,
+/// the second review) the stays' camps moved to where the bot stood, its straight way back passing the monster it gave
+/// up on (Reanchors; PlayerBotDriver.Roam).</summary>
 public readonly record struct PlayerBotRouteWindow(int Seconds, int Bots, long Checks, long Detours, long GiveUps,
-    long Passes, long Blocked, double Ms);
+    long Passes, long Blocked, double Ms, long Reanchors = 0);
 
 /// <summary>One settled fight (levelmatch/DEATHS.md 2): the bot's health and power at its first think in reach and now,
 /// the most attackers on a think, the swings seen and those the view gate refused, the casts, and this life's kills and
@@ -142,6 +144,7 @@ public static class PlayerBotDriverReport
         _ldCancelled, _errors;
     private static long _crossingTook, _crossingGround, _crossingRefused, _crossingDropped;    // #188
     private static long _routeChecks, _routeStopwatch, _routeDetours, _routeGiveUps, _routePasses, _routeBlocked;   // #167 F12
+    private static long _routeReanchors;                                                       // #167 F12-S
     private static long _windowStarted;                                                        // #188: its start (Stopwatch)
     private static int _maxLevel, _windows;
     private static Timer _timer;
@@ -190,6 +193,9 @@ public static class PlayerBotDriverReport
             default: Interlocked.Increment(ref _routeBlocked); break;
         }
     }
+    // #167 F12-S (the second review): each stay's camp moved to where the bot stands (PlayerBotDriver.Roam), for
+    // PLAYER_BOT_ROUTE win= reanchors=.
+    public static void RouteReanchor() => Interlocked.Increment(ref _routeReanchors);
 
     public static void LevelUp(int levels, int newLevel)
     {
@@ -235,7 +241,9 @@ public static class PlayerBotDriverReport
     public static PlayerBotRouteWindow TakeRoute(int seconds, int bots) => new(seconds, bots,
         Interlocked.Exchange(ref _routeChecks, 0), Interlocked.Exchange(ref _routeDetours, 0),
         Interlocked.Exchange(ref _routeGiveUps, 0), Interlocked.Exchange(ref _routePasses, 0),
-        Interlocked.Exchange(ref _routeBlocked, 0), Interlocked.Exchange(ref _routeStopwatch, 0) * 1000.0 / Stopwatch.Frequency);
+        Interlocked.Exchange(ref _routeBlocked, 0),
+        Interlocked.Exchange(ref _routeStopwatch, 0) * 1000.0 / Stopwatch.Frequency,
+        Interlocked.Exchange(ref _routeReanchors, 0));
 
     private static void Write()
     {
@@ -434,13 +442,15 @@ public static class PlayerBotDriverReport
         $"PLAYER_BOT_CROSSING win={w.Seconds} took={w.Took} ground={w.Ground} refused={w.Refused} dropped={w.Dropped}");
 
     /// <summary>#167 F12: PLAYER_BOT_ROUTE win=, after CROSSING: the window's route look-aheads (PlayerBotRouteWindow),
-    /// their time in all (ms=) and per bot-second (msPerBotSec=; - with no bot).</summary>
+    /// the stays' camps moved (reanchors=, #167 F12-S), their time in all (ms=) and per bot-second (msPerBotSec=;
+    /// - with no bot).</summary>
     public static string FormatRoute(PlayerBotRouteWindow w)
     {
         CultureInfo c = CultureInfo.InvariantCulture;
         string perBotSecond = w.Bots == 0 || w.Seconds == 0 ? "-" : (w.Ms / ((double)w.Bots * w.Seconds)).ToString("0.00000", c);
         return string.Create(c, $"PLAYER_BOT_ROUTE win={w.Seconds} bots={w.Bots} checks={w.Checks} detours={w.Detours} " +
-            $"giveups={w.GiveUps} passes={w.Passes} blocked={w.Blocked} ms={w.Ms:0.000} msPerBotSec={perBotSecond}");
+            $"giveups={w.GiveUps} passes={w.Passes} blocked={w.Blocked} reanchors={w.Reanchors} ms={w.Ms:0.000} " +
+            $"msPerBotSec={perBotSecond}");
     }
 
     public static string Format(PlayerBotDriverWindow w)

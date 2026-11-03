@@ -372,8 +372,8 @@ public sealed class PlayerBotState
                                                                  //   (RouteGiveUpBlockers)
     public (GameNPC Npc, Vector3 At, int AggroRange) RouteAvoid; // #167 F12-S: a stay's monster (StayHere: the one
     public long RouteAvoidUntil;                                 //   given up on, as the replan read it), kept out of
-                                                                 //   the roam, the pulls and the plans (StayAvoid)
-                                                                 //   until then (0: no stay)
+                                                                 //   the roam and the pulls (StayAvoid) and the plans
+                                                                 //   (RelocateIfOutgrown) until then (0: no stay)
 }
 
 // HearthDAoC player bots (#137): a thin copy of the /bot pilot's think (bots/autonomous/AutonomousPlayerPilot.cs:229-374) for a
@@ -5453,16 +5453,30 @@ public static class PlayerBotDriver
     // (GuardsRoute): it gives its camp up there (held for the plan), or walks round a monster to a detour's point, a
     // blocked one ending the detour (PLAYER_BOT_BLOCKED walk=detour, ROUTE action=blocked), not the walk. #167 F12-S:
     // a stay's roam keeps clear of the monster it gave up on (PickRoamPoint, StayAvoid); the leash's walk back to the
-    // anchor is a walk to the anchor, which the look-ahead reads.
+    // anchor is a walk to the anchor, which the look-ahead reads. The second review: a stayed bot out of that monster's
+    // reach whose straight way back to its anchor doesn't keep clear of it (StayClear: it stands past the monster,
+    // after a pull beyond it or a break-off's EndReplan) moves its camp to where it stands (StayAnchor; only the anchor
+    // moves, the bot walks no step for it; ROUTE win= reanchors=) and roams round it: no straight way back through that
+    // reach, and no walk back past the monster on the give-up's cooldown. A bot in the reach keeps its camp (no step
+    // out was found there, and every think would move it again); its roam may leave the reach.
     private static void Roam(PlayerBotState state, GamePlayer player, long now)
     {
         if (HoldsCutOff(state, player, now)) return;
         Vector3 here = new(player.X, player.Y, player.Z);
         bool leashed = Leashed(state, player);
+        (GameNPC Npc, Vector3 At, int AggroRange)? avoid = StayAvoid(state, player, now);   // #167 F12-S
+        if (avoid is { } stay && leashed && !CoversPoint(stay.At, stay.AggroRange, here) &&   // the second review:
+            !StayClear(here, state.Anchor, stay.At, stay.AggroRange))                         //   past the monster
+        {
+            state.Anchor = StayAnchor(here, stay.At, stay.AggroRange,
+                point => OnMesh(player, point, countDropped: false));
+            state.RoamDestination = null;
+            PlayerBotDriverReport.RouteReanchor();
+        }
         if (leashed && Vector3.Distance(here, state.Anchor) > LeashRadius)
             state.RoamDestination = state.Anchor;
         else if (state.RoamDestination == null || Vector3.Distance(here, state.RoamDestination.Value) < 80)
-            state.RoamDestination = PickRoamPoint(player, leashed ? state.Anchor : here, StayAvoid(state, player, now));
+            state.RoamDestination = PickRoamPoint(player, leashed ? state.Anchor : here, avoid);
         state.Activity = PlayerBotActivity.Roaming;
         state.Walk = state.RoamDestination == state.Anchor ? PlayerBotWalk.Anchor : PlayerBotWalk.Roam;   // #167 walk=
         if (GuardsRoute(state, player, now)) return;                                    // #167 F12: gave its camp up
@@ -5759,7 +5773,8 @@ public static class PlayerBotDriver
     // with none the plan as before. One read of the region's monsters serves both passes. #167 F12-R: a route give-up's
     // plan skips the camp spots whose way passes the monster that walk gave up on (TakeCamp, ReplanBlocker); #167
     // F12-S: with no camp taken while that monster is there, the bot hunts where it stands (StayHere), and (the review)
-    // every plan while it stays skips the spots behind that monster as the stay recorded it (StayAvoid).
+    // every plan while it stays skips the spots behind that monster as the stay recorded it (RouteAvoid; the second
+    // review: while it fights the bot too, and on a second give-up's plan, beside that walk's own).
     private static void RelocateIfOutgrown(PlayerBotState state, GamePlayer player, long now)
     {
         string reason = RelocateReason(state.RoamingSince, state.CappedSince, now, state.ReplanOwed);
@@ -5807,11 +5822,14 @@ public static class PlayerBotDriver
         Vector3? nearFrom = nearZone != null && nav.HasNavmesh(nearZone) ? here : null;   // on the mesh (checked above)
         HashSet<GameNPC> overSkipped = new();                                      // #167 F P3: RELOCATE overSkipped=,
                                                                                    //   each spot once (the review)
-        List<(Vector3 At, int AggroRange)> gaveUpOn =                              // #167 F12-R: a route give-up's
-            reason == RouteGiveUp ? RouteGiveUpBlockers(state, player) :           //   blockers; F12-S (the review):
-            StayAvoid(state, player, now) is { } staying ? [(staying.At, staying.AggroRange)] : null;   // a stay's,
-        int routeSkipped = 0;                                                      //   as recorded; the spots skipped
-                                                                                   //   for them (routeSkipped=)
+        // #167 F12-R: a route give-up's blockers; F12-S (the review): while a stay lasts (RouteAvoidUntil), its monster
+        // as recorded too, on any plan (the second review: read here, not by StayAvoid, whose exception, that monster
+        // fighting the bot, is the pulls'; a second give-up's plan reads both); the spots skipped for them
+        // (routeSkipped=).
+        List<(Vector3 At, int AggroRange)> blockers = reason == RouteGiveUp ? RouteGiveUpBlockers(state, player) : null;
+        List<(Vector3 At, int AggroRange)> gaveUpOn = now < state.RouteAvoidUntil
+            ? [.. blockers ?? [], (state.RouteAvoid.At, state.RouteAvoid.AggroRange)] : blockers;
+        int routeSkipped = 0;
         (GameNPC[] spots, ConColor? fallback, bool stale, bool near) = PlanCampChoice(nearMonsters, monsters, here, from,
             fit, natural, failed, state.RelocateRejected, RelocateCandidates, killerCon, afterDeath, nearAdds: nearAdds,
             planAdds: planAdds, overSkipped: overSkipped);
@@ -5831,9 +5849,11 @@ public static class PlayerBotDriver
         // made while the bot stays that took no camp and skipped a spot for that monster falls back as one with no camp
         // in the zone: the spots skipped aren't rejected, so its next plans meet them again (a capped one stood held,
         // with a plan every 30 s and no fallback cap): FallBackInPlace, or a break-off's EndReplan. Never ResumeRoute:
-        // only a route give-up's plan walks on, and that one stays.
-        bool stay = reason == RouteGiveUp && gaveUpOn is { Count: > 0 };
-        if (stay) StayHere(state, player, gaveUpOn[0], now);
+        // only a route give-up's plan walks on, and that one stays. The second review: whether a route give-up stays is
+        // its own blockers' (a second give-up in a stay stays for the monster it gave up on now, the record then that
+        // one's).
+        bool stay = reason == RouteGiveUp && blockers is { Count: > 0 };
+        if (stay) StayHere(state, player, blockers[0], now);
         bool lifted = !stay && (spots.Length == 0 || reason == RouteGiveUp || routeSkipped > 0) &&   // no camp in the
             FallBack(state, player, reason, now);                    //   zone: none to try next time either; #167 F P1:
         if (Log.IsInfoEnabled)                                       //   a lift
@@ -5959,9 +5979,10 @@ public static class PlayerBotDriver
         state.RouteAvoidUntil = now + AutonomousDeathRecoveryPolicy.FailureMemoryMilliseconds;
     }
 
-    // #167 F12-S: the monster a stay keeps out of the bot's roam (PickRoamPoint), its pulls (FindWithin's pick) and
-    // (the review) its plans' camps (RelocateIfOutgrown's gaveUpOn) while the stay lasts (RouteAvoidUntil), unless it
-    // fights the bot already (IsAttacking: that fight is on); else none.
+    // #167 F12-S: the monster a stay keeps out of the bot's roam (PickRoamPoint, Roam's camp moved) and its pulls
+    // (FindWithin's pick) while the stay lasts (RouteAvoidUntil), unless it fights the bot already (IsAttacking: that
+    // fight is on); else none. The plans' camps (RelocateIfOutgrown's gaveUpOn; the review) read the record itself, the
+    // monster fighting the bot or not (the second review).
     private static (GameNPC Npc, Vector3 At, int AggroRange)? StayAvoid(PlayerBotState state, GamePlayer player,
         long now) =>
         now < state.RouteAvoidUntil && !IsAttacking(player, state.RouteAvoid.Npc) ? state.RouteAvoid : null;
@@ -5983,7 +6004,9 @@ public static class PlayerBotDriver
 
     // #167 F12-S: while the bot stays (avoid, StayAvoid), a point whose walk from here doesn't keep clear of the
     // monster it gave up on (StayClear) is not taken: up to RouteStayTries random points, then the point 700 from the
-    // centre straight away from that monster. Without one, as before: one random point, else one 700 off at random.
+    // centre straight away from that monster, if its walk keeps clear of it (the second review), else the point 700
+    // from here straight away from it (a bot past the monster from its anchor, in its reach: out of it). Without one,
+    // as before: one random point, else one 700 off at random.
     private static Vector3 PickRoamPoint(GamePlayer player, Vector3 centre,
         (GameNPC Npc, Vector3 At, int AggroRange)? avoid = null)
     {
@@ -5996,8 +6019,15 @@ public static class PlayerBotDriver
                 (avoid is not { } stay || StayClear(here, random.Value, stay.At, stay.AggroRange)))
                 return random.Value;
         }
-        double angle = avoid is { } away ? Math.Atan2(centre.Y - away.At.Y, centre.X - away.At.X)
-            : Random.Shared.NextDouble() * Math.PI * 2;
+        Vector3 Away(Vector3 from, Vector3 at)                                          // 700 on from `from`,
+        {                                                                               //   straight away from at
+            double a = Math.Atan2(from.Y - at.Y, from.X - at.X);
+            return new(from.X + (float)(Math.Cos(a) * 700), from.Y + (float)(Math.Sin(a) * 700), from.Z);
+        }
+        if (avoid is { } away)
+            return Away(centre, away.At) is var fromCentre && StayClear(here, fromCentre, away.At, away.AggroRange)
+                ? fromCentre : Away(here, away.At);
+        double angle = Random.Shared.NextDouble() * Math.PI * 2;
         return new(centre.X + (float)(Math.Cos(angle) * 700), centre.Y + (float)(Math.Sin(angle) * 700), centre.Z);
     }
 
