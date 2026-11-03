@@ -304,6 +304,37 @@ public sealed class UT_HeadlessClient
         Assert.That(client.RegionChangePending, Is.True);
     }
 
+    // #160 step 1: SendPlayerQuit(false) to a Playing client comes only from the quit timer's end (GamePlayer.cs:827); the
+    // kick to the character screen sets CharScreen first (GameServiceUtils.cs:78-83); every other caller sends totalOut.
+    [Test]
+    public void Only_the_quit_timers_end_marks_the_client_as_quit()
+    {
+        HeadlessClient client = Client();
+        client.ClientState = GameClient.eClientState.Playing;
+        client.Out.SendPlayerQuit(true);                                      // a GM's /kick (kick.cs:85)
+        Assert.That(client.QuitSent, Is.False);
+        client.ClientState = GameClient.eClientState.CharScreen;
+        client.Out.SendPlayerQuit(false);                                     // the kick to the character screen
+        Assert.That(client.QuitSent, Is.False);
+        client.ClientState = GameClient.eClientState.Playing;
+        client.Out.SendPlayerQuit(false);                                     // the quit timer's end
+        Assert.That(client.QuitSent, Is.True);
+    }
+
+    // #160 step 1: at its next tick the quit client goes to the character screen and logs out with reason quit, which the
+    // spawner reads as its own log-off (PlayerBotSessions.AfterLeave). No player here: the quit took it out of the world.
+    [Test]
+    public void After_the_quit_timer_the_client_goes_to_its_character_screen_and_logs_out_quit()
+    {
+        HeadlessClient client = Client();
+        typeof(HeadlessClient).GetProperty(nameof(HeadlessClient.Step))!.SetValue(client, HeadlessStep.InWorld);
+        client.ClientState = GameClient.eClientState.Playing;
+        client.Out.SendPlayerQuit(false);
+        typeof(ClientService).GetMethod("BeginTickInternal", HiddenStatic)!.Invoke(null, [client]);
+        Assert.That((client.ClientState, client.LogoutReason, client.QuitPosted),
+            Is.EqualTo((GameClient.eClientState.CharScreen, PlayerBotSessions.QuitReason, true)));
+    }
+
     [Test]
     public void The_navmesh_answers_LoS_and_a_zone_without_a_mesh_sees()
     {

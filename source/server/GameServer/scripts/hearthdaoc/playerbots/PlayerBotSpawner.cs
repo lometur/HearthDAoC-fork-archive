@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -27,7 +28,13 @@ namespace DOL.GS.HearthDAoC.PlayerBots;
 // class's GameBot plan (PlayerBotKit), geared by the GameBot's rules at its first entered world (PlayerBotKitGear), and
 // trained on each level-up.
 //
-// Lines marked "// T4" came with the driver (task 4), lines marked "// T5" with the errands (task 5).
+// #160 step 1: HEARTHDAOC_PLAYER_BOT_SESSIONS (PlayerBotSessionSettings; off, the default, changes none of the above) is
+// read with the other two. On, first logins follow the GameBots' startup ramp, a session ends in a player's log-off
+// (PlayerBotLogOffTask, given to the driver on the game loop, at most PlayerBotSessions.LogOffsPerSecond a second), the
+// bot comes back after its offline gap where it logged off (no spot placement, its camp kept), and a bot that drops out
+// is logged in again RelogSeconds later, at most PlayerBotSessions.MaxRelogs a run; each drop still logs a lost line.
+//
+// Lines marked "// T4" came with the driver (task 4), lines marked "// T5" with the errands (task 5), "// #160" with step 1.
 public static class PlayerBotSpawner
 {
     public const string LogPrefix = "HEARTHDAOC_PLAYER_BOTS";
@@ -41,6 +48,7 @@ public static class PlayerBotSpawner
     public const int HeapSnapshotMinute = 51;   // after the measured windows, minutes 20-50
     public const int MaxPlayersReserve = 50;    // bots count in ClientService.ClientCount, which max_players gates (LoginRequestHandler.cs:426)
     public const int ErrandMaxBots = 3;         // errands and their re-login only when the plan has 3 bots or fewer (run 1)
+    public const int LogOffRetrySeconds = 5;    // #160: a log-off the driver could not take yet is asked again
     private const long MB = 1024 * 1024;
 
     private static readonly Logger Log = LoggerManager.Create(typeof(PlayerBotSpawner));
@@ -51,10 +59,13 @@ public static class PlayerBotSpawner
     private static DateTime _startedUtc, _nextStatusUtc;
     private static bool _readyLogged;
     private static int _ticking, _heapDone;
+    private static int _logOffs, _relogins, _drops;                                  // #160: the timer only, under Gate
 
     public static PlayerBotPlan Plan { get; private set; } = PlayerBotPlan.Off;
+    public static PlayerBotSessionSettings Sessions { get; private set; } = PlayerBotSessionSettings.Off;   // #160
 
-    public enum SlotPhase { Pending, Loading, Playing, Relogging, Failed, Lost }
+    // #160: LoggingOff (in the world, its log-off asked) and Offline (out until RetryAtUtc) only while sessions are on.
+    public enum SlotPhase { Pending, Loading, Playing, Relogging, Failed, Lost, LoggingOff, Offline }
 
     public sealed class SlotState(PlayerBotSlot slot, bool selfTest)
     {
@@ -67,9 +78,17 @@ public static class PlayerBotSpawner
         public volatile bool Spotted;               // set by StartOnGameLoop: placed at its PLAYER_BOT_SPOTS spot
         public volatile PlayerBotKitPlan Kit;       // set by StartOnGameLoop, once per slot: a level-matched bot's plan
         public volatile bool Equipped;              // set by OnEnteredWorld: the kit's gear went on (not again on a re-login)
+        public volatile int Entries;                // set by OnEnteredWorld: worlds entered this run (1: the run's first login)
+        public volatile bool LogOffStarted;         // #160: set by BeginLogOff once the log-off is the driver's task
+        public volatile PlayerBotCamp Camp;         // #160: the driver's anchor as the bot left, for its next login
+        public Random Dice { get; } = PlayerBotSessions.Dice(slot);   // #160: its sessions and gaps (the timer only)
         public SlotPhase Phase;                     // the timer only, under Gate
         public int Attempts;
+        public bool Started;                        // #160: its first login of the run began (the ramp counts these)
+        public int Logins, Drops;                   // #160: worlds entered while sessions are on; drops logged in again
+        public string LeftHow = "-";                // #160: quit, logoff-forced or the drop's reason, for the relogin line
         public DateTime LoadingSinceUtc, RetryAtUtc;
+        public DateTime SessionStartUtc, SessionEndsUtc, LogOffAskedUtc, LeftUtc;   // #160
         public string Name => Client?.Player?.Name ?? "-";
     }
 
@@ -92,11 +111,13 @@ public static class PlayerBotSpawner
         {
             PlayerBotWake.Lever = PlayerBotWake.Parse(Environment.GetEnvironmentVariable(PlayerBotWake.EnvironmentVariable));
             _spots = PlayerBotSpots.Load(Environment.GetEnvironmentVariable(PlayerBotSpots.EnvironmentVariable));
+            Sessions = PlayerBotSessionSettings.Parse(Environment.GetEnvironmentVariable(PlayerBotSessionSettings.EnvironmentVariable));   // #160
         }
         catch (Exception exception) when (exception is FormatException or IOException or UnauthorizedAccessException)
         {
             Log.Error($"{LogPrefix} error {exception.Message}; player bots stay off");
             Plan = PlayerBotPlan.Off;
+            Sessions = PlayerBotSessionSettings.Off;
             return;
         }
         if (Properties.MAX_PLAYERS > 0 && Plan.Total > Properties.MAX_PLAYERS - MaxPlayersReserve)
@@ -136,6 +157,11 @@ public static class PlayerBotSpawner
         _startedUtc = DateTime.UtcNow;
         _nextStatusUtc = _startedUtc.AddSeconds(StatusEverySeconds);
         Log.Info(Invariant($"{LogPrefix} plan {Plan.Describe()} slots={_slots.Length} perSecond={LoginsPerSecond} maxLoading={MaxLoading} wake={PlayerBotWake.Describe(PlayerBotWake.Lever)} spots={_spots.Describe()} levels={_spots.DescribeBuilds()}"));
+        if (Sessions.On)                                                                              // #160
+        {
+            HeadlessClient.ReleaseDeadOnLogout = true;
+            Log.Info(Invariant($"{LogPrefix} sessions {Sessions.Describe()} logoffsPerSecond={PlayerBotSessions.LogOffsPerSecond} maxRelogs={PlayerBotSessions.MaxRelogs}"));
+        }
         GameEventMgr.AddHandler(GameClientEvent.PlayerLoaded, HeadlessClient.OnPlayerLoaded); // no ghost after a timed-out load
         _timer = new Timer(Tick, null, FirstTickMs, 1_000);
     }
@@ -163,7 +189,8 @@ public static class PlayerBotSpawner
             {
                 Observe(now);
                 StartDue(now);
-                if (!_readyLogged && _slots.Length > 0 && _slots.All(s => s.Phase == SlotPhase.Playing))
+                if (!_readyLogged && _slots.Length > 0 &&                                             // #160: with sessions, all
+                    (Sessions.On ? _slots.All(s => s.Logins > 0) : _slots.All(s => s.Phase == SlotPhase.Playing)))   // in once
                 {
                     _readyLogged = true;
                     Log.Info(Invariant($"{LogPrefix} ready playing={_slots.Length}/{_slots.Length} sinceStartS={(long)(now - _startedUtc).TotalSeconds}"));
@@ -190,6 +217,7 @@ public static class PlayerBotSpawner
     private static void Observe(DateTime now)
     {
         long loopNow = GameLoop.GameLoopTime;
+        int logOffs = 0;                                                                              // #160: this second's
         foreach (SlotState s in _slots)
         {
             HeadlessClient c = s.Client;
@@ -201,6 +229,7 @@ public static class PlayerBotSpawner
                 case SlotPhase.Loading when c != null && c.Step == HeadlessStep.InWorld:
                     s.Phase = SlotPhase.Playing;
                     Log.Info(Invariant($"{LogPrefix} login account={s.Slot.AccountName} name={s.Name} ms={(long)(now - s.LoadingSinceUtc).TotalMilliseconds} attempt={s.Attempts + 1}"));
+                    if (Sessions.On) StartSession(s, now);                                            // #160
                     break;
                 case SlotPhase.Loading when c != null && c.ClientState == GameClient.eClientState.Disconnected:
                     Fail(s, now, "logged-out reason=" + c.LogoutReason);
@@ -208,15 +237,14 @@ public static class PlayerBotSpawner
                 case SlotPhase.Loading when (now - s.LoadingSinceUtc).TotalSeconds > LoginTimeoutSeconds:
                     Fail(s, now, "timeout step=" + (c?.Step.ToString() ?? "none"));
                     break;
-                case SlotPhase.Playing when c.NeedsReap(loopNow):
+                case SlotPhase.Playing or SlotPhase.LoggingOff when c.NeedsReap(loopNow):
                     c.Logout("reaped");
-                    s.Phase = SlotPhase.Lost;
-                    Log.Warn($"{LogPrefix} lost account={s.Slot.AccountName} name={s.Name} reason=reaped");
+                    Leave(s, now, "reaped");
                     break;
-                case SlotPhase.Playing when c.ClientState == GameClient.eClientState.Disconnected || c.Step == HeadlessStep.LoggingOut:
-                    // Never logged in again: F1 (no link death, no kick) must stay visible.
-                    s.Phase = SlotPhase.Lost;
-                    Log.Warn($"{LogPrefix} lost account={s.Slot.AccountName} name={s.Name} reason={c.LogoutReason}");
+                case SlotPhase.Playing or SlotPhase.LoggingOff
+                    when c.ClientState == GameClient.eClientState.Disconnected || c.Step == HeadlessStep.LoggingOut:
+                    // Sessions off: never logged in again, F1 (no link death, no kick) must stay visible (Leave).
+                    Leave(s, now, c.LogoutReason);
                     break;
                 case SlotPhase.Playing when s.RelogRequested && !s.ErrandRelogged:                   // T5
                     s.RelogRequested = false;
@@ -230,7 +258,84 @@ public static class PlayerBotSpawner
                     s.Phase = SlotPhase.Pending;
                     s.RetryAtUtc = now.AddSeconds(5);
                     break;
+                case SlotPhase.Playing when Sessions.On && now >= s.SessionEndsUtc &&                // #160: its session
+                                            logOffs < PlayerBotSessions.LogOffsPerSecond:            //   is over
+                    logOffs++;
+                    s.Phase = SlotPhase.LoggingOff;
+                    s.LogOffStarted = false;
+                    s.LogOffAskedUtc = now;
+                    NpcService.Instance.Post(BeginLogOff, s);
+                    break;
+                case SlotPhase.LoggingOff when !s.LogOffStarted && (now - s.LogOffAskedUtc).TotalSeconds >= LogOffRetrySeconds:
+                    s.Phase = SlotPhase.Playing;                                                      // #160: asked again
+                    break;
             }
+        }
+    }
+
+    // #160: StartSession, when a login reaches the world with sessions on: the session's length, from the slot's dice.
+    // Its failed attempts start afresh: with many logins a run, MaxAttempts counts one login's tries (Fail), not the run's.
+    private static void StartSession(SlotState s, DateTime now)
+    {
+        if (++s.Logins > 1) _relogins++;
+        s.Attempts = 0;
+        s.SessionStartUtc = now;
+        s.SessionEndsUtc = now + PlayerBotSessions.Roll(Sessions.SessionMinMinutes, Sessions.SessionMaxMinutes, s.Dice);
+    }
+
+    // #160: a bot out of the world, by its own log-off (quit, logoff-forced) or a drop. Sessions off: Lost, never logged
+    // in again, with the lost line as before. On: Offline until its gap ends; a drop: the lost line, then logged in again
+    // RelogSeconds later, at most MaxRelogs a run (PlayerBotSessions.AfterLeave). Its old client is gone (Disconnected)
+    // before StartDue starts the next login.
+    private static void Leave(SlotState s, DateTime now, string reason)
+    {
+        bool own = reason is PlayerBotSessions.QuitReason or PlayerBotSessions.ForcedReason;
+        if (Sessions.On && !own)
+        {
+            s.Drops++;
+            _drops++;
+        }
+        s.LeftHow = reason;
+        s.LeftUtc = now;
+        switch (PlayerBotSessions.AfterLeave(Sessions.On, reason, s.Drops))
+        {
+            case PlayerBotLeave.Offline:
+                TimeSpan gap = PlayerBotSessions.Roll(Sessions.OfflineMinMinutes, Sessions.OfflineMaxMinutes, s.Dice);
+                s.Phase = SlotPhase.Offline;
+                s.RetryAtUtc = now + (gap < TimeSpan.FromSeconds(5) ? TimeSpan.FromSeconds(5) : gap);   // as the errand's
+                _logOffs++;
+                Log.Info(Invariant($"{LogPrefix} logoff account={s.Slot.AccountName} name={s.Name} reason={reason} sessionS={(long)(now - s.SessionStartUtc).TotalSeconds} askedS={(long)(now - s.LogOffAskedUtc).TotalSeconds} offlineS={(long)gap.TotalSeconds}"));
+                break;
+            case PlayerBotLeave.Relog:
+                s.Phase = SlotPhase.Pending;
+                s.RetryAtUtc = now.AddSeconds(Sessions.RelogSeconds);
+                Log.Warn(Invariant($"{LogPrefix} lost account={s.Slot.AccountName} name={s.Name} reason={reason} relogInS={Sessions.RelogSeconds} drops={s.Drops}/{PlayerBotSessions.MaxRelogs}"));
+                break;
+            default:
+                s.Phase = SlotPhase.Lost;
+                Log.Warn($"{LogPrefix} lost account={s.Slot.AccountName} name={s.Name} reason={reason}");
+                break;
+        }
+    }
+
+    // #160: on the game loop (an NpcService posted action, as StartOnGameLoop). The log-off becomes the driver's task once
+    // the driver runs the bot and no other task (the errands); else LoggingOff asks again after LogOffRetrySeconds. The
+    // driver's anchor is kept for the next login (Drive): the session's camp.
+    private static void BeginLogOff(SlotState s)
+    {
+        try
+        {
+            HeadlessClient client = s.Client;
+            if (client?.Player is not { ObjectState: GameObject.eObjectState.Active } player ||
+                PlayerBotDriver.StateOf(player) is not { } state || state.Task is { Finished: false })
+                return;
+            s.Camp = new PlayerBotCamp(state.AnchorRegion, state.Anchor);
+            state.Task = new PlayerBotLogOffTask(client, GameLoop.GameLoopTime);
+            s.LogOffStarted = true;
+        }
+        catch (Exception exception)
+        {
+            Log.Error($"{LogPrefix} logoff failed account={s.Slot.AccountName}", exception);
         }
     }
 
@@ -248,9 +353,21 @@ public static class PlayerBotSpawner
     private static void StartDue(DateTime now)
     {
         int loading = _slots.Count(s => s.Phase == SlotPhase.Loading);
-        SlotState[] due = _slots.Where(s => s.Phase == SlotPhase.Pending && now >= s.RetryAtUtc).ToArray();
-        foreach (SlotState s in due.Take(PlayerBotPacing.LoginsToStart(due.Length, loading, LoginsPerSecond, MaxLoading)))
+        int room = PlayerBotSessions.FirstLoginRoom(Sessions, _slots.Length, _slots.Count(s => s.Started), now - _startedUtc);   // #160
+        var due = new List<SlotState>();
+        foreach (SlotState s in _slots)
         {
+            if (s.Phase is not (SlotPhase.Pending or SlotPhase.Offline) || now < s.RetryAtUtc ||
+                s.Client is { ClientState: not GameClient.eClientState.Disconnected })               // #160: the last one gone
+                continue;
+            if (!s.Started && room-- <= 0)                                                           // #160: the ramp holds
+                continue;                                                                            //   first logins only
+            due.Add(s);
+        }
+        foreach (SlotState s in due.Take(PlayerBotPacing.LoginsToStart(due.Count, loading, LoginsPerSecond, MaxLoading)))
+        {
+            s.Started = true;                                                                        // #160
+            s.Client = null;                                                                         // #160: Loading reads the new one
             s.Phase = SlotPhase.Loading;
             s.LoadingSinceUtc = now;
             NpcService.Instance.Post(StartOnGameLoop, s); // as AutonomousPopulationController.cs:157
@@ -263,8 +380,10 @@ public static class PlayerBotSpawner
         try
         {
             DbAccount account = PlayerBotAccounts.EnsureAccount(s.Slot);
+            if (Sessions.On) PlayerBotAccounts.TouchLogin(account);                                   // #160
             HeadlessClient client = new(account);
-            PlayerBotSpot spot = s.ErrandRelogged ? null : _spots.For(s.Slot);                         // the start, not the errand's re-login
+            PlayerBotSpot spot = s.Entries > 0 ? null : _spots.For(s.Slot);                           // the run's first login only, not
+                                                                                                      //   a re-login (errand's, #160's)
             if (spot?.Build != null && s.Kit == null)                                                 // once per slot: a retry keeps it
             {
                 PlayerBotKitPlan kit = PlayerBotKit.Plan(spot.Build, PlayerBotKit.Seed(s.Slot));
@@ -287,11 +406,18 @@ public static class PlayerBotSpawner
             if (created)
                 Log.Info(Invariant($"{LogPrefix} created account={s.Slot.AccountName} name={ch.Name} realm={PlayerBotPlan.RealmKey(s.Slot.Realm)} race={ch.Race} class={ch.Class} level={ch.Level} region={ch.Region} x={ch.Xpos} y={ch.Ypos} guild={ch.GuildID}"));
             client.EnteredWorld += (c, first) => OnEnteredWorld(s, c, first);
-            client.LoggedOut += c => PlayerBotDriver.Stop(c.Player);                                  // T4
+            client.LoggedOut += c =>
+            {
+                if (Sessions.On && PlayerBotDriver.StateOf(c.Player) is { } state)                    // #160: a drop's camp,
+                    s.Camp = new PlayerBotCamp(state.AnchorRegion, state.Anchor);                     //   if still driven
+                PlayerBotDriver.Stop(c.Player);                                                       // T4
+            };
             s.Client = client;
             DbCoreCharacter row = PlayerBotAccounts.LoginRow(account, ch);                            // the one the login reads
             if (spot != null)
                 s.Spotted = PlayerBotSpots.Place(spot, row, s.Slot.AccountName, Log);
+            if (Sessions.On && s.Entries > 0)                                                         // #160: where it logs in
+                Log.Info(Invariant($"{LogPrefix} relogin account={s.Slot.AccountName} name={row.Name} after={s.LeftHow} offS={(long)(DateTime.UtcNow - s.LeftUtc).TotalSeconds} region={row.Region} x={row.Xpos} y={row.Ypos} z={row.Zpos}"));
             client.BeginLogin(row);
         }
         catch (Exception exception)
@@ -306,6 +432,7 @@ public static class PlayerBotSpawner
     {
         if (!first)
             return; // a re-entry after a region change: the driver keeps running and waits for it
+        s.Entries++;                                                                                  // the loop only
         try
         {
             GamePlayer player = c.Player;
@@ -322,6 +449,8 @@ public static class PlayerBotSpawner
                 {
                     if (s.Spotted) state.HoldAnchor = true;
                     state.Kit = s.Kit;                                                                // TrainTo on each level-up
+                    if (Sessions.On && s.Camp is { } camp && camp.Region == p.CurrentRegionID)        // #160: back to the camp
+                        (state.AnchorRegion, state.Anchor) = (camp.Region, camp.At);                  //   it played last
                 }
                 return true;
             }
@@ -333,7 +462,7 @@ public static class PlayerBotSpawner
                     Log.Warn($"{LogPrefix} driver not started account={s.Slot.AccountName} after=relog");
                 return;                                                                               // T5
             }
-            if (s.SelfTest)
+            if (s.SelfTest && s.Entries == 1)                                                         // the run's first login
             {
                 // onDone runs on the self-test's timer; a region trip that has not re-entered yet leaves it undriven.
                 HeadlessSelfTest.Start(c, done =>                                                     // T4 (T3: Start(c))
@@ -380,6 +509,12 @@ public static class PlayerBotSpawner
 
     private static int Count(SlotPhase phase) => _slots.Count(s => s.Phase == phase);
 
-    private static string Counts() => Invariant(
-        $"playing={Count(SlotPhase.Playing)} loading={Count(SlotPhase.Loading)} pending={Count(SlotPhase.Pending)} relogging={Count(SlotPhase.Relogging)} failed={Count(SlotPhase.Failed)} lost={Count(SlotPhase.Lost)} of={_slots.Length}");
+    private static string Counts()
+    {
+        string counts = Invariant(
+            $"playing={Count(SlotPhase.Playing)} loading={Count(SlotPhase.Loading)} pending={Count(SlotPhase.Pending)} relogging={Count(SlotPhase.Relogging)} failed={Count(SlotPhase.Failed)} lost={Count(SlotPhase.Lost)} of={_slots.Length}");
+        return Sessions.On                                                                            // #160
+            ? counts + Invariant($" loggingOff={Count(SlotPhase.LoggingOff)} offline={Count(SlotPhase.Offline)} logoffs={_logOffs} relogins={_relogins} drops={_drops}")
+            : counts;
+    }
 }

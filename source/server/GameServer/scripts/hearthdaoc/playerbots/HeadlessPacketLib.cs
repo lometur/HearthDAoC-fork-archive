@@ -132,6 +132,13 @@ public sealed class HeadlessPacketLib : BotDummyPacketLib, IPacketLib
 
     public new void SendNonHybridSpellLines() => _client.Player?.GetAllUsableListSpells(true);
 
+    // #160 step 1: the quit timer's end sends SendPlayerQuit(false) to a Playing client, then Quit(true) and the save
+    // (GamePlayer.cs:827-830); a real client then goes to its character screen (CharacterOverviewRequestHandler.cs:20). The
+    // kick to the character screen sets CharScreen first (GameServiceUtils.cs:78-83); every other caller sends totalOut
+    // (a GM's /kick, kick.cs:85; a failed AddToWorld, WorldInitRequestHandler.cs:101; ...): those keep their own paths
+    // (HeadlessClient.OnPlayerQuitSent). BotDummyPacketLib's is a no-op (bots/BotDummyPacketLib.cs:483-485).
+    public new void SendPlayerQuit(bool totalOut) => _client.OnPlayerQuitSent(totalOut);
+
     // The other two members BotDummyPacketLib throws in (bots/BotDummyPacketLib.cs:60-63, :366-369).
     public new void SendChangeGroundTarget(int x, int y, int z) { }
     public new void SendRawMessage(string msg, eChatType type, eChatLoc loc) { }

@@ -46,7 +46,13 @@ public sealed class HeadlessClient : GameClient, IPlayerBotClient
     private volatile bool _regionChangePending;
     private volatile bool _heartbeatEnabled = true;
     private volatile string _logoutReason = "none";
+    private volatile bool _quitSent;
     private long _nextHeartbeat;
+
+    // #160 step 1, set by the spawner while sessions are on: a dead bot that logs out (a drop: an error, a reap, a GM's
+    // /kick) is released first, as a link death's end does (GamePlayer.cs:1131-1137), so its next login is at its bind
+    // with the release's costs, not alive where it died (WorldInitRequestHandler.cs:108-112).
+    public static bool ReleaseDeadOnLogout { get; set; }
 
     public HeadlessStep Step { get; private set; }
     public long StepSince { get; private set; }
@@ -56,6 +62,7 @@ public sealed class HeadlessClient : GameClient, IPlayerBotClient
     public int Entries { get; private set; }
     public string LogoutReason => _logoutReason;
     public bool QuitPosted => Volatile.Read(ref _quitPosted) != 0;
+    public bool QuitSent => _quitSent;              // #160: the quit timer ended (OnPlayerQuitSent)
     public HeadlessInbox Inbox { get; } = new();
     public bool RegionChangePending => _regionChangePending;
     public int PendingAnswers => _losAnswers.Count + _dialogAnswers.Count;
@@ -146,6 +153,13 @@ public sealed class HeadlessClient : GameClient, IPlayerBotClient
             case HeadlessStep.None:
             case HeadlessStep.LoggingOut:
                 return;
+            case HeadlessStep.InWorld when _quitSent && player?.ObjectState is not GameObject.eObjectState.Active:
+                // #160: the quit timer ended, the player saved and out of the world (GamePlayer.cs:827-830). As a real
+                // client goes to its character screen (CharacterOverviewRequestHandler.cs:20): then GameClient.Quit skips
+                // a second Player.Quit for CharScreen (GameClient.cs:232), and QuitOnGameLoop a second save (no Active player).
+                ClientState = eClientState.CharScreen;
+                Logout(PlayerBotSessions.QuitReason);
+                return;
             case HeadlessStep.InWorld when ClientState is eClientState.CharScreen:
                 Logout("kicked"); // GameServiceUtils.KickPlayerToCharScreen (GameServiceUtils.cs:73-87)
                 return;
@@ -228,6 +242,13 @@ public sealed class HeadlessClient : GameClient, IPlayerBotClient
     internal void QueueLosAnswer(ushort source, ushort target, LosCheckResponse answer) => _losAnswers.Enqueue((source, target, answer));
 
     internal void OnRegionChanged() => _regionChangePending = true;
+
+    // HeadlessPacketLib.SendPlayerQuit: only the quit timer's end marks the client, Playing and not totalOut.
+    internal void OnPlayerQuitSent(bool totalOut)
+    {
+        if (!totalOut && ClientState is eClientState.Playing)
+            _quitSent = true;
+    }
 
     // The bytes a dialog click sends: data1, data2, data3 (big-endian shorts), code, response (DialogResponseHandler.cs:15-19).
     public static byte[] DialogResponseBytes(eDialogCode code, ushort data1, ushort data2, ushort data3, bool yes) =>
@@ -323,6 +344,8 @@ public sealed class HeadlessClient : GameClient, IPlayerBotClient
         {
             if (player != null && player.ObjectState is GameObject.eObjectState.Active)
             {
+                if (ReleaseDeadOnLogout && !player.IsAlive)       // #160: as the link-death end does (GamePlayer.cs:1131-1137)
+                    player.Release(player.ReleaseType, true);
                 CraftingProgressMgr.FlushAndSaveInstance(player); // as the link-death end does (GamePlayer.cs:1141-1142)
                 player.SaveIntoDatabase();
             }

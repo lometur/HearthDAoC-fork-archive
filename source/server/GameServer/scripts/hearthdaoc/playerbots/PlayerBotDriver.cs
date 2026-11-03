@@ -5563,6 +5563,11 @@ public static class PlayerBotDriver
         return found;
     }
 
+    /// <summary>#160 step 1, the log-off's spot (PlayerBotLogOffTask): out of the reach of every monster round the bot
+    /// that would aggro, on the step-out rings (ClearSpotNear, StepOutRings: 500-2,500 out), or null when it stands
+    /// clear or no ring point is.</summary>
+    public static Vector3? LogOffSpot(GamePlayer player) => ClearSpotNear(player, StepOutRings);
+
     // The monsters within radius round the bot that would aggro it (AddReach), a hostile keep guard too (#167 D7,
     // IsThreat), in the scans' list (_reach): the caller clears it.
     private static List<(GameNPC Npc, Vector3 At, int AggroRange)> ThreatsWithin(GamePlayer player, int radius)
