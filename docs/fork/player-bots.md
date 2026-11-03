@@ -412,9 +412,9 @@ Playing:
     is #171's.
   - A bot's login and logout messages go only to its region, to the players its `/region` would reach: those in the
     same region and of its realm (staff too). A human's go to every online player, as before, and the owner's server
-    property `show_logins` still turns them all off (`PlayerEnterExit.cs`, #160). A realm's mainland is one region
-    (Albion 1, Midgard 100, Hibernia 200) and holds about 70% of the test spots' bots (277 of 390 on `spots-lm3`),
-    so a human there still sees most of that realm's bot logins and logouts.
+    property `show_logins` still turns them all off (`PlayerEnterExit.cs`, #160). Each realm's mainland is one
+    region (Albion 1, Midgard 100, Hibernia 200), and on `spots-lm3` it holds about 70% of that realm's bots (277 of
+    390 in all), so a human there still sees most of their realm's bot logins and logouts.
 - **Not done at all:** they don't group, buff others, take part in RvR or battlegrounds, stealth, use realm abilities
   or ride horses (#152, #167).
 - **Ranged and songs:** they can't shoot or play. Archers fight in melee, and Bards and Minstrels have no songs: theirs

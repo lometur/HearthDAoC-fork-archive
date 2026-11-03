@@ -72,8 +72,8 @@ namespace DOL.GS.GameEvents
 		private static void PlayerEntered(DOLEvent e, object sender, EventArgs arguments)
 		{
 			// HearthDAoC: the players Audience picks are told (#160). It holds show_logins, IsAnonymous and
-			// the player itself, and keeps a player bot's to its region.
-			if (sender is not GamePlayer player)
+			// the player itself, and keeps a player bot's to its region. show_logins off returns first.
+			if (!ServerProperties.Properties.SHOW_LOGINS || sender is not GamePlayer player)
 				return;
 
 			foreach (GamePlayer otherPlayer in Audience(player, ClientService.Instance.GetPlayers()))
@@ -112,7 +112,10 @@ namespace DOL.GS.GameEvents
 		private static void PlayerQuit(DOLEvent e, object sender, EventArgs arguments)
 		{
 			// HearthDAoC: the players Audience picks are told (#160). It holds show_logins, IsAnonymous and
-			// the player itself, and keeps a player bot's to its region.
+			// the player itself, and keeps a player bot's to its region. show_logins off returns first.
+			if (ServerProperties.Properties.SHOW_LOGINS == false)
+				return;
+
 			GamePlayer player = sender as GamePlayer;
 			if (player == null) return;
 
