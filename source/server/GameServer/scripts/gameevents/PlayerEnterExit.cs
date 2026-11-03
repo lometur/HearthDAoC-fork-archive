@@ -30,6 +30,39 @@ namespace DOL.GS.GameEvents
 			GameEventMgr.RemoveHandler(GamePlayerEvent.Quit, new DOLEventHandler(PlayerQuit));
 		}
 
+		// HearthDAoC: who of the players online is told that a player logged in or out (#160; the owner,
+		// 2026-11-03: "the bots should only do local messaging", "'/region' is fine"). Nobody with show_logins
+		// off or for an anonymous player, and never the player itself. A human's go to every player online, as
+		// before. A player bot's go to the players its /region reaches (RegionCommandHandler.Broadcast): those
+		// in its region whom the server rules let understand it; a bot with no region tells nobody. Every quit
+		// (the quit timer's end, a link death's end, a kick to the character screen, a dropped client) raises
+		// Quit in GamePlayer.Quit(true), before Delete and with CurrentRegion still set, so a bot's log-out
+		// goes to the region it is in (only a collapsing instance clears it, and then nobody is told).
+		public static System.Collections.Generic.IEnumerable<GamePlayer> Audience(GamePlayer player,
+			System.Collections.Generic.IEnumerable<GamePlayer> online)
+		{
+			if (!ServerProperties.Properties.SHOW_LOGINS || player.IsAnonymous)
+				yield break;
+
+			bool bot = HearthDAoC.PlayerBots.PlayerBotPlan.IsBotAccount(player.Client?.Account?.Name);
+			Region region = player.CurrentRegion;
+
+			if (bot && region == null)
+				yield break;
+
+			foreach (GamePlayer otherPlayer in online)
+			{
+				if (otherPlayer == player)
+					continue;
+
+				if (bot && (otherPlayer.CurrentRegion != region ||
+					!GameServer.ServerRules.IsAllowedToUnderstand(otherPlayer, player)))
+					continue;
+
+				yield return otherPlayer;
+			}
+		}
+
 		/// <summary>
 		/// Event handler fired when players enters the game
 		/// </summary>
@@ -38,14 +71,13 @@ namespace DOL.GS.GameEvents
 		/// <param name="arguments"></param>
 		private static void PlayerEntered(DOLEvent e, object sender, EventArgs arguments)
 		{
-			if (!ServerProperties.Properties.SHOW_LOGINS || sender is not GamePlayer player || player.IsAnonymous)
+			// HearthDAoC: the players Audience picks are told (#160). It holds show_logins, IsAnonymous and
+			// the player itself, and keeps a player bot's to its region.
+			if (sender is not GamePlayer player)
 				return;
 
-			foreach (GamePlayer otherPlayer in ClientService.Instance.GetPlayers())
+			foreach (GamePlayer otherPlayer in Audience(player, ClientService.Instance.GetPlayers()))
 			{
-				if (player == otherPlayer)
-					continue;
-
 				string message = LanguageMgr.GetTranslation(otherPlayer.Client, "Scripts.Events.PlayerEnterExit.Entered", player.Name);
 
 				if (player.Client.Account.PrivLevel > 1)
@@ -79,18 +111,13 @@ namespace DOL.GS.GameEvents
 		/// <param name="arguments"></param>
 		private static void PlayerQuit(DOLEvent e, object sender, EventArgs arguments)
 		{
-			if (ServerProperties.Properties.SHOW_LOGINS == false)
-				return;
-
+			// HearthDAoC: the players Audience picks are told (#160). It holds show_logins, IsAnonymous and
+			// the player itself, and keeps a player bot's to its region.
 			GamePlayer player = sender as GamePlayer;
 			if (player == null) return;
-			if (player.IsAnonymous) return;
 
-			foreach (GamePlayer otherPlayer in ClientService.Instance.GetPlayers())
+			foreach (GamePlayer otherPlayer in Audience(player, ClientService.Instance.GetPlayers()))
 			{
-				if (player == otherPlayer)
-					continue;
-
 				string message = LanguageMgr.GetTranslation(otherPlayer.Client, "Scripts.Events.PlayerEnterExit.Left", player.Name);
 
 				if (player.Client.Account.PrivLevel > 1)
