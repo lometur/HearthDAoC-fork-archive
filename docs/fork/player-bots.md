@@ -326,14 +326,14 @@ What they don't do yet is under [Known shortcomings](#known-shortcomings).
 Against the GameBots (#167), and between them and a live world. Each line goes when its fix lands.
 
 Playing:
-- **Deaths:** over six legs of batch F's code (`st-deathsF` to `st-deathsF3b`: 15 minutes each, 390 level-matched bots
-  on the `spots-lm3` test spots) they die 0.6 times per bot-hour, against about 1 for the PvE GameBots: melee 0.6,
-  casters 0.5, healers 0.7, pet classes 0.4, archers 0.9. Its three pairs died 119, 122 and 96 times. v0.37b-hearth.16
-  on the same spots died 0.77 times over seven legs, v0.37b-hearth.12 1.4 and v0.37b-hearth.11 1.8. One leg is too short
-  to judge a small change: seven legs of the same code have died between 63 and 85 times. The older spot list put 30
-  bots where they couldn't hunt (by a battleground keep, in a dungeon); `spots-lm3` moves the 26 whose spot was the
-  cause, so legs before `st-hearth11` (2.1 on `st-deathsC`, 9.5 on v0.37b-hearth.9's `st-layers5`) don't compare one for
-  one. Still open:
+- **Deaths:** over six legs with the route look-ahead (`st-f12` to `st-f12sb`: 15 minutes each, 390 level-matched bots
+  on the `spots-lm3` test spots; three pairs, the last on this code) they die 0.53 times per bot-hour, against about 1
+  for the PvE GameBots: melee 0.6, casters 0.5, healers 0.5, pet classes 0.3, archers 1.2. Its three pairs died 107, 98
+  and 100 times. Batch F's six legs died 0.59 times, v0.37b-hearth.16 on the same spots 0.77 over seven legs,
+  v0.37b-hearth.12 1.4 and v0.37b-hearth.11 1.8. One leg is too short to judge a small change: seven legs of the same
+  code have died between 63 and 85 times. The older spot list put 30 bots where they couldn't hunt (by a battleground
+  keep, in a dungeon); `spots-lm3` moves the 26 whose spot was the cause, so legs before `st-hearth11` (2.1 on
+  `st-deathsC`, 9.5 on v0.37b-hearth.9's `st-layers5`) don't compare one for one. Still open:
   - A bot caught on the run, or with no point to run to, turns and fights. One no longer runs from a chaser that
     would catch it (as fast as it, counting the chaser's reach): it fights from the start, and those fights are now
     most of the deaths after a refused run.
@@ -374,7 +374,8 @@ Playing:
     second give-up in a stay that stays again keeps out only its own monster from then on (a stay keeps one). Where no
     camp fits, the GameBots' fallback can take that camp again (a failed camp, when no other is left); it is skipped
     only while its way still passes the monster.
-- **Resting:** about half their time: 52.1% over the six legs, against 52.6% on v0.37b-hearth.16 (time-weighted).
+- **Resting:** about half their time: 52.0% over the six F12 legs, against 52.1% on batch F's and 52.6% on
+  v0.37b-hearth.16 (time-weighted).
   Most of it is the real cost of player regeneration. A kill now skips its rest when the bot has what its next pull
   needs. The 80% endurance stop still starts sits that health and power wouldn't, a quarter fewer than on
   v0.37b-hearth.16.
