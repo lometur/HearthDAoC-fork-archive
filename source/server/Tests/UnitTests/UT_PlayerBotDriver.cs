@@ -10597,10 +10597,13 @@ public sealed class UT_PlayerBotDriver
     // gave up late) the anchor steps out straight away from the monster to 800 from it (reach + RouteStayStepOut), at
     // the bot's height: (400,0,0) -> (200,0,0), (1000,300,0) -> (1000,800,0), (400,0,50) (3D 602.1) -> (200,0,50);
     // (400,0,500) is out of it (3D 781.0). A step out snapped back into the reach (350: 650 off) stays where the bot
-    // stands (snapped: 550); on the monster's own spot there is no way away.
+    // stands, unsnapped: its snapped spot (550) lies nearer the monster, in its reach (the review of F12-S); so does
+    // one just out of the reach (290: 710 off) whose snap (440) falls into it; (0,0,0)'s snap (150) stays out of it.
+    // On the monster's own spot there is no way away.
     [TestCase(0f, 0f, 0f, "on", 0f, 0f, 0f)] [TestCase(400f, 0f, 0f, "on", 200f, 0f, 0f)]
     [TestCase(1_000f, 300f, 0f, "on", 1_000f, 800f, 0f)] [TestCase(400f, 0f, 50f, "on", 200f, 0f, 50f)]
-    [TestCase(400f, 0f, 500f, "on", 400f, 0f, 500f)] [TestCase(400f, 0f, 0f, "toward", 550f, 0f, 0f)]
+    [TestCase(400f, 0f, 500f, "on", 400f, 0f, 500f)] [TestCase(400f, 0f, 0f, "toward", 400f, 0f, 0f)]
+    [TestCase(290f, 0f, 0f, "toward", 290f, 0f, 0f)]
     [TestCase(0f, 0f, 0f, "toward", 150f, 0f, 0f)] [TestCase(400f, 0f, 0f, "none", 400f, 0f, 0f)]
     [TestCase(1_000f, 0f, 0f, "on", 1_000f, 0f, 0f)]
     public void StayAnchor(float x, float y, float z, string mesh, float ex, float ey, float ez)
@@ -10629,30 +10632,41 @@ public sealed class UT_PlayerBotDriver
         Assert.That(PlayerBotDriver.StayClear(new(fx, fy, fz), new(tx, ty, tz), new(1_000, 0, az), 500),
             Is.EqualTo(expected));
 
-    // #167 F12-R: RELOCATE routeSkipped=, last, on every route give-up's replan (reason=route), with a camp or none:
-    // the camp spots it skipped for the monster it gave up on. No other reason's line has it. #167 F12-S: a route
-    // give-up's none line then ends with stay=1 when the bot hunts where it stands, stay=0 when it walks on to its own
-    // camp; no camp line, nor another reason's none line, has it.
+    // #167 F12-R: RELOCATE routeSkipped=, last, on every plan that read the monster given up on (readsBlocker): a route
+    // give-up's replan (reason=route), with a camp or none, and (the review of F12-S) any plan made while the bot
+    // stays: the camp spots it skipped for that monster (0 too). No other line has it. #167 F12-S: a route give-up's
+    // none line then ends with stay=1 when the bot hunts where it stands (with spots skipped, or none to take while
+    // the monster is there: routeSkipped=0), stay=0 when it walks on to its own camp; no camp line, nor another
+    // reason's none line, has it.
     [Test]
     public void A_route_give_ups_RELOCATE_line_ends_with_the_spots_it_skipped()
     {
         Assert.That(PlayerBotDriver.RelocateLine("Pbotaaaad", 41, Vector3.Zero, new Vector3(6_000, 0, 0), 6_000, "giant boar",
-            40, 12, PlayerBotDriver.RouteGiveUp, null, 0, true, null, routeSkipped: 2), Is.EqualTo(
+            40, 12, PlayerBotDriver.RouteGiveUp, null, 0, true, null, routeSkipped: 2, readsBlocker: true), Is.EqualTo(
             "PLAYER_BOT_RELOCATE bot=Pbotaaaad level=41 from=(0,0) to=(6000,0,0) distance=6000 monster=\"giant boar\" " +
             "monsterLevel=40 zone=12 reason=route fallback=- barred=old routeSkipped=2"));
         Assert.That(PlayerBotDriver.RelocateLine("Pbotaaaad", 41, Vector3.Zero, new Vector3(6_000, 0, 0), 6_000, "giant boar",
-            40, 12, PlayerBotDriver.RouteGiveUp, null, 0, true, null, overSkipped: 1), Does.EndWith(
+            40, 12, PlayerBotDriver.RouteGiveUp, null, 0, true, null, overSkipped: 1, readsBlocker: true), Does.EndWith(
             " reason=route fallback=- barred=old overSkipped=1 routeSkipped=0"));
         Assert.That(PlayerBotDriver.RelocateNoneLine("Pbotaaaad", 41, 3, 12, PlayerBotDriver.RouteGiveUp, 0, true, null,
-            routeSkipped: 3, stay: true), Is.EqualTo("PLAYER_BOT_RELOCATE bot=Pbotaaaad level=41 none checked=3 " +
-            "zone=12 reason=route barred=old routeSkipped=3 stay=1"));
+            routeSkipped: 3, stay: true, readsBlocker: true), Is.EqualTo("PLAYER_BOT_RELOCATE bot=Pbotaaaad level=41 " +
+            "none checked=3 zone=12 reason=route barred=old routeSkipped=3 stay=1"));
         Assert.That(PlayerBotDriver.RelocateNoneLine("Pbotaaaad", 41, 0, 12, PlayerBotDriver.RouteGiveUp, 0, true,
-            null), Is.EqualTo("PLAYER_BOT_RELOCATE bot=Pbotaaaad level=41 none checked=0 zone=12 reason=route " +
-            "barred=old routeSkipped=0 stay=0"));
+            null, stay: true, readsBlocker: true), Does.EndWith(" none checked=0 zone=12 reason=route barred=old " +
+            "routeSkipped=0 stay=1"));
+        Assert.That(PlayerBotDriver.RelocateNoneLine("Pbotaaaad", 41, 0, 12, PlayerBotDriver.RouteGiveUp, 0, true,
+            null, readsBlocker: true), Is.EqualTo("PLAYER_BOT_RELOCATE bot=Pbotaaaad level=41 none checked=0 zone=12 " +
+            "reason=route barred=old routeSkipped=0 stay=0"));
         Assert.That(PlayerBotDriver.RelocateLine("Pbotaaaad", 41, Vector3.Zero, new Vector3(6_000, 0, 0), 6_000, "giant boar",
             40, 12, PlayerBotDriver.Outgrown, null, 0, false, null, routeSkipped: 2), Does.EndWith(" reason=outgrown fallback=-"));
         Assert.That(PlayerBotDriver.RelocateNoneLine("Pbotaaaad", 41, 3, 12, PlayerBotDriver.Capped, 0, false, null,
             routeSkipped: 2, stay: true), Does.EndWith(" none checked=3 zone=12 reason=capped"));
+        Assert.That(PlayerBotDriver.RelocateLine("Pbotaaaad", 41, Vector3.Zero, new Vector3(6_000, 0, 0), 6_000,
+            "giant boar", 40, 12, PlayerBotDriver.Outgrown, null, 0, false, null, routeSkipped: 2, readsBlocker: true),
+            Does.EndWith(" reason=outgrown fallback=- routeSkipped=2"), "a camp a plan in a stay took");
+        Assert.That(PlayerBotDriver.RelocateNoneLine("Pbotaaaad", 41, 3, 12, PlayerBotDriver.Capped, 0, false, null,
+            lifted: true, routeSkipped: 3, stay: true, readsBlocker: true),
+            Does.EndWith(" none checked=3 zone=12 reason=capped lifted=1 routeSkipped=3"), "none in a stay: no stay=");
     }
 
     // #167 F12-R: a give-up (GiveUpRoute) keeps the monster it gave up on (RouteGaveUpOn) and those the walk passed
@@ -10715,7 +10729,9 @@ public sealed class UT_PlayerBotDriver
     // walk (its roam picks afresh), no hold, no plan owed; the bot doesn't move; the drake, as the plan read it, kept
     // out for 15 minutes (RouteAvoid); the bar on the old camp kept; the spot skipped not rejected. "far": the drake
     // 1,384 west, out of its reach. "near": 600 west (3D 605.9, in its reach: it gave up late; its way west runs
-    // through the drake's aggro range): the anchor steps out to 800 east of the drake, 200 east of the bot.
+    // through the drake's aggro range): the anchor steps out to 800 east of the drake, 200 east of the bot. The
+    // review of F12-S: a capped clock the walk's searches had running (125,000) starts afresh, as at a camp planned
+    // (PlanCamp): it held the bot still, no roam, until a capped plan or the hold's end.
     [TestCase(-1_384f, 0f)] [TestCase(-600f, 200f)]
     public void A_route_give_up_whose_replan_skips_every_camp_hunts_where_it_stands_in_RelocateIfOutgrown(float drakeX,
         float anchorX)
@@ -10730,12 +10746,14 @@ public sealed class UT_PlayerBotDriver
             (brain.AggroLevel, brain.AggroRange) = (100, 500);
             InWorld(region, [cyclops, drake], () =>
             {
-                var state = new PlayerBotState(bot) { AnchorRegion = region.ID, Anchor = oldCamp, RoamDestination = oldCamp };
+                var state = new PlayerBotState(bot) { AnchorRegion = region.ID, Anchor = oldCamp,
+                    RoamDestination = oldCamp, CappedSince = 125_000 };
                 PlayerBotDriver.GiveUpRoute(state, 130_000, drake);
                 relocate.Invoke(null, [state, bot, 130_000L]);
                 Vector3 anchor = OnPocket + new Vector3(anchorX, 0, 0);
                 Assert.That((state.ReplanOwed, state.ReplanSince, state.RoamDestination, state.Anchor),
                     Is.EqualTo(((string)null, 0L, (Vector3?)null, anchor)), "stays: no walk on");
+                Assert.That(state.CappedSince, Is.Zero, "the capped clock afresh");
                 Assert.That(new Vector3(bot.X, bot.Y, bot.Z), Is.EqualTo(OnPocket), "only the anchor moves");
                 Assert.That((state.RouteAvoid, state.RouteAvoidUntil), Is.EqualTo(((drake, drakeAt, 500), 1_030_000L)));
                 Assert.That(PlayerBotDriver.HoldsForRelocation(true, state.CappedSince, state.ReplanSince,
@@ -10911,10 +10929,11 @@ public sealed class UT_PlayerBotDriver
     // #167 F12-S, the wiring (FindWithin's pick, the near ring): a yellow monster 583 off the bot and a blue one as far
     // on the other side (TargetScore: the yellow first). While the bot stays with the monster it gave up on kept out
     // 400 beyond the yellow one (aggro 300, reach 500), the yellow one, in its reach, is left out for the blue; so it
-    // is with that monster 291.5 off both, on the straight way to the yellow one ("past": aggro 50, reach 250). With no
-    // stay, a stay over, the yellow one the monster itself ("own"), or that monster fighting the bot, the yellow one.
+    // is with that monster 291.5 off both, on the straight way to the yellow one ("past": aggro 50, reach 250), and
+    // (the review of F12-S) with the yellow one the monster itself ("own"), in its own reach as recorded: no pull of
+    // the pack the look-ahead refused. With no stay, a stay over, or that monster fighting the bot, the yellow one.
     [TestCase("none", "yellow")] [TestCase("stay", "blue")] [TestCase("past", "blue")] [TestCase("over", "yellow")]
-    [TestCase("own", "yellow")] [TestCase("fighting", "yellow")]
+    [TestCase("own", "blue")] [TestCase("fighting", "yellow")]
     public void A_stays_pick_leaves_out_a_target_in_reach_of_or_past_the_monster_it_gave_up_on_in_FindWithin(string how,
         string expected)
     {
@@ -10960,5 +10979,122 @@ public sealed class UT_PlayerBotDriver
         Stay();
         PlayerBotDriver.ResetOnRegionChange(state, 7);
         Assert.That((state.RouteAvoid, state.RouteAvoidUntil), Is.EqualTo((none, 0L)), "a region change");
+    }
+
+    // #167 F12-S (the review), the wiring: a plan made while a stay lasts, outgrown, capped or after a break-off,
+    // reads the monster given up on as the stay recorded it (StayAvoid) and skips the camps behind it, as the route
+    // plan did. 30 s into the stay (NextRelocateTick: the route plan + 30 s) the only camp, the cyclops', still lies
+    // behind the drake: no camp, the stay kept (its anchor, RouteAvoid), no walk; before, that plan took the cyclops'
+    // camp and the walk passed the drake. Skipped spots aren't rejected (the monster may move or die), so a later plan
+    // meets them again: one that took no camp falls back as with no camp in the zone (FallBack). Capped: the safest
+    // con passed over where it stands (FallBackInPlace), the capped clock afresh, so no hold and no plan every 30 s
+    // (without it the bot stood held, no fallback cap). Outgrown: it roams round its anchor, its next plan 2 minutes
+    // on (RelocateAfterMilliseconds). A break-off: its plan ends (EndReplan), no hold. "boar": a camp not behind the
+    // drake has come up (a respawn): the plan takes it and the stay ends (PlanCamp).
+    [TestCase("outgrown", false)] [TestCase("capped", false)] [TestCase("brokeoff", false)] [TestCase("outgrown", true)]
+    public void A_plan_made_while_a_stay_lasts_skips_the_camps_behind_the_monster_given_up_on_in_RelocateIfOutgrown(
+        string reason, bool boar)
+    {
+        MethodInfo relocate =
+            typeof(PlayerBotDriver).GetMethod("RelocateIfOutgrown", BindingFlags.Static | BindingFlags.NonPublic)!;
+        InTheField(new SplitFloorMesh(), OnPocket, (region, zone, bot) =>
+        {
+            Vector3 oldCamp = new(834_000, OnPocket.Y, 8_700), drakeAt = new(OnPocket.X - 1_384, OnPocket.Y, 8_700);
+            Vector3 cyclopsAt = new(838_000, OnPocket.Y, 8_700), boarAt = new(846_000, OnPocket.Y, 8_700);
+            GameNPC cyclops = MonsterAt(region, zone, cyclopsAt, LevelFor(bot, ConColor.YELLOW));
+            GameNPC drake = MonsterAt(region, zone, drakeAt, LevelFor(bot, ConColor.ORANGE));
+            var brain = (DOL.AI.Brain.StandardMobBrain)drake.Brain;
+            (brain.AggroLevel, brain.AggroRange) = (100, 500);
+            InWorld(region, [cyclops, drake], () =>
+            {
+                var state = new PlayerBotState(bot) { AnchorRegion = region.ID, Anchor = oldCamp,
+                    RoamDestination = oldCamp, RoamingSince = reason == "outgrown" ? 1 : 0 };
+                PlayerBotDriver.GiveUpRoute(state, 130_000, drake);
+                relocate.Invoke(null, [state, bot, 130_000L]);
+                (GameNPC, Vector3, int) recorded = (drake, drakeAt, 500);
+                Assert.That((state.Anchor, state.RouteAvoid, state.RouteAvoidUntil),
+                    Is.EqualTo((OnPocket, recorded, 1_030_000L)), "stays");
+                if (reason == "capped") (state.CappedSince, state.SafestPassedOver) = (130_500, ConColor.ORANGE);
+                if (reason == "brokeoff") (state.ReplanOwed, state.ReplanSince) = (PlayerBotDriver.BrokeOff, 155_000);
+                if (boar)
+                    typeof(Region).GetField("m_objects", Hidden)!.SetValue(region, new GameObject[]
+                        { cyclops, drake, MonsterAt(region, zone, boarAt, LevelFor(bot, ConColor.YELLOW)) });
+                relocate.Invoke(null, [state, bot, 160_500L]);
+                if (boar)
+                {
+                    Assert.That((state.Anchor, state.RoamDestination, state.RouteAvoidUntil),
+                        Is.EqualTo((boarAt, (Vector3?)boarAt, 0L)), "a camp not behind the drake, the stay over");
+                    return;
+                }
+                Assert.That((state.Anchor, state.RoamDestination, state.RouteAvoid, state.RouteAvoidUntil),
+                    Is.EqualTo((OnPocket, (Vector3?)null, recorded, 1_030_000L)), $"{reason}: stays, no walk on");
+                Assert.That(state.RelocateRejected, Is.Empty, "skipped, not rejected");
+                Assert.That(PlayerBotDriver.HoldsForRelocation(true, state.CappedSince, state.ReplanSince,
+                    state.RoamDestination == state.Anchor, 160_750), Is.False, "not held: it hunts, roams round it");
+                Assert.That((state.ReplanOwed, state.FallbackCap), Is.EqualTo(((string)null,
+                    reason == "capped" ? ConColor.ORANGE : (ConColor?)null)), "the fallback in place");
+                Assert.That(PlayerBotDriver.RelocateReason(state.RoamingSince, state.CappedSince, 190_500,
+                    state.ReplanOwed), Is.EqualTo(reason == "outgrown" ? PlayerBotDriver.Outgrown : null),
+                    "30 s on: no capped plan again");
+                Assert.That(state.NextRelocateTick, Is.EqualTo(reason == "outgrown" ? 280_500L : 190_500L),
+                    "an outgrown one plans again 2 minutes on");
+            });
+        });
+    }
+
+    // #167 F12-S (the review): while the bot stays, the monster given up on is left out of its pulls as any target in
+    // its reach is (StayClear), not passed over: over a lowered cap (here a yellow drake over a blue cap, a death step)
+    // it starts no capped clock, which held the bot still and moved it 30 s later by a capped plan. With no stay it is
+    // passed over for the cap as before: the clock starts.
+    [TestCase(true, 0L)] [TestCase(false, 132_000L)]
+    public void A_stays_monster_is_left_out_not_passed_over_for_the_cap_in_FindWithin(bool stays, long cappedSince)
+    {
+        MethodInfo find =
+            typeof(PlayerBotDriver).GetMethod("FindWithin", BindingFlags.Static | BindingFlags.NonPublic)!;
+        InTheField(new SplitFloorMesh(), OnPocket, (region, zone, bot) =>
+        {
+            Vector3 drakeAt = new(OnPocket.X - 1_384, OnPocket.Y, 8_700);
+            GameNPC drake = MonsterAt(region, zone, drakeAt, LevelFor(bot, ConColor.YELLOW));
+            var brain = (DOL.AI.Brain.StandardMobBrain)drake.Brain;
+            (brain.AggroLevel, brain.AggroRange) = (100, 500);
+            var state = new PlayerBotState(bot) { AnchorRegion = region.ID, Anchor = OnPocket, DeathSafetySteps = 1,
+                NukesLevel = 39, Nukes = [], RouteAvoid = (drake, drakeAt, 500),
+                RouteAvoidUntil = stays ? 1_030_000 : 0 };
+            object[] args = [state, bot, PlayerBotDriver.SearchRadius, 132_000L, PlayerBotPickReading.None];
+            Assert.That(find.Invoke(null, args), Is.Null, "nothing under the cap");
+            Assert.That(state.CappedSince, Is.EqualTo(cappedSince), "the capped clock");
+        });
+    }
+
+    // #167 F12-S (the review): a route give-up with no other camp ("none") or no corridor to one ("below": the only
+    // one lies below the pocket's ledge), whose monster is still alive and an add (RouteGiveUpBlockers), stays too:
+    // its own camp lies behind that monster (the owner's "every camp behind the monster"). Before, it walked on to its
+    // own camp past the drake. It walks on only with that monster gone or none named (the two R1 rows above). The
+    // drake 3,000 west, on the way to the old camp: beyond RoamRadius of the camp below (a camp of its own then).
+    [TestCase("none")] [TestCase("below")]
+    public void A_route_give_up_with_no_camp_to_take_and_its_monster_alive_stays_in_RelocateIfOutgrown(string other)
+    {
+        MethodInfo relocate =
+            typeof(PlayerBotDriver).GetMethod("RelocateIfOutgrown", BindingFlags.Static | BindingFlags.NonPublic)!;
+        InTheField(new SplitFloorMesh(), OnPocket, (region, zone, bot) =>
+        {
+            Vector3 oldCamp = new(834_000, OnPocket.Y, 8_700), drakeAt = new(OnPocket.X - 3_000, OnPocket.Y, 8_700);
+            GameNPC drake = MonsterAt(region, zone, drakeAt, LevelFor(bot, ConColor.ORANGE));
+            var brain = (DOL.AI.Brain.StandardMobBrain)drake.Brain;
+            (brain.AggroLevel, brain.AggroRange) = (100, 500);
+            GameNPC below =
+                other == "below" ? MonsterAt(region, zone, BelowCamp, LevelFor(bot, ConColor.YELLOW)) : null;
+            InWorld(region, below == null ? [drake] : [below, drake], () =>
+            {
+                var state = new PlayerBotState(bot) { AnchorRegion = region.ID, Anchor = oldCamp,
+                    RoamDestination = oldCamp };
+                PlayerBotDriver.GiveUpRoute(state, 130_000, drake);
+                relocate.Invoke(null, [state, bot, 130_000L]);
+                Assert.That((state.ReplanOwed, state.RoamDestination, state.Anchor),
+                    Is.EqualTo(((string)null, (Vector3?)null, OnPocket)), $"{other}: stays, no walk on");
+                Assert.That((state.RouteAvoid, state.RouteAvoidUntil), Is.EqualTo(((drake, drakeAt, 500), 1_030_000L)));
+                if (below != null) Assert.That(state.RelocateRejected, Does.Contain(below), "no corridor to its spot");
+            });
+        });
     }
 }

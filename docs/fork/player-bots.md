@@ -301,14 +301,18 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   most once in 10 minutes; else it walks on past the monster. The camp given up is barred for 15 minutes and the bot
   plans a new one from where it stands at once, standing still until then. That plan skips a camp in the reach of the
   monster it gave up on (where it stands then, if still alive), and a camp whose way there passes it as the look-ahead
-  reads one, along the whole way, not only its first 1,500 units. With no other camp or no way to one, it walks on to
-  its own. With every camp it could walk to skipped, it hunts where it stands instead: its camp moves to where it stands
-  (just out of that monster's reach, if it stood in it; the bot itself doesn't move), and for 15 minutes, or until it
-  plans a camp, dies or changes region, its roam and its pulls keep clear of that monster as it stood then: no roam
-  point or target in its reach (its aggro range and 200 units) or past it on the straight way there (a bot inside that
-  reach may leave it), but the monster itself, which its cap and crowd limits judge as any other, or one fighting the
-  bot. It plans its next camp as any bot does (2 minutes with no target reached, the walk there counting, or 30 s with
-  nothing in reach under its cap), no sooner than 30 s after the give-up.
+  reads one, along the whole way, not only its first 1,500 units. With every camp it could walk to skipped, or with no
+  other camp or no way to one while that monster is still there (alive, in its region and aggressive to it), it hunts
+  where it stands instead: its camp moves to where it stands (just out of that monster's reach, if it stood in it, and
+  never into that reach nearer the monster than the bot stands; the bot itself doesn't move), and for 15 minutes, or
+  until it plans a camp, dies or changes region, its roam, its pulls and its plans keep clear of that monster as it
+  stood then: no roam point or target in its reach (its aggro range and 200 units) or past it on the straight way
+  there (a bot inside that reach may leave it), the monster itself too, unless it is fighting the bot, and no camp
+  behind it. Its next plan comes as any bot's (2 minutes with no target reached, the walk there counting, 30 s with
+  nothing in reach under its cap, or after a break-off), no sooner than 30 s after the give-up; with every camp it
+  could take skipped, that plan keeps it where it is, hunting as a bot with no camp to go to does (no hold, and a
+  capped bot takes the safest con it passed over there). With the monster gone (or the bot off the navmesh, where it
+  can plan nothing), it walks on to its own camp.
 - It walks on the navmesh. A bot made at a level from a spots line also trains on each level-up.
 - In a run of 3 bots or fewer, `hdbot-alb-01` also does quest 20206 (Immediate Resolution) and its class promotion.
 
@@ -359,10 +363,10 @@ Playing:
     another, and the walk then goes round the monster, gives the camp up or walks on past it. Choosing the camp by the
     way there is a follow-up. The plan after a give-up skips only the camps behind the monster that walk gave up on (not
     those it walked on past, nor the monsters of its pack), among the camp spots it tries (at most 5): with every one
-    skipped it hunts where it stands, keeping that monster, as it stood, out of its roam and its pulls by the straight
-    way there only (the walk follows the navmesh, which can bend nearer it), and its next plan, outgrown or capped,
-    doesn't read that monster, so a camp behind it is walked to past it (another give-up waits 10 minutes). With no
-    other camp or no way to one, it still walks on to the camp it gave up, past the monster. Where no camp fits, the
+    skipped, or none to take, it hunts where it stands, keeping that monster out of its roam and its pulls by the
+    straight way there only (the walk follows the navmesh, which can bend nearer it), and only that monster, not the
+    rest of its pack. While it stays, its plans read that monster where it stood at the give-up, not where it is now:
+    one that wandered off still bars the camps behind its old spot until the 15 minutes are up. Where no camp fits, the
     GameBots' fallback can take that camp again (a failed camp, when no other is left); it is skipped only while its way
     still passes the monster.
 - **Resting:** about half their time: 52.1% over the six legs, against 52.6% on v0.37b-hearth.16 (time-weighted).
@@ -685,8 +689,10 @@ All start `PLAYER_BOT_`:
   were left out for an aggressive monster over the cap in reach (each once, over the plan's passes), while there are
   any. A walk to its camp that gave the camp up for a monster on its route plans with `reason=route`: the line, with a
   camp or `none`, has `barred=old` and ends with `routeSkipped=`, the camp spots that plan skipped for the monster the
-  walk gave up on (0 for none; no other `reason=` has it); a `none` line then ends with `stay=1` when the bot stays to
-  hunt where it stands, `stay=0` when it walks on to its own camp. A break-off drops its fight (`FIGHT result=dropped`);
+  walk gave up on (0 for none); so does any plan the bot makes while it stays, whatever its `reason=` (no other line
+  has it). A `reason=route` `none` line then ends with `stay=1` when the bot stays to hunt where it stands (that
+  monster still there; `routeSkipped=0` when there was no camp to take), `stay=0` when it walks on to its own camp (the
+  monster gone); no other line has `stay=`. A break-off drops its fight (`FIGHT result=dropped`);
 - `LIFT`: the same lift where no `RELOCATE` line is written, as the bot hunts where it is: its `reason=` and `why=`,
   `norelocate` (it may not relocate, as the lever test's bots, or stands in no zone) or `offmesh` (it stands off the
   navmesh), then `lifted=1`;
