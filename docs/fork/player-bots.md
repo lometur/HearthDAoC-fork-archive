@@ -826,8 +826,9 @@ With sessions on (#160), the spawner's own lines, which start `HEARTHDAOC_PLAYER
 - `sessions on ramp= session= offline= relog= logoffsPerSecond= maxRelogs=`, once at the start (none with `off`);
 - `logoff account= name= reason=quit|logoff-forced sessionS= askedS= offlineS=`: a bot logged off. `askedS=` counts
   from the spawner's first ask, and `offlineS=` is the time out it drew;
-- `logoff waiting account= name= why=no-driver|task|errand-relog waits= askedS=`, once a minute while a log-off waits:
-  for a driver (out of the world, or its self-test still runs), for its errands, or for their relog;
+- `logoff waiting account= name= why=no-driver|task|errand-relog waits= askedS=`, about once a minute (every 10
+  waits of 6 s) while a log-off waits: for a driver (out of the world, or its self-test still runs), for its errands,
+  or for their relog;
 - `relogin account= name= after= offS= region= x= y= z=`: back in, `after=` how it left and `offS=` the seconds out;
 - `lost account= name= reason= relogInS= drops=N/5`: a drop, logged in again in `relogInS=` seconds. A `lost` line
   without them (the sixth drop, or any with `off`) leaves the bot out;

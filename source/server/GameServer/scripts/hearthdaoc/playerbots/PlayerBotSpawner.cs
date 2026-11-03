@@ -50,7 +50,8 @@ public static class PlayerBotSpawner
     public const int MaxPlayersReserve = 50;    // bots count in ClientService.ClientCount, which max_players gates (LoginRequestHandler.cs:426)
     public const int ErrandMaxBots = 3;         // errands and their re-login only when the plan has 3 bots or fewer (run 1)
     public const int LogOffRetrySeconds = 5;    // #160: a log-off the driver could not take yet is asked again
-    public const int LogOffWaitLineEvery = 60 / LogOffRetrySeconds;   // #160: BeginLogOff's waiting line, once a minute
+    public const int LogOffWaitLineEvery = 60 / (LogOffRetrySeconds + 1);   // #160: BeginLogOff's waiting line,
+                                                                            //   about once a minute (a wait is 6 s)
     private const long MB = 1024 * 1024;
 
     private static readonly Logger Log = LoggerManager.Create(typeof(PlayerBotSpawner));
@@ -333,9 +334,9 @@ public static class PlayerBotSpawner
 
     // #160: on the game loop (an NpcService posted action, as StartOnGameLoop). The log-off becomes the driver's task
     // once the driver runs the bot with no other task (the errands) and no errand re-login due (that goes first); else
-    // the slot asks again after LogOffRetrySeconds, with a waiting line once a minute (PlayerBotSessions.LogOffWait). A
-    // late ask, posted again before this one ran, finds the log-off already given: it marks it started and changes
-    // nothing.
+    // the slot asks again after LogOffRetrySeconds, with a waiting line about once a minute (LogOffWaitLineEvery;
+    // PlayerBotSessions.LogOffWait). A late ask, posted again before this one ran, finds the log-off already given: it
+    // marks it started and changes nothing.
     private static void BeginLogOff(SlotState s)
     {
         try

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Numerics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -15,7 +16,7 @@ namespace DOL.GS.Tests;
 // (they are private and static), with no server and no game loop: what Leave does with each reason under both switch
 // values, StartDue's wait for a slot's old client, and what a session carries to the next login (Resume at the login,
 // Carry at the driver's stop: the death cap, and the camp with its route stay unless a death came after it);
-// BeginLogOff's waits and late asks, and Observe's asks again.
+// BeginLogOff's waits and late asks, and Observe's asks again and their pace.
 [TestFixture, NonParallelizable]
 public sealed class UT_PlayerBotSpawnerSessions
 {
@@ -312,8 +313,8 @@ public sealed class UT_PlayerBotSpawnerSessions
         States.TryRemove(state.Player, out _);
     }
 
-    // It waits, counted (a waiting line once a minute), for the errands to finish and then for their re-login to go
-    // first.
+    // It waits, counted (a waiting line about once a minute), for the errands to finish and then for their re-login
+    // to go first.
     [Test]
     public void The_log_off_waits_for_the_errands_and_their_relog()
     {
@@ -355,6 +356,29 @@ public sealed class UT_PlayerBotSpawnerSessions
         Call("Observe", now.AddSeconds(PlayerBotSpawner.LogOffRetrySeconds + 1));
         Assert.That((s.Phase, s.LogOffAskedUtc, s.LogOffPostedUtc), Is.EqualTo((PlayerBotSpawner.SlotPhase.LoggingOff, now,
             now.AddSeconds(PlayerBotSpawner.LogOffRetrySeconds + 1))));
+    }
+
+    // The waiting line about once a minute (BeginLogOff's, every LogOffWaitLineEvery waits): an ask not taken is
+    // asked again on the tick after LogOffRetrySeconds, so a wait takes LogOffRetrySeconds + 1 (the review of step 1:
+    // 12 waits of 6 s were 72 s).
+    [Test]
+    public void A_waiting_log_off_says_so_about_once_a_minute()
+    {
+        DateTime now = DateTime.UtcNow;
+        SessionsProperty.SetValue(null, On);
+        PlayerBotSpawner.SlotState s = Slot(PlayerBotSpawner.SlotPhase.Playing);
+        (s.Client, s.SessionStartUtc, s.SessionEndsUtc) = (Client(GameClient.eClientState.Playing), now.AddMinutes(-5), now);
+        SlotsField.SetValue(null, new[] { s });
+        var asks = new List<int>();
+        for (int second = 0; second <= 30; second++)
+        {
+            DateTime tick = now.AddSeconds(second);
+            Call("Observe", tick);
+            if (s.LogOffPostedUtc == tick) asks.Add(second);
+        }
+        int wait = asks[1] - asks[0];
+        Assert.That((wait, asks.Count), Is.EqualTo((PlayerBotSpawner.LogOffRetrySeconds + 1, 6)));
+        Assert.That(PlayerBotSpawner.LogOffWaitLineEvery * wait, Is.EqualTo(60));
     }
 
     // The review of step 1: a slot out of the world keeps no client and no player (no offline progress, no memory
