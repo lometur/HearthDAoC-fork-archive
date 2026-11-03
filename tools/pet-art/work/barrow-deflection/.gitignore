@@ -1,0 +1,4 @@
+# HearthDAoC: draw_icon.py builds these on a stock icon frame read from the player's own client, so they hold EA
+# pixels and never go in the repo (removed 2026-11-03).
+barrow_deflection_32.png
+barrow_deflection_preview.png
