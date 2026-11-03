@@ -410,8 +410,11 @@ Playing:
     doesn't compare one for one with a sessions-off leg.
   - A GM's `/kick` counts as a drop: the bot is back a minute later, up to 5 times, as a GameBot is. Keeping it out
     is #171's.
-  - Each login and logout message goes to every online player: a human on a world with the test legs' schedule would
-    see a stream of them.
+  - A bot's login and logout messages go only to its region, to the players its `/region` would reach: those in the
+    same region and of its realm (staff too). A human's go to every online player, as before, and the owner's server
+    property `show_logins` still turns them all off (`PlayerEnterExit.cs`, #160). A realm's mainland is one region
+    (Albion 1, Midgard 100, Hibernia 200) and holds about 70% of the test spots' bots (277 of 390 on `spots-lm3`),
+    so a human there still sees most of that realm's bot logins and logouts.
 - **Not done at all:** they don't group, buff others, take part in RvR or battlegrounds, stealth, use realm abilities
   or ride horses (#152, #167).
 - **Ranged and songs:** they can't shoot or play. Archers fight in melee, and Bards and Minstrels have no songs: theirs
@@ -840,8 +843,9 @@ The bot CPU meter (`/botcpu`) charges them to its own kind, `playerbot`, and the
 
 `Tests/UnitTests/UT_HeadlessClient.cs`, `UT_PlayerBotPlan.cs`, `UT_PlayerBotDriver.cs`, `UT_PlayerBotErrands.cs`,
 `UT_PlayerBotWake.cs`, `UT_PlayerBotSpots.cs`, `UT_PlayerBotKit.cs`, `UT_PlayerBotNetwork.cs`, `UT_PlayerBotSessions.cs`
-and `UT_PlayerBotSpawnerSessions.cs` run in CI, and so does `UT_TemporaryGroupStableTravelQuit.cs` (#160: a quit
-player's transfer marker goes with it).
+and `UT_PlayerBotSpawnerSessions.cs` run in CI, and so do `UT_TemporaryGroupStableTravelQuit.cs` (#160: a quit
+player's transfer marker goes with it) and `UT_PlayerEnterExitBots.cs` (#160: `PlayerEnterExit.cs` sends a bot's
+login and logout messages to its region only).
 `UT_PlayerBotWalkReplay.cs` runs only when asked for. It needs `OFFLINE_DAOC_NAV_ROOT`: a folder holding
 `navmesh/zone008.nav`, `zone012.nav`, `zone014.nav`, `zone104.nav`, `zone120.nav`, `zone126.nav`, `zone152.nav`,
 `zone181.nav`, `zone209.nav` and `zone250.nav` (each from
