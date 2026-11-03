@@ -295,6 +295,7 @@ SERVER_UNIT_TESTS = ("dotnet test source/server/Tests/Tests.csproj --nologo --fi
                      '|FullyQualifiedName~UT_PlayerBotWake|FullyQualifiedName~UT_PlayerBotSpots|FullyQualifiedName~UT_PlayerBotKit'
                      '|FullyQualifiedName~UT_PlayerBotNetwork|FullyQualifiedName~UT_PlayerBotSessions'
                      '|FullyQualifiedName~UT_PlayerBotSpawnerSessions'
+                     '|FullyQualifiedName~UT_TemporaryGroupStableTravelQuit'
                      '|FullyQualifiedName~UT_CommandNames'
                      '|FullyQualifiedName~UT_SiPortalsPeriod'
                      '|FullyQualifiedName~UT_GuildForming"')
@@ -304,9 +305,10 @@ UNIT_TESTS = os.path.join(ROOT, "source", "server", "Tests", "UnitTests")
 class ServerUnitTestWorkflowTests(unittest.TestCase):
     """CI runs the fork's own server unit tests by name, and upstream's that guard a rule the owner chose to keep
     (UT_RelicPadAttackers: the relic pad's 8, companions and gamebots counting; decision 3 of the 0.37b sync), and the
-    fork's fix to upstream's relic carriers (UT_RelicCarriers, #189) and to buffs taken off twice
-    (UT_StackedBuffBonus, #190). dotnet test passes (exit 0) when its filter matches no test at all, so every name in the filter must be a test class in
-    source/server/Tests/UnitTests."""
+    fork's fix to upstream's relic carriers (UT_RelicCarriers, #189), to buffs taken off twice
+    (UT_StackedBuffBonus, #190) and to a quit player kept in TemporaryGroupStableTravel's transfer markers
+    (UT_TemporaryGroupStableTravelQuit, #160). dotnet test passes (exit 0) when its filter matches no test at all,
+    so every name in the filter must be a test class in source/server/Tests/UnitTests."""
 
     def test_the_fork_server_unit_tests_run_with_the_pinned_filter(self):
         steps = job(read("server-image.yml"), TEST_JOB).split("\n      - ")
@@ -333,6 +335,7 @@ class ServerUnitTestWorkflowTests(unittest.TestCase):
                                  "UT_HeadlessClient", "UT_PlayerBotPlan", "UT_PlayerBotDriver", "UT_PlayerBotErrands",
                                  "UT_PlayerBotWake", "UT_PlayerBotSpots", "UT_PlayerBotKit",
                                  "UT_PlayerBotNetwork", "UT_PlayerBotSessions", "UT_PlayerBotSpawnerSessions",
+                                 "UT_TemporaryGroupStableTravelQuit",
                                  "UT_CommandNames",
                                  "UT_SiPortalsPeriod",
                                  "UT_GuildForming"])
