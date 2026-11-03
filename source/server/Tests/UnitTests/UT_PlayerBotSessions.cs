@@ -140,4 +140,22 @@ public sealed class UT_PlayerBotSessions
     [TestCase(599_999, 4, false)] [TestCase(600_000, 0, true)] [TestCase(0, 5, true)]
     public void It_gives_up_after_ten_minutes_or_five_refusals(long ms, int refusals, bool givesUp) =>
         Assert.That(PlayerBotLogOffPlan.GivesUp(ms, refusals), Is.EqualTo(givesUp));
+
+    // The review of step 1: with sessions off, the spot, the self-test and the errands are as at 350d60c, also on a
+    // retry after a login that entered the world and dropped before the spawner saw it (entries 1, not the errand's).
+    [TestCase(false, 0, false, true)] [TestCase(false, 1, false, true)] [TestCase(false, 1, true, false)]
+    [TestCase(true, 0, false, true)] [TestCase(true, 1, false, false)] [TestCase(true, 2, true, false)]
+    public void Sessions_off_places_the_spot_as_before_and_on_only_at_the_first_login(bool on, int entries,
+        bool errandRelogged, bool places) =>
+        Assert.That(PlayerBotSessions.PlacesSpot(on, entries, errandRelogged), Is.EqualTo(places));
+
+    [TestCase(false, true, 1, true)] [TestCase(false, true, 2, true)] [TestCase(false, false, 1, false)]
+    [TestCase(true, true, 1, true)] [TestCase(true, true, 2, false)] [TestCase(true, false, 1, false)]
+    public void Sessions_off_runs_the_self_test_as_before_and_on_only_at_the_first_login(bool on, bool slot, int entries,
+        bool runs) =>
+        Assert.That(PlayerBotSessions.RunsSelfTest(on, slot, entries), Is.EqualTo(runs));
+
+    [TestCase(false, 1, true)] [TestCase(false, 2, true)] [TestCase(true, 1, true)] [TestCase(true, 2, false)]
+    public void Sessions_off_gives_the_errands_as_before_and_on_once_a_run(bool on, int entries, bool gives) =>
+        Assert.That(PlayerBotSessions.GivesErrands(on, entries), Is.EqualTo(gives));
 }

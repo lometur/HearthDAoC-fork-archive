@@ -122,6 +122,22 @@ public static class PlayerBotSessions
         : drops <= MaxRelogs ? PlayerBotLeave.Relog
         : PlayerBotLeave.Lost;
 
+    /// <summary>Whether this login places the slot's start spot (HEARTHDAOC_PLAYER_BOT_SPOTS). Sessions off, as at
+    /// 350d60c: every login but the errand's re-login (errandRelogged). On: the run's first world entry only (entries:
+    /// the worlds entered so far), so a relogin is where the bot left, with no visible teleport.</summary>
+    public static bool PlacesSpot(bool sessionsOn, int entries, bool errandRelogged) =>
+        sessionsOn ? entries == 0 : !errandRelogged;
+
+    /// <summary>Whether the self-test slot runs the self-test at this world entry (entries counts it). Sessions off, as
+    /// at 350d60c: every time. On: the run's first entry only, not each session's login.</summary>
+    public static bool RunsSelfTest(bool sessionsOn, bool selfTestSlot, int entries) =>
+        selfTestSlot && (!sessionsOn || entries == 1);
+
+    /// <summary>Whether a small plan's quest fighter gets its errands at this world entry (entries counts it), after
+    /// the errand's own re-login is handled. Sessions off, as at 350d60c: every time. On: the run's first entry only, not
+    /// each session's login.</summary>
+    public static bool GivesErrands(bool sessionsOn, int entries) => !sessionsOn || entries == 1;
+
     /// <summary>A session's or an offline gap's length, uniform between min and max minutes, to the second.</summary>
     public static TimeSpan Roll(int minMinutes, int maxMinutes, Random dice) =>
         TimeSpan.FromSeconds(minMinutes * 60 + dice.Next((maxMinutes - minMinutes) * 60 + 1));

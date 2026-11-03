@@ -382,8 +382,9 @@ public static class PlayerBotSpawner
             DbAccount account = PlayerBotAccounts.EnsureAccount(s.Slot);
             if (Sessions.On) PlayerBotAccounts.TouchLogin(account);                                   // #160
             HeadlessClient client = new(account);
-            PlayerBotSpot spot = s.Entries > 0 ? null : _spots.For(s.Slot);                           // the run's first login only, not
-                                                                                                      //   a re-login (errand's, #160's)
+            PlayerBotSpot spot = PlayerBotSessions.PlacesSpot(Sessions.On, s.Entries, s.ErrandRelogged)
+                ? _spots.For(s.Slot) : null;                                                          // #160: not the errand's
+                                                                                                      //   re-login; on, no relogin
             if (spot?.Build != null && s.Kit == null)                                                 // once per slot: a retry keeps it
             {
                 PlayerBotKitPlan kit = PlayerBotKit.Plan(spot.Build, PlayerBotKit.Seed(s.Slot));
@@ -462,7 +463,7 @@ public static class PlayerBotSpawner
                     Log.Warn($"{LogPrefix} driver not started account={s.Slot.AccountName} after=relog");
                 return;                                                                               // T5
             }
-            if (s.SelfTest && s.Entries == 1)                                                         // the run's first login
+            if (PlayerBotSessions.RunsSelfTest(Sessions.On, s.SelfTest, s.Entries))                    // #160: on, the first login
             {
                 // onDone runs on the self-test's timer; a region trip that has not re-entered yet leaves it undriven.
                 HeadlessSelfTest.Start(c, done =>                                                     // T4 (T3: Start(c))
@@ -477,7 +478,7 @@ public static class PlayerBotSpawner
                 Log.Warn($"{LogPrefix} driver not started account={s.Slot.AccountName}");             // T4
                 return;                                                                               // T4
             }
-            if (errands)                                                                              // T5
+            if (errands && PlayerBotSessions.GivesErrands(Sessions.On, s.Entries))                    // T5; #160: on, once a run
                 PlayerBotDriver.StateOf(player).Task = new PlayerBotErrandTask(new PlayerBotErrands(player),
                     done => { if (done) s.RelogRequested = true; });                                  // T5
         }
