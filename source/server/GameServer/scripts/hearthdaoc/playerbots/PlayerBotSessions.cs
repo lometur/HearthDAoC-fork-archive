@@ -138,6 +138,11 @@ public static class PlayerBotSessions
     /// each session's login.</summary>
     public static bool GivesErrands(bool sessionsOn, int entries) => !sessionsOn || entries == 1;
 
+    /// <summary>Whether a bot's logout releases it first (HeadlessClient.QuitOnGameLoop). Sessions on: a dead bot, as a
+    /// link death's end does (GamePlayer.cs:1131-1137), so a drop's relogin is at its bind with the release's costs, not
+    /// alive where it died (WorldInitRequestHandler.cs:108-112). Off: never, as at 350d60c.</summary>
+    public static bool ReleasesOnLogout(bool sessionsOn, bool alive) => sessionsOn && !alive;
+
     /// <summary>A session's or an offline gap's length, uniform between min and max minutes, to the second.</summary>
     public static TimeSpan Roll(int minMinutes, int maxMinutes, Random dice) =>
         TimeSpan.FromSeconds(minMinutes * 60 + dice.Next((maxMinutes - minMinutes) * 60 + 1));

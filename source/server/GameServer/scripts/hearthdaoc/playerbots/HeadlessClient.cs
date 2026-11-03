@@ -344,7 +344,7 @@ public sealed class HeadlessClient : GameClient, IPlayerBotClient
         {
             if (player != null && player.ObjectState is GameObject.eObjectState.Active)
             {
-                if (ReleaseDeadOnLogout && !player.IsAlive)       // #160: as the link-death end does (GamePlayer.cs:1131-1137)
+                if (PlayerBotSessions.ReleasesOnLogout(ReleaseDeadOnLogout, player.IsAlive))   // #160: as a link death's end
                     player.Release(player.ReleaseType, true);
                 CraftingProgressMgr.FlushAndSaveInstance(player); // as the link-death end does (GamePlayer.cs:1141-1142)
                 player.SaveIntoDatabase();

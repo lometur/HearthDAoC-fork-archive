@@ -294,6 +294,7 @@ SERVER_UNIT_TESTS = ("dotnet test source/server/Tests/Tests.csproj --nologo --fi
                      '|FullyQualifiedName~UT_HeadlessClient|FullyQualifiedName~UT_PlayerBotPlan|FullyQualifiedName~UT_PlayerBotDriver|FullyQualifiedName~UT_PlayerBotErrands'
                      '|FullyQualifiedName~UT_PlayerBotWake|FullyQualifiedName~UT_PlayerBotSpots|FullyQualifiedName~UT_PlayerBotKit'
                      '|FullyQualifiedName~UT_PlayerBotNetwork|FullyQualifiedName~UT_PlayerBotSessions'
+                     '|FullyQualifiedName~UT_PlayerBotSpawnerSessions'
                      '|FullyQualifiedName~UT_CommandNames'
                      '|FullyQualifiedName~UT_SiPortalsPeriod'
                      '|FullyQualifiedName~UT_GuildForming"')
@@ -331,7 +332,7 @@ class ServerUnitTestWorkflowTests(unittest.TestCase):
                                  "UT_BotCpuMeter", "UT_BotCpuReport", "UT_BotCpuScript",
                                  "UT_HeadlessClient", "UT_PlayerBotPlan", "UT_PlayerBotDriver", "UT_PlayerBotErrands",
                                  "UT_PlayerBotWake", "UT_PlayerBotSpots", "UT_PlayerBotKit",
-                                 "UT_PlayerBotNetwork", "UT_PlayerBotSessions",
+                                 "UT_PlayerBotNetwork", "UT_PlayerBotSessions", "UT_PlayerBotSpawnerSessions",
                                  "UT_CommandNames",
                                  "UT_SiPortalsPeriod",
                                  "UT_GuildForming"])

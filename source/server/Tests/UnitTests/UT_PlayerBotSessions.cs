@@ -78,8 +78,7 @@ public sealed class UT_PlayerBotSessions
     {
         var dice = new Random(1);
         TimeSpan[] rolls = Enumerable.Range(0, 2_000).Select(_ => PlayerBotSessions.Roll(3, 6, dice)).ToArray();
-        Assert.That(rolls.Min(), Is.GreaterThanOrEqualTo(TimeSpan.FromMinutes(3)));
-        Assert.That(rolls.Max(), Is.LessThanOrEqualTo(TimeSpan.FromMinutes(6)));
+        Assert.That((rolls.Min(), rolls.Max()), Is.EqualTo((TimeSpan.FromMinutes(3), TimeSpan.FromMinutes(6))));   // both ends
         Assert.That(rolls.All(r => r.Ticks % TimeSpan.TicksPerSecond == 0), Is.True);
         Assert.That(PlayerBotSessions.Roll(5, 5, dice), Is.EqualTo(TimeSpan.FromMinutes(5)));
         Assert.That(PlayerBotSessions.Roll(0, 0, dice), Is.EqualTo(TimeSpan.Zero));
@@ -158,4 +157,8 @@ public sealed class UT_PlayerBotSessions
     [TestCase(false, 1, true)] [TestCase(false, 2, true)] [TestCase(true, 1, true)] [TestCase(true, 2, false)]
     public void Sessions_off_gives_the_errands_as_before_and_on_once_a_run(bool on, int entries, bool gives) =>
         Assert.That(PlayerBotSessions.GivesErrands(on, entries), Is.EqualTo(gives));
+
+    [TestCase(false, false, false)] [TestCase(false, true, false)] [TestCase(true, false, true)] [TestCase(true, true, false)]
+    public void Only_with_sessions_on_is_a_dead_bot_released_as_it_logs_out(bool on, bool alive, bool releases) =>
+        Assert.That(PlayerBotSessions.ReleasesOnLogout(on, alive), Is.EqualTo(releases));
 }
