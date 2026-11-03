@@ -675,6 +675,8 @@ public static class PlayerBotDriver
             state.PendingDeath = null;
             if (Log.IsInfoEnabled) Log.Info(DeathLine(held.Head, held.Detail, state.Killer, held.Target));
         }
+        if (!player.IsAlive && PlayerBotSessions.LeftDuringThink(PlayerBotSpawner.Sessions.On,  // 6. #160: a quit, no death
+                player.ObjectState is GameObject.eObjectState.Active)) return;
         if (!player.IsAlive) { HandleDeath(state, player, now); return; }               // 6
         StartLife(state, now, RoleOf(player.CharacterClass.ID));                         //    a new life
         state.SoloSteps = SoloSteps(player.CharacterClass.ID);                           //    #167 E CY4: the cap's floor

@@ -49,10 +49,11 @@ public sealed class HeadlessClient : GameClient, IPlayerBotClient
     private volatile bool _quitSent;
     private long _nextHeartbeat;
 
-    // #160 step 1, set by the spawner while sessions are on: a dead bot that logs out (a drop: an error, a reap, a GM's
-    // /kick) is released first, as a link death's end does (GamePlayer.cs:1131-1137), so its next login is at its bind
-    // with the release's costs, not alive where it died (WorldInitRequestHandler.cs:108-112).
-    public static bool ReleaseDeadOnLogout { get; set; }
+    // #160 step 1, set by the spawner while sessions are on (QuitOnGameLoop): a dead bot that logs out (a drop: an error,
+    // a reap, a GM's /kick) is released first, as a link death's end does (GamePlayer.cs:1131-1137), so its next login is
+    // at its bind with the release's costs, not alive where it died (WorldInitRequestHandler.cs:108-112); and a player
+    // the quit timer's end already deleted is not quit a second time.
+    public static bool SessionsOn { get; set; }
 
     public HeadlessStep Step { get; private set; }
     public long StepSince { get; private set; }
@@ -344,7 +345,7 @@ public sealed class HeadlessClient : GameClient, IPlayerBotClient
         {
             if (player != null && player.ObjectState is GameObject.eObjectState.Active)
             {
-                if (PlayerBotSessions.ReleasesOnLogout(ReleaseDeadOnLogout, player.IsAlive))   // #160: as a link death's end
+                if (PlayerBotSessions.ReleasesOnLogout(SessionsOn, player.IsAlive))      // #160: as a link death's end
                     player.Release(player.ReleaseType, true);
                 CraftingProgressMgr.FlushAndSaveInstance(player); // as the link-death end does (GamePlayer.cs:1141-1142)
                 player.SaveIntoDatabase();
@@ -356,6 +357,11 @@ public sealed class HeadlessClient : GameClient, IPlayerBotClient
         }
         finally
         {
+            // #160: a logout posted in the tick the quit timer's end deleted the player (the forced log-off racing it, an
+            // error) runs before this client's BeginTick sets CharScreen: as that does, so GameClient.Quit skips a second
+            // Player.Quit (GameClient.cs:232), its "has left", audit entry and Delete.
+            if (SessionsOn && player?.ObjectState is GameObject.eObjectState.Deleted && ClientState is eClientState.Playing)
+                ClientState = eClientState.CharScreen;
             if (SessionId == null)
                 ClientState = eClientState.Disconnected; // never registered: GameClient.Quit reads SessionId.Value
             else

@@ -163,7 +163,7 @@ public static class PlayerBotSpawner
         Log.Info(Invariant($"{LogPrefix} plan {Plan.Describe()} slots={_slots.Length} perSecond={LoginsPerSecond} maxLoading={MaxLoading} wake={PlayerBotWake.Describe(PlayerBotWake.Lever)} spots={_spots.Describe()} levels={_spots.DescribeBuilds()}"));
         if (Sessions.On)                                                                              // #160
         {
-            HeadlessClient.ReleaseDeadOnLogout = true;
+            HeadlessClient.SessionsOn = true;
             Log.Info(Invariant($"{LogPrefix} sessions {Sessions.Describe()} logoffsPerSecond={PlayerBotSessions.LogOffsPerSecond} maxRelogs={PlayerBotSessions.MaxRelogs}"));
         }
         GameEventMgr.AddHandler(GameClientEvent.PlayerLoaded, HeadlessClient.OnPlayerLoaded); // no ghost after a timed-out load
@@ -274,6 +274,9 @@ public static class PlayerBotSpawner
                 case SlotPhase.LoggingOff when !s.LogOffStarted && (now - s.LogOffPostedUtc).TotalSeconds >= LogOffRetrySeconds:
                     s.Phase = SlotPhase.Playing;                                                      // #160: asked again
                     break;
+                case SlotPhase.Offline or SlotPhase.Pending when c is { ClientState: GameClient.eClientState.Disconnected }:
+                    s.Client = null;                                                                  // #160: out, its old client
+                    break;                                                                            //   and player go
             }
         }
     }

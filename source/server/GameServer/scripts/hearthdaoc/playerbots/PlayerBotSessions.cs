@@ -154,6 +154,11 @@ public static class PlayerBotSessions
     public static string LogOffWait(bool driven, bool taskRunning, bool errandRelogDue) =>
         !driven ? "no-driver" : taskRunning ? "task" : errandRelogDue ? "errand-relog" : null;
 
+    /// <summary>Whether a think that finds its bot not alive found it out of the world instead (PlayerBotDriver step 6): a
+    /// quit timer's end on another TimerService worker (GamePlayer.cs:827-828) took it out during the think (Active, then
+    /// Inactive, then Deleted; a death keeps it Active). Sessions on: no death, the think ends. Off: as at 350d60c.</summary>
+    public static bool LeftDuringThink(bool sessionsOn, bool active) => sessionsOn && !active;
+
     /// <summary>A session's or an offline gap's length, uniform between min and max minutes, to the second.</summary>
     public static TimeSpan Roll(int minMinutes, int maxMinutes, Random dice) =>
         TimeSpan.FromSeconds(minMinutes * 60 + dice.Next((maxMinutes - minMinutes) * 60 + 1));

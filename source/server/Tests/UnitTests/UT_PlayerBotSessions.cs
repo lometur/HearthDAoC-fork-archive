@@ -179,6 +179,11 @@ public sealed class UT_PlayerBotSessions
     public void A_camp_is_kept_unless_the_bot_died_there_or_on_its_log_off(bool replanOwed, int deathsSince, bool keeps) =>
         Assert.That(PlayerBotSessions.KeepsCamp(replanOwed, deathsSince), Is.EqualTo(keeps));
 
+    // A think that finds its bot out of the world (a quit racing it) is no death, with sessions on; off, as at 350d60c.
+    [TestCase(true, false, true)] [TestCase(true, true, false)] [TestCase(false, false, false)] [TestCase(false, true, false)]
+    public void With_sessions_on_a_bot_that_left_during_the_think_is_no_death(bool on, bool active, bool left) =>
+        Assert.That(PlayerBotSessions.LeftDuringThink(on, active), Is.EqualTo(left));
+
     [TestCase(false, false, false)] [TestCase(false, true, false)] [TestCase(true, false, true)] [TestCase(true, true, false)]
     public void Only_with_sessions_on_is_a_dead_bot_released_as_it_logs_out(bool on, bool alive, bool releases) =>
         Assert.That(PlayerBotSessions.ReleasesOnLogout(on, alive), Is.EqualTo(releases));

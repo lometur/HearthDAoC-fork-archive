@@ -316,6 +316,23 @@ public sealed class UT_PlayerBotSpawnerSessions
             now.AddSeconds(PlayerBotSpawner.LogOffRetrySeconds + 1))));
     }
 
+    // The review of step 1: a slot out of the world keeps no client and no player (no offline progress, no memory held):
+    // once its old client is Disconnected, Observe drops it.
+    [TestCase(PlayerBotSpawner.SlotPhase.Offline)] [TestCase(PlayerBotSpawner.SlotPhase.Pending)]
+    public void A_slot_out_of_the_world_drops_its_old_client_once_it_is_disconnected(PlayerBotSpawner.SlotPhase phase)
+    {
+        SessionsProperty.SetValue(null, On);
+        PlayerBotSpawner.SlotState s = Slot(phase);
+        s.Client = Client(GameClient.eClientState.CharScreen);
+        s.RetryAtUtc = DateTime.MaxValue;
+        SlotsField.SetValue(null, new[] { s });
+        Call("Observe", DateTime.UtcNow);
+        Assert.That(s.Client, Is.Not.Null, "still quitting");
+        s.Client.ClientState = GameClient.eClientState.Disconnected;
+        Call("Observe", DateTime.UtcNow);
+        Assert.That((s.Phase, s.Client), Is.EqualTo((phase, (HeadlessClient)null)));
+    }
+
     // The ramp holds first logins only: a slot that started before logs in again whatever the room.
     [Test]
     public void The_ramp_holds_first_logins_only()
