@@ -136,6 +136,16 @@ public sealed class HeadlessPacketLib : BotDummyPacketLib, IPacketLib
     public new void SendChangeGroundTarget(int x, int y, int z) { }
     public new void SendRawMessage(string msg, eChatType type, eChatLoc loc) { }
 
+    // #167 F C2: the server's chat to the bot (GamePlayer.MessageToSelf, Out.SendMessage, GamePlayer.cs:7655-7658;
+    // BotDummyPacketLib's is a no-op, bots/BotDummyPacketLib.cs:362): a spell's refusal or resist (CT_SpellResisted) goes
+    // to the driver, which keeps only its own control's resist or immunity (PlayerBotDriver.OnSpellMessage); the rest is
+    // dropped as before. One type check per message.
+    public new void SendMessage(string msg, eChatType type, eChatLoc loc)
+    {
+        if (type is eChatType.CT_SpellResisted && _client.Player is GamePlayer player)
+            PlayerBotDriver.OnSpellMessage(player, msg);
+    }
+
     // DEBUG would be quieter at scale; INFO keeps run 1's checks readable.
     private void Note(string what)
     {

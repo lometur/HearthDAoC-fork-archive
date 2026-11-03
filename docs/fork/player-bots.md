@@ -64,15 +64,31 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   less), and full power, or 90% power for a caster (Wizard, Sorcerer, Runemaster, Eldritch, Mentalist: under 50% power
   it regains power at half the rate, so a pull that ends below half costs more rest than the last 10%); the quest bot's
   rests before an errand's walk stop there too, and a Skald's Song of Rest and an endurance regeneration buff run to the
-  same 80%.
-- A bot with a heal heals itself below 60% health, whatever its power. Out of a fight it also heals itself below 85%
-  before it sits, if half its power is left after the heal. A caster doesn't start a cast that a hit would interrupt,
-  and uses Quickcast once a monster's hits interrupt it. Its own swing doesn't block its next cast: with a spell to
-  cast, it stops swinging until its own swing's interrupt runs out, and it doesn't swing between casts (an instant
-  spell does not mind). Between casts it keeps its spell range. A pet class summons its pet and sends it in, then
-  holds its spells until the monster turns on the pet, 4 s at most, and never while the bot is being hit. A Theurgist
-  casts a pet at its target at each cast choice while it can cast one, as a GameBot does, and its damage spell only
-  when it can't (the target out of the pet's range or view, or a pet just refused).
+  same 80%. A kill's rest is skipped (#167 F) when the bot ends the kill at full health with what its next pull needs if
+  that costs what the kill did: endurance at a run's reserve (41%) plus the kill's endurance cost, and power at 50% plus
+  the kill's power cost (twice that for a Valewalker, which regains power at half rate under 50%); a caster or a pet
+  class skips it only with its power at its stop. The bot then picks at once, and goes on only to a pick that cons no
+  harder than the kill, blue at most, with no other monster round it, or to a monster that comes at it; otherwise it
+  rests, from its next think (so a Skald still sings its Song of Rest as it sits). A fight begun on a skipped rest that
+  it doesn't win owes the rest again. A kill that leaves it recovered goes on as before, and a rest owed before the kill
+  (a caster's after a break-off, or an earlier kill's not yet taken) is never skipped. (A sit in the 10 s after a fight
+  is in the server's combat window: no endurance comes back, and health and power tick every 10 s, not every 3.)
+- A bot with a heal heals itself below 60% health, whatever its power. As a player must, it heals only when no
+  interrupt stops the cast: right after its own swing (3 s) it casts an instant heal if it has one, else it stops
+  swinging and heals as that interrupt ends; while a monster's hits interrupt it, it fights on and looks again every
+  half second. That holds for any class with a heal (a Druid or a Mentalist too), and against a yellow or harder
+  monster too: there a hold can fall in a gap between the monster's interrupting hits, and its next hit then blocks
+  the heal, a few swings given up for nothing. Out of a fight it also heals itself below 85% before it sits, if half
+  its power is left after the heal. A caster doesn't start a cast that a hit would interrupt, and uses Quickcast once
+  a monster's hits interrupt it. Its own swing doesn't block its next cast: with a spell to cast, it stops swinging
+  until its own swing's interrupt runs out, and it doesn't swing between casts (an instant spell does not mind).
+  Between casts it keeps its spell range. A pet class summons its pet and sends it in, then holds its spells until the
+  monster turns on the pet, 4 s at most, and never while the bot is being hit. A Theurgist casts a pet at its target
+  at each cast choice while it can cast one, as a GameBot does, and its damage spell only when it can't (the target
+  out of the pet's range or view, or a pet just refused). A Necromancer casts its power tap (a Vacuum) instead of its
+  lifetap while its power isn't full and its pet has half its health or more, when the tap does three quarters of the
+  lifetap's damage or more, so it fights on its power and rests less; a Deathsight Necromancer of level 40-43 keeps its
+  Spirit Vacuum beside its Theft of Energy (the two are told apart by what the pet casts).
 - A caster (Wizard, Sorcerer, Runemaster, Eldritch, Mentalist) nukes a monster coming at it while there is time for a
   nuke and a control spell after it. Then it stuns, roots or mezzes it, in that order of choice, if the cast ends
   before the monster reaches it. In melee it uses Quickcast for the control spell. It skips the control while its
@@ -141,7 +157,8 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
 - Out of a fight it keeps its class's own self-buffs up: armour factor, absorb, bladeturn, ablative, damage shield,
   damage add, stat buffs and regeneration buffs, and one chant that costs no power each pulse (so no resist chant: the
   Paladin's cost power each pulse): the first of those kinds, but from a kill to the end of its rest a regeneration
-  chant for what it is short of, so a Skald sings its Song of Rest as it sits and its combat chant again once rested.
+  chant for what it is short of, so a Skald sings its Song of Rest as it sits and its combat chant again once rested
+  (a kill whose rest it skips keeps the combat chant).
   It looks every 5 s, and at once after a kill, before it sits, casting the missing ones back to back (a cast still
   under way at the monster it killed stops at the kill); never while it sits, until its rest is done, and a buff it
   casts as it gets up rested doesn't sit it down again. It uses the buffs' real power, concentration and recast; the
@@ -149,9 +166,26 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   Reaver's Surge) goes up in a hard fight instead, at the start of one against a yellow or harder monster, or when a
   second monster comes on it; one with a cast time (a Spiritmaster's Benison) not at all yet, and a regeneration one
   (a Shaman's Frigg's Cure) only while what it regenerates is short of where the rest stops.
-- It picks a monster with no aggressive neighbours, none within reach of the target, of its walk in, or of the spot
-  it would fight from (its spell's range for a caster, else melee). After deaths it moves to an easier camp. It avoids
-  what killed it for 15 minutes. Training dummies are no monsters: it neither plans camps at them nor pulls them.
+- It picks a monster with no aggressive neighbours, none within reach of the target, of its walk in, or of the spot it
+  would fight from (its spell's range for a caster, else melee). Where none within 2,600 units is that clear, it takes
+  the least crowded within 5,000, a melee or archer bot only a pull whose crowd (those potential adds round the target
+  and along the walk in) fits the target's con: 3 at a green, 1 at a blue, none at a yellow or harder, nor one with an
+  aggressive monster over its cap among those adds. A pull over that is refused, not taken, and counts as passed over,
+  so after 30 s of searches with no pull it plans a new camp, which leaves out for 10 minutes the camps within 1,400
+  units of the pulls it refused. With no camp to go to it hunts where it is, its limits off there for 5 minutes, as
+  they are at such a barred camp when only that is left to take. It searches again every 2 s as it walks in, so a pick
+  whose crowd rises past its limit on the walk in is dropped. For a new target more than 1,000 units away a melee or
+  archer bot also counts those potential adds along the navmesh corridor it will walk, not the straight line, at most
+  once every 4 s; that count is only logged (`pathCrowd=`): it refuses nothing for it yet. A melee, archer or caster
+  bot's pick also knows its own kills come back: the spawn spot of one of its last 5 kills that would aggro, from 50 s
+  to 150 s after the kill while that monster is still dead, counts as a potential add by the target or where the bot
+  would stand (not on its walk in: it often stands on that spot), so the 2,600-unit ring takes no such target and the
+  5,000-unit ring ranks it as more crowded; it never refuses a pull for one, nor counts one in `crowd=`. After deaths
+  it moves to an easier camp. A camp it plans is none that an aggressive monster over the plan's cap reaches (its
+  aggro range and 200 units, each monster's own); where none fits and it takes the safest camps as its fallback, it
+  tries first those that no aggressive monster over their con reaches, if they lie no more than 10,000 units farther
+  than the nearest. It avoids what killed it for 15 minutes. Training dummies are no monsters: it neither plans camps
+  at them nor pulls them.
 - It swings and casts only at a target in sight, by the navmesh's line; a target hitting it in contact (within 250
   units) counts as in sight though that line says not, as a player sees what hits it. A target out of sight that
   fights neither it nor its pet, nor has the bot as its target (coming at it round an obstacle), is walked toward 300
@@ -159,7 +193,8 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   in contact. In contact, out of sight 5 s, it is dropped, and the bot's picks pass it over for 30 s, each such monster
   for its own 30 s (it still fights it back if it comes on and hits it).
 - A monster its walk finds no path to it leaves, and for 30 s, each such monster for its own 30 s, neither its picks
-  nor its fighting back take it (a hitter still keeps it from sitting).
+  nor its fighting back take it (a hitter still keeps it from sitting). One whose walk is blocked again within 5
+  minutes its picks pass over for 15 minutes; it still fights that one back once the 30 s are over, if it comes.
 - A monster within 2,000 units that has the bot as its target counts as an attacker before its first hit, so the bot
   stands up and fights it first. Before it sits, a bot within reach of an aggressive monster from its last search,
   or of the spawn spot of one of its last 3 kills in the last 150 s (where that monster respawns, 80 s after the kill
@@ -167,22 +202,35 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   blocked takes the next nearest such spot at once, 3 walks in all; then it sits where it is.
 - Losing, it breaks off: below 40% health with 2 or more monsters on it, or with 1 still on it after a kill in a fight
   that had 2 or more on it, within 3 s of that kill or in the whole fight it opens next. One monster breaks it off too
-  when it is one the bot avoids (unless it was sent to a camp of them), when the bot is a caster and its target is above
-  25%, or, for a bot that isn't a caster, when the race since the monster's first hit on it says the bot dies first with
-  its target still above 10% (both sides' loss since that hit, read once the bot has lost 20% health since it, projects
-  the target's health when the bot's runs out; a heal counts as less lost; a caster whose target is at 25% or less
-  fights on for its killing nuke); not while a caster's control at that monster is under way, nor, when that monster is
-  its target, while it is held or the caster would cast a control at it now or once a resisted one may go again (a
-  target held at range is no hold on another monster hitting it). None of these while its target is down to 10% or less.
-  A caster whose held target
+  when it is one the bot avoids (unless it was sent to a camp of them), when the bot is a caster and its target is
+  above 25%, or, at any target health, when it is a caster that can't finish: hits interrupt it, its Quickcast is
+  spent, and at the rate it is losing health it would die before the Quickcast comes back and a nuke is cast, unless
+  its own damage-over-time spells would kill the target first, and never while a spell of its own is still casting
+  (hits stop a cast only in its first half, so that one lands); or, for a bot that isn't a caster, when the race since
+  the monster's first hit on it says the bot dies first with its target still above 10% (both sides' loss since that
+  hit, read once the bot has lost 20% health since it, projects the target's health when the bot's runs out; a heal
+  counts as less lost; a caster whose target is at 25% or less fights on for its killing nuke if it can finish); not
+  while a caster's control at that monster is under way, nor, when that monster is its target, while it is held or the
+  caster would cast a control at it now or once a resisted one may go again (a target held at range is no hold on
+  another monster hitting it). None of these while its target is down to 10% or less, but for a caster that can't
+  finish (so such a caster with 2 or more monsters on it breaks off from those then too). A caster whose held target
   is above 25% with no damage spell it can pay for breaks off at any health, then rests: it takes no camp or names to
-  avoid from that one and doesn't move camp. Only from monsters it can outrun, and only with a sprint whose lead takes
-  it out of the fastest one's 200-unit reach: none faster than its run (191), or none as fast as its sprint (248) when
-  its endurance holds the sprint long enough to keep the fastest off it for the 25 s a monster chases. Never from a
+  avoid from that one and doesn't move camp. A caster that couldn't finish does the same: it takes no camp or names to
+  avoid and rests, then pulls again; but when the monster it couldn't finish was yellow or harder and it hasn't killed
+  one of that name at yellow or harder in the last 15 minutes, its picks and its camp plans pass over that name at that
+  con or harder for 15 minutes, as a name it avoids (it still fights one back, and a kill of one at that con ends it):
+  an empyrean elder that heals itself, or a yellow it loses to half the time, would otherwise come first again after
+  every rest. Only from monsters it can outrun, and only with a sprint whose lead takes it out
+  of the fastest one's 200-unit reach: none faster than its run (191), or none as fast as its sprint (248) when its
+  endurance holds the sprint long enough that the fastest one, which last swung as the sprint's lead passed its reach,
+  is still out of its reach 25 s later, when a monster stops chasing: with no Long Wind or regeneration, 31 endurance
+  against a monster of speed 192-193, 36 against 194-195, 41 against 196-197, 51 against 200, 61 against 205, 91
+  against 215, and none against 218 or faster. It doesn't run from one it can't outrun: it fights on. Never from a
   monster with a snare, stun, mez or damage spell of 1,000 units' range or more. It stops its fight, sprints, and runs
-  1,500-2,500 units straight away from them to a spot clear of other aggressive monsters that it can walk to, or with
-  none, to the spot 1,500 units straight away from them if it can walk there; on again from there while one still chases
-  it. Once the nearest chaser that isn't held is 400 units behind (more for one faster than its run: 25 s of what it
+  1,500-2,500 units straight away from them to a spot clear of other aggressive monsters that it can walk to (one
+  whose straight way passes none of their reach first, if one within 60 degrees of straight away does), or with none,
+  to the spot 1,500 units straight away from them if it can walk there; on again from there while one still chases it.
+  Once the nearest chaser that isn't held is 400 units behind (more for one faster than its run: 25 s of what it
   gains), its sprint goes off, and on again when one comes within 300 units with its endurance over 10%. A spot it was
   blocked on it never takes again in that run. A mezzed, stunned or rooted monster still counts as after it. From 3 s
   into the run (time for its sprint to gain on one that started in contact), one not held that stays
@@ -198,16 +246,21 @@ Each bot thinks every 250 ms, a thin copy of the `/bot` pilot's think:
   a new camp from where it ran to before it looks for a new target. A break-off on the walk to its camp, more than 1,400
   units short of it, bars that camp too for 15 minutes.
 - In a close fight (2 or more monsters on it now or earlier in the fight, a defence, the fight after a kill with adds,
-  or a fight the race since the first hit on it projects it to end under 30% health) a bot keeps the endurance a sprint
-  away from the fastest monster on it would need, plus 5: 31 against a monster no faster than its run, up to 41 against
-  one of speed 204. Its styles, and for a class that isn't a caster or pet class its damage spells (5 endurance a cast),
-  wait while they would take it under that; a cheaper style that leaves it goes instead. Heals don't wait, nor does a
-  lifetap (a Reaver's Siphons, a Valewalker's Cycle of Life): it heals the bot too. Against a monster of speed 205 or
-  more it keeps none, since no sprint it could keep would outrun it. It waits only while waiting can still buy a run:
-  not once its endurance is under what that sprint needs (21 against a monster of speed 148-181, 26 against 182-197, 31
-  against 198-202), since endurance doesn't come back in a fight, and not while its target, the only monster on it, is
-  at 10% health or less, since a bot never breaks off from a target that low. With another monster on it, it keeps
-  waiting there, for the run from that one at the kill. Out of a close fight it styles as before.
+  a fight the race since the first hit on it projects it to end under 30% health, or a fight with a yellow or harder
+  target, from its first think) a bot keeps the endurance a sprint away from the fastest monster on it would need,
+  plus 5: 31 against a monster no faster than its run, 36 against one of speed 192-193, 41 against 194-195. Its
+  styles, and for a class that isn't a caster or pet class its damage spells (5 endurance a cast), wait while they
+  would take it under that; a cheaper style that leaves it goes instead. Heals don't wait, nor does a lifetap (a
+  Reaver's Siphons, a Valewalker's Cycle of Life): it heals the bot too. Against a monster of speed 196 or more, or
+  one with a snare, stun, mez or damage spell of 1,000 units' range or more, it keeps none, since no sprint it could
+  keep would outrun it. It waits only while waiting can still buy a run: not once its endurance is under what that
+  sprint needs (16 against a monster slower than 148, 21 against 148-181, 26 against 182-191, 31 against 192-193, 36
+  against 194-195), since endurance doesn't come back in a fight, and not while its target, the only monster on it, is
+  at 10% health or less, since a bot never breaks off from a target that low (a caster that can't finish aside). With
+  another monster on it, it keeps waiting there, for the run from that one at the kill. In a blue or green fight with
+  one monster it styles as before. The yellow fights cost the style classes a few kills (about 0.15% of all kills over
+  batch F's seven base legs); Reavers, Valewalkers, Skalds, Berserkers and Heroes pay that with no yellow-pull deaths
+  of theirs to save. A caster's or pet class's casts never wait; a Hunter's styles wait as any style class's.
 - It releases 10 s after a death, counted from when the server has handled the death, never before: a bow's or a bolt's
   killing hit lands in the bots' own phase of the game loop, and a release asked for then was undone by the server's
   death handling later in the same tick, which left the bot dead for 15 minutes. A release that didn't revive it is
@@ -242,35 +295,41 @@ What they don't do yet is under [Known shortcomings](#known-shortcomings).
 Against the GameBots (#167), and between them and a live world. Each line goes when its fix lands.
 
 Playing:
-- **Deaths:** over two legs of the same code (`st-deathsE3` and `st-deathsE3b`: 15 minutes each, 390 level-matched
-  bots on the `spots-lm3` test spots) they die 0.7 times per bot-hour, against about 1 for the PvE GameBots: melee
-  0.7, casters 0.9, healers 0.8, pet classes 0.6, archers 0.8. v0.37b-hearth.12 on the same spots (`st-deathsD2` and
-  `st-deathsD2b`) died 1.4 times, and v0.37b-hearth.11 (`st-hearth11` and `st-hearth11b`) 1.8. One leg is too short
-  to judge a small change: two legs of the same code have died 149 and 118 times. The older spot list put 30 bots
-  where they couldn't hunt (by a battleground keep, in a dungeon); `spots-lm3` moves the 26 whose spot was the cause,
-  so legs before `st-hearth11` (2.1 on `st-deathsC`, 9.5 on v0.37b-hearth.9's `st-layers5`) don't compare one for
+- **Deaths:** over six legs of batch F's code (`st-deathsF` to `st-deathsF3b`: 15 minutes each, 390 level-matched bots
+  on the `spots-lm3` test spots) they die 0.6 times per bot-hour, against about 1 for the PvE GameBots: melee 0.6,
+  casters 0.5, healers 0.7, pet classes 0.4, archers 0.9. Its three pairs died 119, 122 and 96 times. v0.37b-hearth.16
+  on the same spots died 0.77 times over seven legs, v0.37b-hearth.12 1.4 and v0.37b-hearth.11 1.8. One leg is too short
+  to judge a small change: seven legs of the same code have died between 63 and 85 times. The older spot list put 30
+  bots where they couldn't hunt (by a battleground keep, in a dungeon); `spots-lm3` moves the 26 whose spot was the
+  cause, so legs before `st-hearth11` (2.1 on `st-deathsC`, 9.5 on v0.37b-hearth.9's `st-layers5`) don't compare one for
   one. Still open:
-  - A bot caught on the run, or with no point to run to, turns and fights. Those turns die at the same monsters on
-    every leg (an arbordon, a fomorian geddon, a forest observer). A style class ends a shaken run with about 10
-    endurance left.
-  - Casters: 17 deaths over the two legs came with the target at 25% or less, 13 of them after the Quickcast had gone
-    on a control. A caster seldom controls the add. The log can't tell a control the server refused from one the
-    monster resisted.
-  - Some classes kill less than on v0.37b-hearth.12 and die less: Minstrels 11% fewer kills, Scouts 10%, Armsmen 9%.
-    Necromancers (20%) and Reavers (11%) kill less without dying less.
+  - A bot caught on the run, or with no point to run to, turns and fights. One no longer runs from a chaser that
+    would catch it (as fast as it, counting the chaser's reach): it fights from the start, and those fights are now
+    most of the deaths after a refused run.
+  - Casters: a caster that can't finish its target breaks off and rests, and then passes over a yellow-or-harder name
+    it couldn't finish for 15 minutes. One that keeps killing that name now and then (a Sorcerer at hill scrags)
+    keeps pulling it and running from it. A caster seldom controls the add. The log splits a failed control into
+    resisted and immune, but no immune has shown up yet, so whether the server reports one is unchecked.
+  - Some classes kill less than on v0.37b-hearth.16 (the final pair): Clerics 29% fewer kills (4 bots), Scouts 16%
+    (dying half as often), Friars 8% (5 deaths over the two legs, against 2), and Rangers and Skalds about 7%.
   - Where a level has no blue camp, the seven classes that take no yellow alone still pull yellows at the fallback
-    camp: 28 pulls over the two legs, 15 of them by one Bard. Wardens converted from Regrowth die 4.7 times per
-    bot-hour at their camps.
-  - Some bots die again and again at one camp: a Nightshade 5 times in one zone, a Paladin 5 times at one goblin
-    camp.
+    camp. Some bots die again and again at one camp.
+  - A melee or archer bot turns down a pull whose crowd is over its con's limit, and moves camp 30 s later. While it
+    waits it stands where its search turned the camp down, and a monster there sometimes reaches it: its first fight
+    after a login or a rest is a defence about twice as often as on v0.37b-hearth.16. A step out of reach while it
+    waits was tried and taken back out (it didn't help). The walk to the new camp can take it into the reach of a
+    crowd it would turn down.
+  - The camp planner treats a lone named monster as a camp. Several bots then walk a long way to one that the first to
+    arrive kills, and where no other camp fits they go back and forth between two of them.
   - A bot no longer steps onto a piece of navmesh with no path back to its camp's island (#188, see Walking, which names
     the exceptions). One put on such a piece some other way (a respawn, a teleport) is teleported back to its camp
     (`CUTOFF`), never in a fight or in sight of a real player. One whose camp is itself on such a piece is still put
     back onto it, and then keeps to it.
   - Walks don't look ahead for monsters on the route.
-- **Resting:** about half their time: 52.7% over the two legs, against 50.7% on v0.37b-hearth.12 (time-weighted).
-  Most of it is the real cost of player regeneration. Part of the rise is time no longer spent dead or walking back
-  (93 s per bot-hour, from 195). The rest is the 80% endurance stop, which starts sits that health and power wouldn't.
+- **Resting:** about half their time: 52.1% over the six legs, against 52.6% on v0.37b-hearth.16 (time-weighted).
+  Most of it is the real cost of player regeneration. A kill now skips its rest when the bot has what its next pull
+  needs. The 80% endurance stop still starts sits that health and power wouldn't, a quarter fewer than on
+  v0.37b-hearth.16.
 - **Not done at all:** they don't group, buff others, take part in RvR or battlegrounds, stealth, use realm abilities
   or ride horses (#152, #167).
 - **Ranged and songs:** they can't shoot or play. Archers fight in melee, and Bards and Minstrels have no songs: theirs
@@ -293,8 +352,9 @@ Going live, without the test-world side effects:
 - **Gear:**
   - A bot has only what it starts with, or the level-matched kit, and no jewellery.
   - Whether it loots and wears upgrades isn't checked.
-- **Camps:** the test spots were picked to avoid orange and named monsters. A live bot's choice of camp has no such
-  filter.
+- **Camps:** the test spots were picked to avoid orange and named monsters. A camp a bot plans itself passes over a
+  spot that an aggressive monster over the camp's cap can reach (#167), but a lone named monster still counts as a
+  camp, and a bot's start spot has no filter at all.
 
 ## The lever and the quest rule
 
@@ -530,34 +590,86 @@ All start `PLAYER_BOT_`:
   left unstyled though it could pay for a style, and `castHeld=`, the thinks the reserve held a damage spell back (-1
   each out of a fight). `FIGHT` then gives `sight=`, the sight checks its target hitting it in contact answered (the
   navmesh's line said no), and `blind=` (1: dropped after 5 s out of sight in contact, fighting neither the bot nor its
-  pet, nor coming at it), and ends with `blindSteps=`, the steps it took toward its target out of sight.
+  pet, nor coming at it), and `blindSteps=`, the steps it took toward its target out of sight. `FIGHT` then gives
+  `healCast=`, the heal requests that began a cast that lasted to the next think, or landed (`heals=` counts requests,
+  which the server may refuse while an interrupt runs), `healLanded=`, the heals cast, `healHold=`, the thinks it held
+  its swing for a heal, `healHoldMax=`, its longest such hold in thinks, and `taps=`, a Necromancer's power-tap casts;
+  `DEATH` gives `heals=` and the same five (-1 each out of a fight). Both then give `addWhy=`, the fight's add step in
+  a word: `none` (no add), `ctl` (a control cast at one), `pets` (a Theurgist's pets cast at one), or why it cast
+  none, the reason counted most over its looks: `noControl` (no control in its kit: most melee classes read it once
+  an add is seen), `tries` (3 casts that held nothing), `noneTakes` (no control the add takes now, ready, in range and paid
+  for), `rootContact` (only a root, the add in contact), `targetFirst` (the target's control first), `hitNoQc` (hits
+  interrupt it, no Quickcast ready), `closeNoQc` (the add reaches it before the cast ends, no Quickcast ready), `los`
+  (no sight to the add) or `noAdd` (none counted, or the add gone or held); on a dropped fight's line too, -1 on
+  `DEATH` out of a fight. "Counted most" leans away from `los`: a sight refusal counts once (the add step then waits
+  out the sight check), the others at every look. Both then give `ctlResisted=` and `ctlImmune=`, of `ctlFailed=` the
+  controls the server named resisted or immune in its message to the bot (an enraged monster's refusal of a mez
+  counts as immune; read from the control's own message only: as its cast finishes, or for an instant control in the
+  tick it was cast), the rest refused, interrupted or unsaid, then `qcCtl=` and `qcNuke=`, its casts under Quickcast at
+  a control and of its damage spell (-1 each on `DEATH` out of a fight); `DEATH` ends with `qcLeft=`, the seconds
+  before Quickcast is ready again, at any death (-1 without it), then `crowd=`, its target's `crowd=` as `FIGHT` gives
+  it (-1 with no target). `FIGHT` then gives `reserve=`, the highest endurance reserve the fight held for a run (0:
+  none), and `lifted=` (1: a melee or archer bot's pick made while its crowd limits were off). Both then give `over=`,
+  of the pick's `crowd=` the aggressive monsters over the bot's cap (-1 for a defence or a monster coming at it, and on
+  `DEATH` with no target), and `due=`, its own kills' spawn spots coming due by the target or where it would stand at
+  the pick (-1 as `over=`, and for a healer or pet class, which reads none). Both then give `seen=`, for a target that
+  was not the rings' pick (a defence, or a monster coming at it): `counted` (among the potential adds the pick it
+  replaced counted), `scanned` (that search had it, but its reach covered neither the target nor the straight walk in)
+  or `unseen` (that search never had it), `-` for a rings' pick; and `pathCrowd=`, the potential adds along the
+  corridor of the pick's walk in, counted for a melee or archer bot's new target over 1,000 units away, at most once
+  every 4 s (-1: not counted, or no corridor; logged only). Both then give `huntCrowd=` and `huntTarget=`: when a
+  defence or a monster coming at the bot replaced the rings' pick it was walking to, that pick's `crowd=` and name (a
+  defence after a defence keeps the first one's; -1 and "" otherwise, and on `DEATH` with no target). A turn on a
+  chaser after a break-off replaced none, so it reads -1: its pick's `crowd=` is on the break-off's `FIGHT
+  result=dropped breakOff=1` line. `DEATH` then gives the fatal fight's `blindSteps=` as `FIGHT` gives it (-1 out of
+  a fight). Both then give `restSkip=`: 1 when the fight began on the rest its kill skipped (the first fight after the
+  skip, with no sit between), else 0; -1 on `DEATH` out of a fight (a death on a break-off's run reads -1: its fight's
+  `FIGHT result=dropped breakOff=1` line carries the 1). Both then end with `capHold=`, the seconds its capped clock had
+  run when the fight began (its searches had found no pull it could take; a pull's own search stops that clock, so a
+  pull reads -1), -1 with no capped clock; on `DEATH` the fatal fight's, -1 out of a fight.
   `BLOCKED`'s `walk=` is `target`, `roam`, `clear` (the step out after a release), `walkout`, `rest`, `kite`, `turret`
   or `breakoff`. `RELOCATE` after a death (`reason=died`) ends with `sinceRelease=`, the milliseconds since the release;
   after a break-off its `reason=` is `brokeoff`. Either ends with `barred=old` when the death or the break-off came on
   the walk to the camp it had, which the plan then leaves out. Any `RELOCATE` then ends with `capKill=`, the lowest con
   that killed the bot in the last 5 minutes, yellow or harder (a blue or green killer logs none), while there is one.
   Then `recent=1` on a plan made within 15 minutes of a death (a died, break-off or capped one), and `near=1` when the
-  camp came from its near pass (within 10,000 units of where the bot stood). A break-off drops its fight (`FIGHT
+  camp came from its near pass (within 10,000 units of where the bot stood). A capped plan (`reason=capped`) then gives
+  `crowdRefused=`, the spots of a melee or archer bot's pulls refused for their crowd in the last 10 minutes, which it
+  leaves out, while there are any. `lifted=1` ends a line whose camp lies among those spots, and a line with no camp
+  after a last search that only refused crowded pulls: the bot's crowd limits are then off there for 5 minutes. Any
+  `RELOCATE` then ends with `overSkipped=`, the camps that fit but were left out for an aggressive monster over the cap
+  in reach (each once, over the plan's passes), while there are any. A break-off drops its fight (`FIGHT
   result=dropped`);
+- `LIFT`: the same lift where no `RELOCATE` line is written, as the bot hunts where it is: its `reason=` and `why=`,
+  `norelocate` (it may not relocate, as the lever test's bots, or stands in no zone) or `offmesh` (it stands off the
+  navmesh), then `lifted=1`;
 - `BREAKOFF`: one per break-off, when it ends: the bot's `hp=`, `end=` (endurance) and `attackers=` when it broke off,
   `sec=`, the seconds it ran (a run on to its point, done in another monster's reach, counts in it), and `outcome=`:
-  `shook` (none still after it, or from 30 s none within 1,500 units), `fought` (still chased after 45 s, caught with no
-  control to cast, or nowhere to run) or `died`; then `rate=`, the health it lost a second over the 3 s before it broke
-  off, and `why=`, the rule that fired: `adds` (2 or more on it), `atkill` (1 still on it within 3 s of a kill with
-  adds), `followup` (the fight after that kill), `avoided` (one it avoids), `caster` (a caster losing to one), `race` (a
-  bot that isn't a caster losing the race to one) or `spent` (a caster out of power with its target held); then
+  `shook` (none still after it, or from 30 s none within 1,500 units), `fought` (still chased after 45 s, caught with
+  no control to cast, or nowhere to run) or `died`; then `rate=`, the health it lost a second over the 3 s before it
+  broke off, and `why=`, the rule that fired: `adds` (2 or more on it), `atkill` (1 still on it within 3 s of a kill
+  with adds), `followup` (the fight after that kill), `avoided` (one it avoids), `caster` (a caster losing to one),
+  `race` (a bot that isn't a caster losing the race to one), `spent` (a caster out of power with its target held) or
+  `cantfinish` (a caster hit with its Quickcast spent that would die before it came back and a nuke was cast); then
   `sprintOff=`, the seconds into the run its sprint first went off (-1: never), and `endLeft=`, its endurance when the
   run ended; then `turn=`, why a fought one turned: `caught`, `nopoint` (nowhere to run, with a chaser not held within
-  250 units, a hit while it held, or as a caster or pet class with power), `blocked` (the same after a blocked step) or
-  `cap` (45 s), `-` otherwise; `holds=`, its one-second tries that found no point while it held; `speed=` and
+  250 units, a hit while it held, or as a caster or pet class with power), `blocked` (the same after a blocked step)
+  or `cap` (45 s), `-` otherwise; `holds=`, its one-second tries that found no point while it held; `speed=` and
   `chaserSpeed=`, its run speed (191 unencumbered, less when encumbered) and the fastest chaser's when it began (-1
-  before they are read). A break-off that would fire but doesn't logs once a fight as `outcome=refused` with `sec=0` and
-  the bot's `hp=`, `end=`, `attackers=` and `rate=` then, and `why=`: `control` (an add's control comes first), `speed`
-  (a chaser as fast as its sprint), `sprint` (its sprint too short for the fastest), `ranged` (a chaser that harms from
-  range) or `point` (nowhere to run), with `sprintOff=-1`, `endLeft=` its endurance then and its `speed=` and
-  `chaserSpeed=` (-1 for `control`); it is no break-off, so leave it out of break-off counts. The fight it dropped
-  (`FIGHT result=dropped breakOff=1`) counts the monsters on the bot then in its `adds=` (never fewer than
-  `attackers=`), and with 2 or more and no add seen before, its `addAt=` and `addHp=` are the break-off's;
+  before they are read); then `sprint=`, the seconds its sprint lasts from its endurance at the start (999: no end; -1
+  before it is read), `joined=`, the monsters that joined its chasers on the run (one that came back counts again),
+  and `wayAdds=`, 1 when its spot's straight way passed another aggressive monster's reach (there was no clear one), 0
+  when clear, -1 with no spot, and `qcLeft=`, a caster's Quickcast disable left at the start in whole seconds, rounded
+  up as `DEATH`'s (-1: no caster, or no Quickcast); then `cfSkip=`, 1 when a `cantfinish` run made its target's name
+  its picks' and plans' skip (yellow or harder, no kill of that name at yellow or harder in the 15 minutes before), 0
+  when it didn't, -1 for every other why and on a refusal. A break-off that would fire but doesn't logs once a fight as
+  `outcome=refused` with `sec=0` and the bot's `hp=`, `end=`, `attackers=` and `rate=` then, and `why=`: `control` (an
+  add's control comes first), `speed` (a chaser as fast as its sprint), `sprint` (its sprint too short for the
+  fastest), `ranged` (a chaser that harms from range) or `point` (nowhere to run), with `sprintOff=-1`, `endLeft=` its
+  endurance then and its `speed=`, `chaserSpeed=` and `sprint=` (-1 for `control`); it is no break-off, so leave it
+  out of break-off counts. The fight it dropped (`FIGHT result=dropped breakOff=1`) counts the monsters on the bot
+  then in its `adds=` (never fewer than `attackers=`), and with 2 or more and no add seen before, its `addAt=` and
+  `addHp=` are the break-off's;
 - `TURRET`: an Animist's new turret by its target (`step=replant`) or a monster it left because it couldn't plant
   one (`step=skip`), with the target's `con=`, its distance from the turret it had (`toTurret=`) and that turret's
   reach (`reach=`);
