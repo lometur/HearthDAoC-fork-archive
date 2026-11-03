@@ -105,6 +105,7 @@ public sealed class PlayerBotState
     public Vector3 Anchor { get; set; }             // spawn point: the leash centre; moved when a task ends far away
     public PlayerBotDriverTimer Timer { get; set; }
     public IPlayerBotTask Task { get; set; }
+    public Action<PlayerBotState> OnStop;           // #160: run once by Stop, before the task goes (PlayerBotSpawner.Carry)
     public volatile bool Stopped;
     public volatile PlayerBotActivity Activity;      // read by the report thread
     public volatile int NearPlayerBots, NearGamebots;
@@ -594,6 +595,7 @@ public static class PlayerBotDriver
     public static void Stop(GamePlayer player)
     {
         if (player == null || !_states.TryRemove(player, out PlayerBotState state)) return;
+        state.OnStop?.Invoke(state);                                // #160: sessions on, what the next login carries
         GameEventMgr.RemoveHandler(player, GameLivingEvent.Dying, OnBotDying);
         GameEventMgr.RemoveHandler(player, GameLivingEvent.CastFinished, OnBotCastFinished);
         state.Stopped = true;

@@ -80,7 +80,9 @@ public static class PlayerBotSpawner
         public volatile bool Equipped;              // set by OnEnteredWorld: the kit's gear went on (not again on a re-login)
         public volatile int Entries;                // set by OnEnteredWorld: worlds entered this run (1: the run's first login)
         public volatile bool LogOffStarted;         // #160: set by BeginLogOff once the log-off is the driver's task
-        public volatile PlayerBotCamp Camp;         // #160: the driver's anchor as the bot left, for its next login
+        public volatile PlayerBotCamp Camp;         // #160: the driver's anchor as the bot left, for its next login (Carry)
+        public volatile int DeathSteps;             // #160: its death cap (PlayerBotState.DeathSafetySteps), carried (Carry)
+        public volatile int DeathsAtLogOff;         // #160: the driver's deaths as its log-off began (BeginLogOff)
         public Random Dice { get; } = PlayerBotSessions.Dice(slot);   // #160: its sessions and gaps (the timer only)
         public SlotPhase Phase;                     // the timer only, under Gate
         public int Attempts;
@@ -329,13 +331,46 @@ public static class PlayerBotSpawner
             if (client?.Player is not { ObjectState: GameObject.eObjectState.Active } player ||
                 PlayerBotDriver.StateOf(player) is not { } state || state.Task is { Finished: false })
                 return;
-            s.Camp = new PlayerBotCamp(state.AnchorRegion, state.Anchor);
+            s.DeathsAtLogOff = state.Deaths;
             state.Task = new PlayerBotLogOffTask(client, GameLoop.GameLoopTime);
             s.LogOffStarted = true;
         }
         catch (Exception exception)
         {
             Log.Error($"{LogPrefix} logoff failed account={s.Slot.AccountName}", exception);
+        }
+    }
+
+    // #160: a session's driver, started (Drive): the death cap the bot carried (it never goes down in a run, as a
+    // GameBot's: PlayerBotDriver.NextDeathSteps), the camp it kept if that is in this region (it walks back to it, as a
+    // player would), and Carry at the driver's stop. The camp is used once: a session whose driver never starts keeps
+    // none, so a stale one never comes back.
+    private static void Resume(SlotState s, PlayerBotState state, GamePlayer player)
+    {
+        state.DeathSafetySteps = Math.Max(state.DeathSafetySteps, s.DeathSteps);
+        PlayerBotCamp camp = s.Camp;
+        s.Camp = null;
+        if (camp != null && camp.Region == player.CurrentRegionID)
+            (state.AnchorRegion, state.Anchor) = (camp.Region, camp.At);
+        state.OnStop = stopped => Carry(s, stopped);
+    }
+
+    // #160: the driver's stop (PlayerBotState.OnStop: on the game loop, once a session, a log-off's or a drop's), what the
+    // next login carries: the death cap, and the camp (the anchor) unless the bot owes a replan or died since its
+    // log-off began (PlayerBotSessions.KeepsCamp). Its other memories (failed camps, avoided names, killers' cons) end
+    // with the session: they last 5-15 minutes, under the default offline gap.
+    private static void Carry(SlotState s, PlayerBotState state)
+    {
+        try
+        {
+            s.DeathSteps = Math.Max(s.DeathSteps, state.DeathSafetySteps);
+            int deathsSince = state.Task is PlayerBotLogOffTask ? state.Deaths - s.DeathsAtLogOff : 0;
+            s.Camp = PlayerBotSessions.KeepsCamp(state.ReplanOwed != null, deathsSince)
+                ? new PlayerBotCamp(state.AnchorRegion, state.Anchor) : null;
+        }
+        catch (Exception exception)
+        {
+            Log.Error($"{LogPrefix} carry failed account={s.Slot.AccountName}", exception);
         }
     }
 
@@ -407,12 +442,7 @@ public static class PlayerBotSpawner
             if (created)
                 Log.Info(Invariant($"{LogPrefix} created account={s.Slot.AccountName} name={ch.Name} realm={PlayerBotPlan.RealmKey(s.Slot.Realm)} race={ch.Race} class={ch.Class} level={ch.Level} region={ch.Region} x={ch.Xpos} y={ch.Ypos} guild={ch.GuildID}"));
             client.EnteredWorld += (c, first) => OnEnteredWorld(s, c, first);
-            client.LoggedOut += c =>
-            {
-                if (Sessions.On && PlayerBotDriver.StateOf(c.Player) is { } state)                    // #160: a drop's camp,
-                    s.Camp = new PlayerBotCamp(state.AnchorRegion, state.Anchor);                     //   if still driven
-                PlayerBotDriver.Stop(c.Player);                                                       // T4
-            };
+            client.LoggedOut += c => PlayerBotDriver.Stop(c.Player);                                  // T4
             s.Client = client;
             DbCoreCharacter row = PlayerBotAccounts.LoginRow(account, ch);                            // the one the login reads
             if (spot != null)
@@ -450,8 +480,7 @@ public static class PlayerBotSpawner
                 {
                     if (s.Spotted) state.HoldAnchor = true;
                     state.Kit = s.Kit;                                                                // TrainTo on each level-up
-                    if (Sessions.On && s.Camp is { } camp && camp.Region == p.CurrentRegionID)        // #160: back to the camp
-                        (state.AnchorRegion, state.Anchor) = (camp.Region, camp.At);                  //   it played last
+                    if (Sessions.On) Resume(s, state, p);                                             // #160
                 }
                 return true;
             }

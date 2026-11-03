@@ -143,6 +143,12 @@ public static class PlayerBotSessions
     /// alive where it died (WorldInitRequestHandler.cs:108-112). Off: never, as at 350d60c.</summary>
     public static bool ReleasesOnLogout(bool sessionsOn, bool alive) => sessionsOn && !alive;
 
+    /// <summary>Whether a bot keeps its camp (the driver's anchor as it stopped) for its next login: not when it owes a
+    /// replan (it died at that camp and hasn't planned away, PlayerBotDriver.OwesReplan), nor when it died since its
+    /// log-off began (a death on the log-off owes none: the task holds the think). It then plans afresh where it logs
+    /// in, as a GameBot that died replans (AWBC:3780-3816).</summary>
+    public static bool KeepsCamp(bool replanOwed, int deathsSinceLogOff) => !replanOwed && deathsSinceLogOff <= 0;
+
     /// <summary>A session's or an offline gap's length, uniform between min and max minutes, to the second.</summary>
     public static TimeSpan Roll(int minMinutes, int maxMinutes, Random dice) =>
         TimeSpan.FromSeconds(minMinutes * 60 + dice.Next((maxMinutes - minMinutes) * 60 + 1));

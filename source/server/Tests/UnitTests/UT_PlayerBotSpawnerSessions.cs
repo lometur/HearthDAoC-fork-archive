@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Numerics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using DOL.Database;
@@ -12,7 +13,8 @@ namespace DOL.GS.Tests;
 
 // HearthDAoC player bots (#160 step 1, its review): PlayerBotSpawner's session rules on its own slots, by reflection
 // (they are private and static), with no server and no game loop: what Leave does with each reason under both switch
-// values, and StartDue's wait for a slot's old client.
+// values, StartDue's wait for a slot's old client, and what a session carries to the next login (Resume at the login,
+// Carry at the driver's stop: the death cap, and the camp unless a death came after it).
 [TestFixture, NonParallelizable]
 public sealed class UT_PlayerBotSpawnerSessions
 {
@@ -142,6 +144,87 @@ public sealed class UT_PlayerBotSpawnerSessions
         Call("StartDue", now);
         Assert.That((s.Phase, s.Client, Posted(NpcService.Instance)),
             Is.EqualTo((PlayerBotSpawner.SlotPhase.Loading, (HeadlessClient)null, posted + 1)));
+    }
+
+    private static readonly ConcurrentDictionary<GamePlayer, PlayerBotState> States =
+        (ConcurrentDictionary<GamePlayer, PlayerBotState>)typeof(PlayerBotDriver).GetField("_states", HiddenStatic)!.GetValue(null)!;
+
+    // A session's driver, as Drive starts it (Resume) for a player made without its constructor (region 0), registered
+    // as PlayerBotDriver.Start registers it; End stops it as its logout does (PlayerBotDriver.Stop, which runs Carry).
+    private static PlayerBotState Session(PlayerBotSpawner.SlotState s)
+    {
+        GamePlayer player = (GamePlayer)RuntimeHelpers.GetUninitializedObject(typeof(GamePlayer));
+        PlayerBotState state = new(player);
+        Call("Resume", s, state, player);
+        States[player] = state;
+        return state;
+    }
+
+    private static void End(PlayerBotState state)
+    {
+        state.Player.ObjectState = GameObject.eObjectState.Deleted;          // the quit took it out of the world
+        PlayerBotDriver.Stop(state.Player);
+    }
+
+    private static readonly Vector3 CampA = new(1_000, 2_000, 30), CampB = new(5_000, 6_000, 70);
+
+    // The death cap never goes down in a run (a GameBot's resets only when its controller is made, once a run): each
+    // session's driver starts at the cap the last one stopped at.
+    [Test]
+    public void The_death_cap_carries_over_to_the_next_session()
+    {
+        SessionsProperty.SetValue(null, On);
+        PlayerBotSpawner.SlotState s = Slot(PlayerBotSpawner.SlotPhase.Playing);
+        PlayerBotState first = Session(s);
+        first.DeathSafetySteps = PlayerBotDriver.MaxDeathSteps;
+        End(first);
+        PlayerBotState second = Session(s);
+        Assert.That((s.DeathSteps, second.DeathSafetySteps), Is.EqualTo((PlayerBotDriver.MaxDeathSteps, PlayerBotDriver.MaxDeathSteps)));
+        End(second);
+        Assert.That(s.DeathSteps, Is.EqualTo(PlayerBotDriver.MaxDeathSteps));
+    }
+
+    // The camp: the anchor as the driver stopped, used once, at a login in its region; not one the bot died at (a replan
+    // owed), nor after a death on its log-off (deaths past DeathsAtLogOff with the log-off task running).
+    [Test]
+    public void A_session_keeps_its_camp_for_the_next_login_in_its_region_once()
+    {
+        SessionsProperty.SetValue(null, On);
+        PlayerBotSpawner.SlotState s = Slot(PlayerBotSpawner.SlotPhase.Playing);
+        PlayerBotState first = Session(s);
+        (first.AnchorRegion, first.Anchor) = (0, CampA);
+        End(first);
+        Assert.That(s.Camp, Is.EqualTo(new PlayerBotCamp(0, CampA)));
+        PlayerBotState second = Session(s);
+        Assert.That((second.AnchorRegion, second.Anchor, s.Camp), Is.EqualTo(((ushort)0, CampA, (PlayerBotCamp)null)));
+
+        s.Camp = new PlayerBotCamp(5, CampB);                                // another region's: not used, and gone
+        PlayerBotState third = Session(s);
+        Assert.That((third.Anchor == CampB, s.Camp), Is.EqualTo((false, (PlayerBotCamp)null)));
+    }
+
+    [Test]
+    public void A_camp_the_bot_died_at_or_died_after_logging_off_from_is_not_kept()
+    {
+        SessionsProperty.SetValue(null, On);
+        PlayerBotSpawner.SlotState s = Slot(PlayerBotSpawner.SlotPhase.Playing);
+        PlayerBotState owes = Session(s);
+        (owes.Anchor, owes.ReplanOwed) = (CampA, PlayerBotDriver.Died);
+        End(owes);
+        Assert.That(s.Camp, Is.Null, "died at it, no replan yet");
+
+        PlayerBotState logOff = Session(s);
+        (logOff.Anchor, logOff.Deaths, s.DeathsAtLogOff) = (CampB, 2, 2);
+        logOff.Task = new PlayerBotLogOffTask(null, 0);
+        logOff.Deaths++;                                                       // killed on the way out, released, quit
+        End(logOff);
+        Assert.That(s.Camp, Is.Null, "a death on its log-off");
+
+        PlayerBotState clean = Session(s);
+        (clean.Anchor, clean.Deaths, s.DeathsAtLogOff) = (CampB, 2, 2);
+        clean.Task = new PlayerBotLogOffTask(null, 0);
+        End(clean);
+        Assert.That(s.Camp, Is.EqualTo(new PlayerBotCamp(0, CampB)));
     }
 
     // The ramp holds first logins only: a slot that started before logs in again whatever the room.

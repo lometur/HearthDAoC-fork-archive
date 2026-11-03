@@ -158,6 +158,10 @@ public sealed class UT_PlayerBotSessions
     public void Sessions_off_gives_the_errands_as_before_and_on_once_a_run(bool on, int entries, bool gives) =>
         Assert.That(PlayerBotSessions.GivesErrands(on, entries), Is.EqualTo(gives));
 
+    [TestCase(false, 0, true)] [TestCase(true, 0, false)] [TestCase(false, 1, false)] [TestCase(true, 2, false)]
+    public void A_camp_is_kept_unless_the_bot_died_there_or_on_its_log_off(bool replanOwed, int deathsSince, bool keeps) =>
+        Assert.That(PlayerBotSessions.KeepsCamp(replanOwed, deathsSince), Is.EqualTo(keeps));
+
     [TestCase(false, false, false)] [TestCase(false, true, false)] [TestCase(true, false, true)] [TestCase(true, true, false)]
     public void Only_with_sessions_on_is_a_dead_bot_released_as_it_logs_out(bool on, bool alive, bool releases) =>
         Assert.That(PlayerBotSessions.ReleasesOnLogout(on, alive), Is.EqualTo(releases));
