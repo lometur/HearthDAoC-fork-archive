@@ -5,8 +5,8 @@ using NUnit.Framework;
 
 namespace DOL.GS.Tests;
 
-// HearthDAoC player bots (#160 step 1): the HEARTHDAOC_PLAYER_BOT_SESSIONS switch (PlayerBotSessionSettings), the spawner's
-// session rules (PlayerBotSessions: the ramp, what a leave leads to, the dice) and the log-off's steps
+// HearthDAoC player bots (#160 step 1): the HEARTHDAOC_PLAYER_BOT_SESSIONS switch (PlayerBotSessionSettings), the
+// spawner's session rules (PlayerBotSessions: the ramp, what a leave leads to, the dice) and the log-off's steps
 // (PlayerBotLogOffPlan), with no server.
 [TestFixture]
 public sealed class UT_PlayerBotSessions
@@ -51,8 +51,8 @@ public sealed class UT_PlayerBotSessions
     public void Off_leaves_first_logins_to_the_pacing_alone() =>
         Assert.That(PlayerBotSessions.FirstLoginRoom(PlayerBotSessionSettings.Off, 390, 0, TimeSpan.Zero), Is.EqualTo(int.MaxValue));
 
-    // AutonomousPopulationRamp.DesiredActiveCount for 390 over 15 minutes: 129 (a third, rounded up) by minute 5, linear
-    // before; the other 261 by minute 15. The spawner's first tick is at 5 s.
+    // AutonomousPopulationRamp.DesiredActiveCount for 390 over 15 minutes: 129 (a third, rounded up) by minute 5,
+    // linear before; the other 261 by minute 15. The spawner's first tick is at 5 s.
     [TestCase(0, 0, 0)] [TestCase(5, 0, 2)] [TestCase(60, 0, 25)] [TestCase(300, 0, 129)] [TestCase(600, 0, 259)]
     [TestCase(600, 100, 159)] [TestCase(600, 300, 0)] [TestCase(900, 0, 390)] [TestCase(3600, 390, 0)]
     public void On_first_logins_follow_the_gamebots_ramp(int seconds, int started, int room) =>

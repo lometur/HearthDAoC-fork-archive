@@ -29,13 +29,13 @@ namespace DOL.GS.HearthDAoC.PlayerBots;
 // class's GameBot plan (PlayerBotKit), geared by the GameBot's rules at its first entered world (PlayerBotKitGear), and
 // trained on each level-up.
 //
-// #160 step 1: HEARTHDAOC_PLAYER_BOT_SESSIONS (PlayerBotSessionSettings; off, the default, changes none of the above) is
-// read with the other two. On, first logins follow the GameBots' startup ramp, a session ends in a player's log-off
+// #160 step 1: HEARTHDAOC_PLAYER_BOT_SESSIONS (PlayerBotSessionSettings; off, the default, changes none of the above)
+// is read with the other two. On, first logins follow the GameBots' startup ramp, a session ends in a player's log-off
 // (PlayerBotLogOffTask, given to the driver on the game loop, at most PlayerBotSessions.LogOffsPerSecond a second), the
 // bot comes back after its offline gap where it logged off (no spot placement, its camp kept), and a bot that drops out
 // is logged in again RelogSeconds later, at most PlayerBotSessions.MaxRelogs a run; each drop still logs a lost line.
 //
-// Lines marked "// T4" came with the driver (task 4), lines marked "// T5" with the errands (task 5), "// #160" with step 1.
+// Lines marked "// T4" came with the driver (task 4), "// T5" with the errands (task 5), "// #160" with step 1.
 public static class PlayerBotSpawner
 {
     public const string LogPrefix = "HEARTHDAOC_PLAYER_BOTS";
@@ -287,7 +287,7 @@ public static class PlayerBotSpawner
     }
 
     // #160: StartSession, when a login reaches the world with sessions on: the session's length, from the slot's dice.
-    // Its failed attempts start afresh: with many logins a run, MaxAttempts counts one login's tries (Fail), not the run's.
+    // Its failed attempts start afresh: with many logins a run, MaxAttempts counts a login's tries (Fail), not a run's.
     private static void StartSession(SlotState s, DateTime now)
     {
         if (++s.Logins > 1) _relogins++;
@@ -297,10 +297,10 @@ public static class PlayerBotSpawner
         s.SessionEndsUtc = now + PlayerBotSessions.Roll(Sessions.SessionMinMinutes, Sessions.SessionMaxMinutes, s.Dice);
     }
 
-    // #160: a bot out of the world, by its own log-off (quit, logoff-forced) or a drop. Sessions off: Lost, never logged
-    // in again, with the lost line as before. On: Offline until its gap ends; a drop: the lost line, then logged in again
-    // RelogSeconds later, at most MaxRelogs a run (PlayerBotSessions.AfterLeave). Its old client is gone (Disconnected)
-    // before StartDue starts the next login.
+    // #160: a bot out of the world, by its own log-off (quit, logoff-forced) or a drop. Sessions off: Lost, never
+    // logged in again, with the lost line as before. On: Offline until its gap ends; a drop: the lost line, then logged
+    // in again RelogSeconds later, at most MaxRelogs a run (PlayerBotSessions.AfterLeave). Its old client is gone
+    // (Disconnected) before StartDue starts the next login.
     private static void Leave(SlotState s, DateTime now, string reason)
     {
         bool own = reason is PlayerBotSessions.QuitReason or PlayerBotSessions.ForcedReason;
@@ -370,9 +370,9 @@ public static class PlayerBotSpawner
     // #160: a session's driver, started (Drive): the death cap the bot carried (it never goes down in a run, as a
     // GameBot's: PlayerBotDriver.NextDeathSteps), the camp it kept if that is in this region (it walks back to it, as a
     // player would) with its route stay (#167 F12-S, RouteAvoid: the monster it stays clear of, to the stay's own end;
-    // GameLoopTime runs on while the bot is out, so the stay ends as if it had stayed online), and Carry at the driver's
-    // stop. The camp and the stay are used once: a session whose driver never starts keeps none, so a stale one never
-    // comes back.
+    // GameLoopTime runs on while the bot is out, so the stay ends as if it had stayed online), and Carry at the
+    // driver's stop. The camp and the stay are used once: a session whose driver never starts keeps none, so a stale
+    // one never comes back.
     private static void Resume(SlotState s, PlayerBotState state, GamePlayer player)
     {
         state.DeathSafetySteps = Math.Max(state.DeathSafetySteps, s.DeathSteps);

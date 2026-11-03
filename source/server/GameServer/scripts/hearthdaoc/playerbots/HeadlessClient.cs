@@ -156,8 +156,9 @@ public sealed class HeadlessClient : GameClient, IPlayerBotClient
                 return;
             case HeadlessStep.InWorld when _quitSent && player?.ObjectState is not GameObject.eObjectState.Active:
                 // #160: the quit timer ended, the player saved and out of the world (GamePlayer.cs:827-830). As a real
-                // client goes to its character screen (CharacterOverviewRequestHandler.cs:20): then GameClient.Quit skips
-                // a second Player.Quit for CharScreen (GameClient.cs:232), and QuitOnGameLoop a second save (no Active player).
+                // client goes to its character screen (CharacterOverviewRequestHandler.cs:20): then GameClient.Quit
+                // skips a second Player.Quit for CharScreen (GameClient.cs:232), and QuitOnGameLoop a second save (no
+                // Active player).
                 ClientState = eClientState.CharScreen;
                 Logout(PlayerBotSessions.QuitReason);
                 return;

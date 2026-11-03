@@ -5,9 +5,9 @@ using System.Numerics;
 
 namespace DOL.GS.HearthDAoC.PlayerBots;
 
-// HearthDAoC player bots (#160, #167 "Logging in and out", step 1): the HEARTHDAOC_PLAYER_BOT_SESSIONS switch, parsed, and
-// the spawner's session rules. Pure, so UT_PlayerBotSessions covers them all; PlayerBotSpawner reads the variable once
-// at start, with HEARTHDAOC_PLAYER_BOTS. off, the default, changes nothing: every bot logs in at start as fast as
+// HearthDAoC player bots (#160, #167 "Logging in and out", step 1): the HEARTHDAOC_PLAYER_BOT_SESSIONS switch, parsed,
+// and the spawner's session rules. Pure, so UT_PlayerBotSessions covers them all; PlayerBotSpawner reads the variable
+// once at start, with HEARTHDAOC_PLAYER_BOTS. off, the default, changes nothing: every bot logs in at start as fast as
 // PlayerBotPacing allows and stays, and a bot that drops out stays out (F1). on: the GameBots' startup ramp
 // (AutonomousPopulationRamp.DesiredActiveCount, as AutonomousPopulationController.cs:106 uses it), play sessions that
 // end in a player's log-off (PlayerBotLogOffTask), a login after the offline gap where the bot logged off, and a login
