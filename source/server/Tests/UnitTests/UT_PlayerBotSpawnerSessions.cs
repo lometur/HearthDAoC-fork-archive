@@ -14,8 +14,8 @@ namespace DOL.GS.Tests;
 // HearthDAoC player bots (#160 step 1, its review): PlayerBotSpawner's session rules on its own slots, by reflection
 // (they are private and static), with no server and no game loop: what Leave does with each reason under both switch
 // values, StartDue's wait for a slot's old client, and what a session carries to the next login (Resume at the login,
-// Carry at the driver's stop: the death cap, and the camp unless a death came after it); BeginLogOff's waits and late
-// asks, and Observe's asks again.
+// Carry at the driver's stop: the death cap, and the camp with its route stay unless a death came after it);
+// BeginLogOff's waits and late asks, and Observe's asks again.
 [TestFixture, NonParallelizable]
 public sealed class UT_PlayerBotSpawnerSessions
 {
@@ -227,6 +227,44 @@ public sealed class UT_PlayerBotSpawnerSessions
         clean.Task = new PlayerBotLogOffTask(null, 0);
         End(clean);
         Assert.That(s.Camp, Is.EqualTo(new PlayerBotCamp(0, CampB)));
+    }
+
+    // #167 F12-S's route stay (StayHere: RouteAvoid, the monster it stays clear of, to RouteAvoidUntil) goes with the
+    // camp it anchored: kept with it, back at the next login in its region with its own end (a GameLoopTime, which runs
+    // on while the bot is out, so the stay ends as if it had stayed online), used once; none with a camp not kept or
+    // one in another region.
+    [Test]
+    public void A_route_stay_goes_with_its_camp()
+    {
+        SessionsProperty.SetValue(null, On);
+        PlayerBotSpawner.SlotState s = Slot(PlayerBotSpawner.SlotPhase.Playing);
+        GameNPC monster = (GameNPC)RuntimeHelpers.GetUninitializedObject(typeof(GameNPC));
+        // The stay as read, its monster by name: an uninitialized GameNPC's ToString throws in a failure's message.
+        (string, Vector3, int, long) Read((GameNPC Npc, Vector3 At, int AggroRange) avoid, long until) =>
+            (avoid.Npc == null ? "none" : avoid.Npc == monster ? "monster" : "other", avoid.At, avoid.AggroRange, until);
+        var stay = ("monster", CampB, 500, 1_030_000L);
+        var none = ("none", Vector3.Zero, 0, 0L);
+        PlayerBotState first = Session(s);
+        (first.Anchor, first.RouteAvoid, first.RouteAvoidUntil) = (CampA, (monster, CampB, 500), 1_030_000);
+        End(first);
+        PlayerBotState second = Session(s);
+        Assert.That((second.Anchor, Read(second.RouteAvoid, second.RouteAvoidUntil)), Is.EqualTo((CampA, stay)));
+        Assert.That(Read(s.RouteAvoid, s.RouteAvoidUntil), Is.EqualTo(none), "used once");
+
+        (second.RouteAvoid, second.RouteAvoidUntil, second.ReplanOwed) =
+            ((monster, CampB, 500), 1_030_000, PlayerBotDriver.Died);
+        End(second);
+        Assert.That((s.Camp, Read(s.RouteAvoid, s.RouteAvoidUntil)), Is.EqualTo(((PlayerBotCamp)null, none)),
+            "died at its camp: no camp, no stay");
+        PlayerBotState third = Session(s);
+        Assert.That(Read(third.RouteAvoid, third.RouteAvoidUntil), Is.EqualTo(none));
+
+        (third.AnchorRegion, third.Anchor, third.RouteAvoid, third.RouteAvoidUntil) =
+            (5, CampA, (monster, CampB, 500), 1_030_000);
+        End(third);
+        PlayerBotState fourth = Session(s);                                    // logs in in region 0: neither is used
+        Assert.That((fourth.Anchor == CampA, Read(fourth.RouteAvoid, fourth.RouteAvoidUntil), s.Camp),
+            Is.EqualTo((false, none, (PlayerBotCamp)null)));
     }
 
     // A bot in the world, driven: its client Playing, its player Active, its driver state registered (no timer).

@@ -403,8 +403,9 @@ Playing:
     schedule, and there are no designations yet.
   - A bot logs off by its camp, out of the monsters' reach, not in a town.
   - A session carries only its death cap and its camp to the next, and the camp not when the bot died at it or after
-    its log-off began. Its failed camps, the names it avoids and its killers' cons end with the session (they last
-    5-15 minutes, under the default time out).
+    its log-off began. A route stay's monster goes with its camp, to the stay's own end, as if the bot had stayed
+    online. Its failed camps, the names it avoids and its killers' cons end with the session (they last 5-15 minutes,
+    under the default time out), so with a short time out its next plan can take a camp it gave up again.
   - `PLAYER_BOT_TALLY` counts one session, and bot-hours on a sessions leg need the online time: a sessions leg
     doesn't compare one for one with a sessions-off leg.
   - A GM's `/kick` counts as a drop: the bot is back a minute later, up to 5 times, as a GameBot is. Keeping it out

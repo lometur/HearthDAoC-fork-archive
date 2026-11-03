@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Numerics;
 using System.Runtime;
 using System.Threading;
 using DOL.Database;
@@ -84,6 +85,8 @@ public static class PlayerBotSpawner
         public volatile PlayerBotCamp Camp;         // #160: the driver's anchor as the bot left, for its next login
         public volatile int DeathSteps;             // #160: its death cap (DeathSafetySteps), carried (Carry)
         public volatile int DeathsAtLogOff;         // #160: the driver's deaths as its log-off began (BeginLogOff)
+        public (GameNPC Npc, Vector3 At, int AggroRange) RouteAvoid;   // #160: a route stay's monster and its end
+        public long RouteAvoidUntil;                                    //   (#167 F12-S), carried with the camp
         public Random Dice { get; } = PlayerBotSessions.Dice(slot);   // #160: its sessions and gaps (the timer only)
         public SlotPhase Phase;                     // the timer only, under Gate
         public int Attempts;
@@ -365,30 +368,37 @@ public static class PlayerBotSpawner
 
     // #160: a session's driver, started (Drive): the death cap the bot carried (it never goes down in a run, as a
     // GameBot's: PlayerBotDriver.NextDeathSteps), the camp it kept if that is in this region (it walks back to it, as a
-    // player would), and Carry at the driver's stop. The camp is used once: a session whose driver never starts keeps
-    // none, so a stale one never comes back.
+    // player would) with its route stay (#167 F12-S, RouteAvoid: the monster it stays clear of, to the stay's own end;
+    // GameLoopTime runs on while the bot is out, so the stay ends as if it had stayed online), and Carry at the driver's
+    // stop. The camp and the stay are used once: a session whose driver never starts keeps none, so a stale one never
+    // comes back.
     private static void Resume(SlotState s, PlayerBotState state, GamePlayer player)
     {
         state.DeathSafetySteps = Math.Max(state.DeathSafetySteps, s.DeathSteps);
-        PlayerBotCamp camp = s.Camp;
+        PlayerBotCamp camp = s.Camp;                                                 // read first: Carry writes it last
+        ((GameNPC Npc, Vector3 At, int AggroRange) avoid, long avoidUntil) = (s.RouteAvoid, s.RouteAvoidUntil);
         s.Camp = null;
+        (s.RouteAvoid, s.RouteAvoidUntil) = (default, 0);
         if (camp != null && camp.Region == player.CurrentRegionID)
-            (state.AnchorRegion, state.Anchor) = (camp.Region, camp.At);
+            (state.AnchorRegion, state.Anchor, state.RouteAvoid, state.RouteAvoidUntil) = (camp.Region, camp.At, avoid,
+                avoidUntil);
         state.OnStop = stopped => Carry(s, stopped);
     }
 
     // #160: the driver's stop (PlayerBotState.OnStop: on the game loop, once a session, a log-off's or a drop's), what
-    // the next login carries: the death cap, and the camp (the anchor) unless the bot owes a replan or died since its
-    // log-off began (PlayerBotSessions.KeepsCamp). Its other memories (failed camps, avoided names, killers' cons) end
-    // with the session: they last 5-15 minutes, under the default offline gap.
+    // the next login carries: the death cap, and the camp (the anchor) with its route stay (RouteAvoid, to its end)
+    // unless the bot owes a replan or died since its log-off began (PlayerBotSessions.KeepsCamp). Its other memories
+    // (failed camps, avoided names, killers' cons) end with the session: they last 5-15 minutes, under the default
+    // offline gap.
     private static void Carry(SlotState s, PlayerBotState state)
     {
         try
         {
             s.DeathSteps = Math.Max(s.DeathSteps, state.DeathSafetySteps);
             int deathsSince = state.Task is PlayerBotLogOffTask ? state.Deaths - s.DeathsAtLogOff : 0;
-            s.Camp = PlayerBotSessions.KeepsCamp(state.ReplanOwed != null, deathsSince)
-                ? new PlayerBotCamp(state.AnchorRegion, state.Anchor) : null;
+            bool keeps = PlayerBotSessions.KeepsCamp(state.ReplanOwed != null, deathsSince);
+            (s.RouteAvoid, s.RouteAvoidUntil) = keeps ? (state.RouteAvoid, state.RouteAvoidUntil) : (default, 0);
+            s.Camp = keeps ? new PlayerBotCamp(state.AnchorRegion, state.Anchor) : null;
         }
         catch (Exception exception)
         {
